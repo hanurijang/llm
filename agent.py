@@ -1941,7 +1941,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-y", "--yes", action="store_true", help="셸 명령 확인 생략")
     parser.add_argument("--root", help="작업 디렉터리 (기본: 현재 디렉터리)")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"모델 (기본: {DEFAULT_MODEL})")
-    parser.add_argument("--max-steps", type=int, default=25, help="에이전트 루프 최대 횟수")
+    parser.add_argument("--max-steps", type=int, default=40, help="에이전트 루프 최대 횟수")
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
     parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
     parser.add_argument("--rules", action="store_true", help="이 폴더의 세션 규칙 보기")
