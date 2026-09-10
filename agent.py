@@ -71,6 +71,66 @@ SHELL_DENY = (
     re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"),
 )
 
+# 기본 모드(권한 상승·설치만 확인): 이 두 부류는 그대로 확인을 받는다.
+SHELL_ASK_HEADS = {"sudo", "su", "doas", "pkexec"}
+SHELL_ASK_PATTERNS = (
+    re.compile(
+        r"\b(?:apt|apt-get|dnf|yum|zypper|pacman|snap|brew|apk|choco|winget|port)\b"
+        r"[^|;&]*\b(?:install|add|upgrade|dist-upgrade|remove|purge|reinstall)\b"
+    ),
+    re.compile(r"\b(?:pip|pip3|pipx)\b[^|;&]*\b(?:install|uninstall|download)\b"),
+    re.compile(r"\bpython3?\b[^|;&]*\b-m\s+pip\b"),
+    re.compile(
+        r"\b(?:npm|pnpm|yarn|bun|deno)\b[^|;&]*"
+        r"\b(?:install|i|ci|add|link|global|update|upgrade)\b"
+    ),
+    re.compile(r"\buv\b[^|;&]*\b(?:install|add|sync|tool)\b"),
+    re.compile(r"\b(?:poetry|pipenv|pdm|hatch)\b[^|;&]*\b(?:install|add|sync)\b"),
+    re.compile(
+        r"\b(?:cargo|rustup|gem|go|composer|bundle|dotnet|nuget|vcpkg)\b"
+        r"[^|;&]*\b(?:install|add|require|restore|get|update|upgrade)\b"
+    ),
+    re.compile(r"\b(?:npx|bunx)\b"),
+    re.compile(r"\bmake\s+(?:-\S+\s+)*install\b"),
+)
+# 작업 폴더 밖을 지우는 명령도 기본 모드에서 확인한다(홈/시스템 실수 방지)
+SHELL_ASK_DELETE_HEADS = {"rm", "rmdir", "shred", "truncate", "dd"}
+
+
+def _deletes_outside_workspace(segment: str, root: Path) -> bool:
+    """`rm ~/x`, `rm -rf /etc/...`, `rm -rf ../x`처럼 폴더 밖을 지우는지."""
+    tokens = segment.split()
+    _, tokens = strip_env_assignments(tokens)
+    if not tokens or Path(tokens[0]).name not in SHELL_ASK_DELETE_HEADS:
+        return False
+    for tok in tokens[1:]:
+        if tok.startswith("-"):
+            continue
+        cleaned = tok.strip().strip("'\"")
+        if not cleaned:
+            continue
+        if cleaned.startswith(("/", "~")) or ".." in cleaned:
+            return True
+    return False
+
+
+def needs_confirm_always(command: str, root: Path | None = None) -> bool:
+    """기본 모드에서도 확인을 받아야 하는 명령인지(권한 상승·설치·폴더 밖 삭제)."""
+    text = (command or "").strip()
+    if not text:
+        return True
+    segments = [c for _, c in split_shell_commands(text)] or [text]
+    for segment in segments:
+        tokens = segment.split()
+        _, bare = strip_env_assignments(tokens)
+        if bare and Path(bare[0]).name in SHELL_ASK_HEADS:
+            return True
+        if any(rx.search(segment) for rx in SHELL_ASK_PATTERNS):
+            return True
+        if root is not None and _deletes_outside_workspace(segment, root):
+            return True
+    return False
+
 # 확인 없이 바로 실행해도 되는 읽기 전용 명령(첫 토큰 기준)
 SHELL_SAFE_COMMANDS = {
     "pwd", "ls", "tree", "cat", "head", "tail", "wc", "stat", "file", "du", "df",
@@ -2214,13 +2274,22 @@ def ask_shell_segment(
     return "n"
 
 
-def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = None) -> bool:
+def confirm_shell(
+    command: str,
+    yes: bool,
+    approval: "ShellApproval | None" = None,
+    only_risky: bool = False,
+    root: Path | None = None,
+) -> bool:
     """셸 실행 동의를 받는다.
 
     `&&`/`||`/`|`/`;`로 이어진 조합 명령은 **조각 단위로 하나씩** 묻고 자동
     허용도 조각별로 저장한다. 그래야 조합 순서나 인자가 바뀌어도 이미 허용한
     조각은 다시 묻지 않는다. `n`으로 중단하면 이 프롬프트에서 추가한 허용은
     되돌린다(전에 허용해 둔 항목은 그대로 둔다).
+
+    `only_risky`(기본 모드)이면 권한 상승·설치·폴더 밖 삭제 조각만 묻고
+    나머지 조각은 확인 없이 통과시킨다.
     """
     if yes:
         return True
@@ -2230,8 +2299,15 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
         print_error("셸 실행은 TTY가 아니면 --yes 가 필요합니다.", stream=True)
         return False
 
+    def risky(segment: str) -> bool:
+        return not only_risky or needs_confirm_always(segment, root)
+
     segments = [c for _, c in split_shell_commands(command)] or [command_key(command)]
-    pending = [s for s in segments if approval is None or not approval.segment_allowed(s)]
+    pending = [
+        s
+        for s in segments
+        if risky(s) and (approval is None or not approval.segment_allowed(s))
+    ]
     if not pending:
         return True
 
@@ -2249,6 +2325,8 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
     snap = approval.snapshot() if approval is not None else None
     auto_rest = False
     for idx, segment in enumerate(segments, 1):
+        if not risky(segment):
+            continue  # 기본 모드: 위험하지 않은 조각은 확인 없이 실행
         if not auto_rest and approval is not None and approval.segment_allowed(segment):
             if compound:
                 print(f"   {C.dim}{idx}) {segment} (이미 자동 허용){C.reset}")
@@ -2287,6 +2365,7 @@ def tool_shell(
     auto_safe: bool = True,
     approval: "ShellApproval | None" = None,
     auto_workspace: bool = False,
+    allow_all: bool = False,
 ) -> str:
     command = args.get("command") or ""
     if not command.strip():
@@ -2303,8 +2382,12 @@ def tool_shell(
         and is_safe_command(command)
         or auto_workspace
         and is_workspace_command(command, root)
+        or allow_all
+        and not needs_confirm_always(command, root)
     )
-    if not yes and not auto_run and not confirm_shell(command, yes, approval):
+    if not yes and not auto_run and not confirm_shell(
+        command, yes, approval, only_risky=allow_all, root=root
+    ):
         return "ERROR: 사용자가 셸 실행을 거부했습니다."
     try:
         proc = subprocess.run(
@@ -2348,6 +2431,7 @@ def run_tool(
     auto_safe: bool = True,
     approval: "ShellApproval | None" = None,
     auto_workspace: bool = False,
+    allow_all: bool = False,
 ) -> str:
     args = parse_tool_args(raw_args)
     if "_error" in args:
@@ -2368,7 +2452,9 @@ def run_tool(
         if name == "grep":
             return tool_grep(root, args)
         if name == "shell":
-            return tool_shell(root, args, yes, auto_safe, approval, auto_workspace)
+            return tool_shell(
+                root, args, yes, auto_safe, approval, auto_workspace, allow_all
+            )
         return f"ERROR: 알 수 없는 도구: {name}"
     except ValueError as exc:
         return f"ERROR: {exc}"
@@ -2826,6 +2912,7 @@ def cmd_agent(
     show_thinking: bool = False,
     auto_safe: bool = True,
     auto_workspace: bool = False,
+    allow_all: bool = False,
 ) -> int:
     print_banner(session, root, chat_only)
 
@@ -2933,7 +3020,14 @@ def cmd_agent(
                 print(f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}")
 
                 result = run_tool(
-                    name, raw_args, root, yes, auto_safe, approval, auto_workspace
+                    name,
+                    raw_args,
+                    root,
+                    yes,
+                    auto_safe,
+                    approval,
+                    auto_workspace,
+                    allow_all,
                 )
                 preview = result.splitlines()[0][:120] if result else ""
                 if result.startswith("ERROR:"):
@@ -3003,6 +3097,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="모델의 사고 과정(reasoning) 원문을 회색으로 실시간 출력",
     )
     parser.add_argument("--confirm-all", action="store_true", help="읽기 전용 명령도 확인 후 실행 (자동 실행 비활성)")
+    parser.add_argument(
+        "--allow-all",
+        action="store_true",
+        help="sudo·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (기본값, LLM_ALLOW_ALL=1과 동일)",
+    )
     parser.add_argument(
         "--auto-workspace",
         action="store_true",
@@ -3122,6 +3221,17 @@ def main(argv: list[str] | None = None) -> int:
         list_sessions(session, folders, root)
         return 0
 
+    # 셸 자동 실행 범위: --confirm-all > --allow-all/LLM_ALLOW_ALL >
+    # --auto-workspace/LLM_AUTO_WORKSPACE > 기본(허용: sudo·설치만 확인)
+    if args.confirm_all:
+        auto_workspace, allow_all = False, False
+    elif args.allow_all or env_flag("LLM_ALLOW_ALL"):
+        auto_workspace, allow_all = False, True
+    elif args.auto_workspace or env_flag("LLM_AUTO_WORKSPACE"):
+        auto_workspace, allow_all = True, False
+    else:
+        auto_workspace, allow_all = False, True
+
     return cmd_agent(
         prompt=prompt,
         session=session,
@@ -3135,9 +3245,8 @@ def main(argv: list[str] | None = None) -> int:
         thinking=not args.no_thinking,
         show_thinking=args.show_thinking,
         auto_safe=not args.confirm_all,
-        auto_workspace=(
-            args.auto_workspace or env_flag("LLM_AUTO_WORKSPACE")
-        ) and not args.confirm_all,
+        auto_workspace=auto_workspace,
+        allow_all=allow_all,
     )
 
 
