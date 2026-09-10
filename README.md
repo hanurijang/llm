@@ -117,6 +117,9 @@ llm --chat "파이썬에서 리스트와 튜플의 차이는?"
 # 셸 명령 확인 생략 (자동화/신뢰 환경)
 llm --yes "테스트 돌리고 실패하면 원인 요약해줘"
 
+# 작업 폴더 안에서 끝나는 명령은 확인 없이 실행 (폴더 밖/위험 명령만 확인)
+llm --auto-workspace "빌드 정리하고 린트·포맷까지 돌려줘"
+
 # 사고 과정 없이 빠르게 답만 받기
 llm --no-thinking --chat "리스트와 튜플 차이는?"
 
@@ -150,6 +153,7 @@ llm --allow-clear
 | `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 |
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸 명령 실행 확인 생략 |
+| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령은 확인 없이 실행 |
 | `--root <경로>` | 작업 디렉터리 지정 (기본: 현재 폴더) |
 | `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 40) |
@@ -400,6 +404,34 @@ llm --rules
 계열처럼 접두 단위로 저장되어 인자가 달라도 자동 통과). 셸 메타문자가 섞인
 조합 명령은 정확히 같은 명령일 때만 자동 통과하며, 위험 프로그램은 계열
 허용 대상이 아닙니다.
+
+### 작업 폴더 안 자동 실행 (`--auto-workspace`)
+
+`--auto-workspace`를 켜면 **명령이 건드리는 경로가 전부 작업 폴더 안에서
+끝나고, 되돌릴 수 있는 명령이면** 확인 없이 실행합니다. "폴더 안이면 다
+허용"에 가깝지만 아래 조건으로 범위를 막습니다.
+
+- 자동 실행되는 예: `rm -rf build`, `mkdir -p src/new`, `mv a.py b.py`,
+  `sed -i s/a/b/ main.py`, `echo hi > out.txt`, `ruff format .`, `black .`,
+  `npm test > out.txt`, `git add -A`, `git commit -m wip`, `git tag v1`,
+  `find . -name '*.py'`, `make test > log.txt`
+- 그래도 확인하는 경우:
+  - **작업 폴더 밖을 건드림**: `rm -rf ../x`, `cp a.py /tmp/x`, `> /etc/hosts`,
+    `~/...`, `/opt`, 변수·명령 치환(`$VAR`, `` `...` ``)으로 경로를 숨긴 명령
+  - **설치·네트워크·권한 상승**: `sudo`, `apt`/`pip install`/`npm install`,
+    `curl`/`wget`/`git clone`, `docker`/`kubectl`/`systemctl`, `kill`/`pkill`
+  - **되돌릴 수 없는 Git 작업**: `push`, `pull`, `fetch`, `checkout`, `switch`,
+    `restore`, `reset`, `clean`, `stash`, `rm`, `filter-branch`, `--amend`,
+    `--force`, `--hard`, `--global`
+  - **`.git`/`.`/`*` 삭제·이동**: `rm -rf .git`, `rm -rf .`, `rm -rf *`,
+    `mv .git x`
+  - **임의 코드 실행**: `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`,
+    `node -e`, 인터프리터 단독 실행, 스크립트 파일 직접 실행
+  - **쓰기 옵션을 켠 `find`**: `find . -exec rm {} +`, `find . -delete`,
+    `find . -ok ...`
+- `--confirm-all`과 함께 쓰면 `--auto-workspace`는 무시됩니다(모두 확인).
+- `--yes`처럼 확인 자체를 없애지는 않으므로, 위험한 명령은 그대로
+  `[y/N/a]` 프롬프트를 거칩니다.
 
 ### 반드시 확인이 필요한 명령
 

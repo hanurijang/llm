@@ -186,6 +186,43 @@ SHELL_FLAG_SENSITIVE_HEADS = {
     "standard", "stylelint",
 }
 
+# --- `--auto-workspace`: 작업 폴더 안에서 끝나는 부작용만 확인 없이 실행 ---
+# 권한·시스템·원격·설치·컨테이너·임의 코드 실행: workspace 경계를 넘을 수 있어 제외
+SHELL_WORKSPACE_BLOCK_HEADS = {
+    "sudo", "su", "doas", "systemctl", "service", "mount", "umount", "insmod",
+    "modprobe", "crontab", "at", "batch", "launchctl", "shutdown", "reboot",
+    "halt", "poweroff", "kill", "pkill", "killall",
+    "curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "rsync",
+    "telnet", "ftp", "socat", "nohup",
+    "apt", "apt-get", "yum", "dnf", "pacman", "brew", "snap", "gem",
+    "pip", "pip3", "uv", "npm", "npx", "yarn", "pnpm", "bun", "conda",
+    "mamba", "poetry", "go", "cargo", "gradle", "mvn", "dotnet", "make",
+    "docker", "docker-compose", "podman", "kubectl", "helm", "minikube",
+    "vagrant",
+    "sh", "bash", "zsh", "fish", "source", "eval", "env", "xargs",
+}
+# git 이력·설정·원격을 건드리는 서브커맨드(되돌리기 어려운 것)
+SHELL_WORKSPACE_BLOCK_GIT = {
+    "push", "pull", "fetch", "reset", "clean", "checkout", "switch", "stash",
+    "rm", "mv", "rebase", "apply", "restore", "config", "remote", "submodule",
+    "clone", "init", "filter-branch", "filter-repo", "daemon", "worktree",
+}
+SHELL_WORKSPACE_BLOCK_GIT_FLAGS = {"--amend", "--hard", "--force"}
+# 코드를 문자열로 받아 실행하는 인터프리터 플래그
+SHELL_WORKSPACE_CODE_FLAGS = {"-c", "--command", "-e", "--eval"}
+SHELL_WORKSPACE_INTERPRETERS = {
+    "python", "python3", "perl", "ruby", "node", "php", "lua", "deno",
+}
+# find로 쓰기·삭제·임의 실행을 켜는 인자
+SHELL_WORKSPACE_FIND_WRITE_ARGS = {
+    "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fls",
+}
+# 아래 조합은 workspace 안이어도 되돌릴 수 없어 제외(복구 수단·작업 폴더 자체)
+SHELL_WORKSPACE_PROTECTED_TARGETS = {".", "..", "/", "~", "*", "./*", ".git", "./.git"}
+SHELL_WORKSPACE_PROTECTED_HEADS = {"rm", "rmdir", "mv", "chmod", "chown", "shred"}
+SHELL_WORKSPACE_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".fish", ".command", ".ps1")
+SHELL_WORKSPACE_SPECIAL_PATHS = {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
+
 
 def is_safe_command(command: str) -> bool:
     """확인 없이 실행해도 되는 읽기 전용/검증 명령인지 판단한다.
@@ -276,6 +313,90 @@ def _safe_python(rest: list[str]) -> bool:
     if script.startswith(("/", "~")) or ".." in script:
         return False
     return script.endswith(".py")
+
+
+def _workspace_path_ok(root: Path, token: str) -> bool:
+    """토큰이 가리키는 경로가 workspace 안(또는 무해한 특수 경로)인지."""
+    raw = token.strip().strip("'\"")
+    if raw.startswith("-"):
+        if "=" not in raw:
+            return True  # 플래그 자체는 경로가 아니다
+        raw = raw.split("=", 1)[1].strip().strip("'\"")
+    if not raw:
+        return True
+    if raw in SHELL_WORKSPACE_SPECIAL_PATHS or raw.startswith("/dev/fd/"):
+        return True
+    if any(ch in raw for ch in "$`"):
+        return False  # 변수·명령 치환은 대상 경로를 정적으로 알 수 없다
+    if raw.startswith("~"):
+        return False  # 홈 디렉터리는 workspace 밖
+    if "/" not in raw and raw not in {".", ".."}:
+        return True  # 단순 파일명은 cwd(=workspace) 기준
+    try:
+        base = Path(raw).resolve() if raw.startswith("/") else (root / raw).resolve()
+    except (OSError, RuntimeError):
+        return False
+    root_s = str(root.resolve())
+    base_s = str(base)
+    return base_s == root_s or base_s.startswith(root_s + os.sep)
+
+
+def _workspace_fragment_safe(fragment: str, root: Path) -> bool:
+    """연결 명령의 한 조각이 workspace 안에서 끝나고 되돌릴 수 있는지."""
+    tokens = fragment.split()
+    if not tokens:
+        return False
+    # 경로가 workspace를 벗어나면 무엇이든 확인 대상
+    if not all(_workspace_path_ok(root, tok) for tok in tokens):
+        return False
+    # 읽기 전용/검증 명령이면 조각 단독으로도 그대로 허용(`npm test`, `tail -5`)
+    if is_safe_command(fragment):
+        return True
+    # 리다이렉션 대상만 뺀 명령이 읽기 전용/검증이면 허용(`npm test > out.txt`)
+    body = re.sub(r"\d*>>?\s*\S+", " ", fragment).strip()
+    if body and body != fragment and is_safe_command(body):
+        return True
+    head = Path(tokens[0]).name
+    if head in SHELL_WORKSPACE_BLOCK_HEADS:
+        return False
+    if tokens[0].startswith("./") or head.endswith(SHELL_WORKSPACE_SCRIPT_SUFFIXES):
+        return False  # 스크립트 파일 실행은 내용을 검증할 수 없다
+    if head in SHELL_WORKSPACE_INTERPRETERS:
+        if any(tok in SHELL_WORKSPACE_CODE_FLAGS for tok in tokens):
+            return False  # `python3 -c ...` 같은 임의 코드 실행
+        if not [tok for tok in tokens[1:] if not tok.startswith("-")]:
+            return False  # 인터프리터 단독 실행(REPL/stdin)
+    if head == "find" and any(tok in SHELL_WORKSPACE_FIND_WRITE_ARGS for tok in tokens):
+        return False
+    if head == "git":
+        if any(tok in SHELL_WORKSPACE_BLOCK_GIT for tok in tokens[1:]):
+            return False
+        if any(tok in SHELL_WORKSPACE_BLOCK_GIT_FLAGS for tok in tokens[1:]):
+            return False
+    if head in SHELL_WORKSPACE_PROTECTED_HEADS:
+        for tok in tokens[1:]:
+            cleaned = tok.strip().strip("'\"")
+            if cleaned in SHELL_WORKSPACE_PROTECTED_TARGETS or cleaned.startswith(".git"):
+                return False
+    return True
+
+
+def is_workspace_command(command: str, root: Path) -> bool:
+    """`--auto-workspace`: workspace 안에서 끝나는 부작용만 자동 실행한다.
+
+    경로가 workspace를 벗어나거나(`~/x`, `/etc/x`, `../x`), 설치·네트워크·권한
+    명령, 임의 코드 실행, git 이력 파괴로 이어지면 False를 돌려 확인을 받는다.
+    """
+    text = (command or "").strip()
+    if not text:
+        return False
+    if any(rx.search(text) for rx in SHELL_DENY):
+        return False
+    cleaned = SHELL_HARMLESS_REDIRECT.sub(" ", text)
+    fragments = [frag.strip() for frag in SHELL_CHAIN_SPLIT.split(cleaned) if frag.strip()]
+    if not fragments:
+        return False
+    return all(_workspace_fragment_safe(frag, root) for frag in fragments)
 
 
 def color_enabled() -> bool:
@@ -1887,6 +2008,7 @@ def tool_shell(
     yes: bool,
     auto_safe: bool = True,
     approval: "ShellApproval | None" = None,
+    auto_workspace: bool = False,
 ) -> str:
     command = args.get("command") or ""
     if not command.strip():
@@ -1903,6 +2025,9 @@ def tool_shell(
     elif auto_safe and is_safe_command(command):
         # 읽기 전용/검증 명령은 매번 묻지 않고 바로 실행한다.
         print_info(f"가벼운 명령은 확인 없이 실행합니다: {command}")
+    elif auto_workspace and is_workspace_command(command, root):
+        # 작업 폴더를 벗어나지 않고 되돌릴 수 있는 명령만 확인 없이 실행한다.
+        print_info(f"작업 폴더 안에서 끝나는 명령이라 확인 없이 실행합니다: {command}")
     elif not confirm_shell(command, yes, approval):
         return "ERROR: 사용자가 셸 실행을 거부했습니다."
     try:
@@ -1946,6 +2071,7 @@ def run_tool(
     yes: bool,
     auto_safe: bool = True,
     approval: "ShellApproval | None" = None,
+    auto_workspace: bool = False,
 ) -> str:
     args = parse_tool_args(raw_args)
     if "_error" in args:
@@ -1966,7 +2092,7 @@ def run_tool(
         if name == "grep":
             return tool_grep(root, args)
         if name == "shell":
-            return tool_shell(root, args, yes, auto_safe, approval)
+            return tool_shell(root, args, yes, auto_safe, approval, auto_workspace)
         return f"ERROR: 알 수 없는 도구: {name}"
     except ValueError as exc:
         return f"ERROR: {exc}"
@@ -2373,6 +2499,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ('llm "질문"', "이 폴더 세션으로 에이전트 실행"),
         ('llm --chat "질문"', "도구 없이 순수 채팅"),
         ('llm --yes "질문"', "셸 명령 확인 생략"),
+        ('llm --auto-workspace "질문"', "폴더 안 명령은 자동 실행"),
         ('llm --root <경로> "질문"', "작업 디렉터리 지정"),
         ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
         ("llm --init-rules", ".llm/rules.md 생성"),
@@ -2420,6 +2547,7 @@ def cmd_agent(
     stream: bool,
     thinking: bool = True,
     auto_safe: bool = True,
+    auto_workspace: bool = False,
 ) -> int:
     print_banner(session, root, chat_only)
 
@@ -2523,7 +2651,9 @@ def cmd_agent(
                 counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
                 print(f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}")
 
-                result = run_tool(name, raw_args, root, yes, auto_safe, approval)
+                result = run_tool(
+                    name, raw_args, root, yes, auto_safe, approval, auto_workspace
+                )
                 preview = result.splitlines()[0][:120] if result else ""
                 if result.startswith("ERROR:"):
                     print(f"      {C.red}✗ {preview}{C.reset}")
@@ -2587,6 +2717,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
     parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
     parser.add_argument("--confirm-all", action="store_true", help="읽기 전용 명령도 확인 후 실행 (자동 실행 비활성)")
+    parser.add_argument(
+        "--auto-workspace",
+        action="store_true",
+        help="작업 폴더 안에서 끝나는 명령은 확인 없이 실행 (폴더 밖·설치·이력 변경은 확인)",
+    )
     parser.add_argument("--allow-list", action="store_true", help="이 세션의 셸 자동 허용 목록 보기")
     parser.add_argument("--allow-clear", action="store_true", help="이 세션의 셸 자동 허용 목록 비우기")
     parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
@@ -2713,6 +2848,7 @@ def main(argv: list[str] | None = None) -> int:
         stream=not args.no_stream,
         thinking=not args.no_thinking,
         auto_safe=not args.confirm_all,
+        auto_workspace=args.auto_workspace and not args.confirm_all,
     )
 
 
