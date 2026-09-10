@@ -154,6 +154,15 @@ SHELL_UNSAFE_PATTERN = re.compile(
 # 무해한 리다이렉션(출력 버리기/에러 합치기)은 무시한다
 SHELL_HARMLESS_REDIRECT = re.compile(r"\d?>\s*/dev/null|\d?>&\s*\d|&>\s*/dev/null")
 
+# 계열(접두) 자동 허용을 만들 때는 인자에 따라 동작이 바뀌는 명령을 막는다.
+# 접두로 묶인 뒤 다른 인자가 붙어 부작용이 생기는 것을 예방한다.
+SHELL_WRITE_ARG_PATTERN = re.compile(
+    r"-(?:exec|execdir|delete|fprint0?)\b|--in-place|--output\b|\bsudo\b|\bxargs\b"
+)
+
+# `&&`, `||`, `|`, `;`로 이어진 명령을 조각 단위로 나눈다(자동 실행 판정용)
+SHELL_CHAIN_SPLIT = re.compile(r"&&|\|\||\||;|&")
+
 # 셸 메타문자(파이프/연결/리다이렉션/치환) — 있으면 접두 자동 허용을 만들지 않는다
 SHELL_META_PATTERN = re.compile(r"[;&|<>`\n]|\$\(")
 # 삭제·설치·임의 실행류: 접두 허용 금지(정확 일치만)
@@ -169,14 +178,36 @@ SHELL_SUBCOMMAND_PROGRAMS = {
     "docker-compose", "kubectl", "make", "pip", "pip3", "apt", "apt-get",
     "systemctl", "gh", "poetry", "uv", "deno", "gradle", "mvn", "dotnet",
 }
+# 같은 접두 안에 안전/위험 변형이 공존해 계열 자동 허용을 금지하는 조합
+SHELL_NO_PREFIX_SUBCOMMANDS = {("cargo", "fmt"), ("cargo", "clippy")}
+# 인자(플래그)에 따라 쓰기 동작이 켜지는 프로그램: 계열 허용 금지(정확 일치만)
+SHELL_FLAG_SENSITIVE_HEADS = {
+    "black", "prettier", "ruff", "eslint", "gofmt", "biome", "checkov",
+    "standard", "stylelint",
+}
 
 
 def is_safe_command(command: str) -> bool:
-    """확인 없이 실행해도 되는 읽기 전용/검증 명령인지 판단한다."""
+    """확인 없이 실행해도 되는 읽기 전용/검증 명령인지 판단한다.
+
+    `ls && git status`처럼 연결된 명령은 **모든 조각이 자동 실행 대상일 때만**
+    자동 실행한다. 위험 요소는 연결 전체를 대상으로 먼저 검사하므로,
+    `ls && rm -rf x` 같은 조합은 여기서 걸러진다.
+    """
     text = SHELL_HARMLESS_REDIRECT.sub(" ", (command or "").strip())
     if not text or SHELL_UNSAFE_PATTERN.search(text):
         return False
-    tokens = text.split()
+    parts = [part.strip() for part in SHELL_CHAIN_SPLIT.split(text) if part.strip()]
+    if not parts:
+        return False
+    return all(_is_safe_simple_command(part) for part in parts)
+
+
+def _is_safe_simple_command(part: str) -> bool:
+    """연결 없는 단일 명령이 자동 실행 대상인지 판단한다."""
+    tokens = part.split()
+    if not tokens:
+        return False
     head = Path(tokens[0]).name
     rest = tokens[1:]
     if head in {"python", "python3"}:
@@ -207,6 +238,8 @@ def is_safe_command(command: str) -> bool:
     if head in SHELL_SAFE_SUBCOMMANDS:
         if head == "cargo" and rest[:1] == ["fmt"]:
             return "--check" in rest  # `cargo fmt`는 파일을 고친다
+        if any(tok in SHELL_CHECK_WRITE_FLAGS for tok in rest):
+            return False  # `cargo clippy --fix`처럼 서브커맨드에 쓰기 플래그가 붙는 경우
         return bool(rest) and rest[0] in SHELL_SAFE_SUBCOMMANDS[head]
     return bool(rest) and (head, rest[0]) in SHELL_SAFE_PAIRS
 
@@ -1720,13 +1753,26 @@ def command_prefix(command: str) -> str | None:
         return None
     tokens = text.split()
     head = Path(tokens[0]).name
-    if head in SHELL_NO_PREFIX_HEADS:
+    if head in SHELL_NO_PREFIX_HEADS or head in SHELL_FLAG_SENSITIVE_HEADS:
         return None
     if head in SHELL_SUBCOMMAND_PROGRAMS:
         if len(tokens) > 1 and not tokens[1].startswith("-"):
+            if (head, tokens[1]) in SHELL_NO_PREFIX_SUBCOMMANDS:
+                return None  # `cargo fmt`처럼 같은 접두 안에 안전/위험 변형이 공존
             return f"{head} {tokens[1]}"
         return None
     return head
+
+
+def has_write_args(command: str) -> bool:
+    """인자에 따라 쓰기·임의 실행이 켜지는 명령인지(접두 자동 허용 차단용).
+
+    예) `find . -exec rm {} +`, `mypy --install-types .`, `sed --in-place s/a/b/ f`.
+    """
+    tokens = (command or "").split()
+    if any(tok in SHELL_CHECK_WRITE_FLAGS for tok in tokens):
+        return True
+    return bool(SHELL_WRITE_ARG_PATTERN.search(command or ""))
 
 
 class ShellApproval:
@@ -1773,6 +1819,10 @@ class ShellApproval:
     def is_allowed(self, command: str) -> bool:
         if command_key(command) in self.exact:
             return True
+        # 계열 접두는 인자에 따라 부작용이 켜지는 명령(`find -exec`, `-i` 등)에는
+        # 적용하지 않는다. 그런 명령은 매번 확인을 받는다.
+        if has_write_args(command):
+            return False
         prefix = command_prefix(command)
         return bool(prefix) and prefix in self.prefixes
 

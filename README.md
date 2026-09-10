@@ -352,6 +352,10 @@ llm --rules
      `python3 script.py`, `python3 --version` 등 (`-c`/`-i` 같은 임의 코드 실행은 확인 필요)
    - 버전/도움말: `git --version`, `cargo --version`, `docker --version` 등
      (경로 실행 `./run.sh --version`은 제외)
+   - 연결 명령(`&&`, `|`): **모든 조각이 자동 실행 대상일 때만** 자동 실행합니다.
+     예) `git add -A && pytest -q`, `ls -la | head -5`는 자동 실행,
+     `ls && rm -rf x`, `pytest -q && npm install`은 확인 대상.
+     `;`(순차 연결)은 항상 확인 대상입니다.
    - 리다이렉션은 위험 판정(`> out.txt` 등), `/dev/null`·`2>&1`은 무해 처리
    - `--confirm-all`로 자동 실행을 끌 수 있습니다.
 3. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 실행 전에 명령을 요약해
@@ -369,6 +373,10 @@ llm --rules
    - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램과
      셸 메타문자(`;`, `&&`, `|`, 리다이렉션, `$()`, 백틱 등)가 포함된 명령은
      계열 허용하지 않습니다(매번 확인).
+   - 인자에 따라 쓰기로 바뀌는 명령도 계열 허용하지 않습니다. 검사 도구의
+     `--fix`/`-w`/`--install-types`, `find -exec`/`-delete`, `--in-place`,
+     `--output`처럼 부작용을 켜는 인자가 붙으면 매번 확인합니다
+     (예: `ruff check .`을 허용해도 `ruff format .`은 확인 대상).
    - 목록 확인/해제: `llm --allow-list`, `llm --allow-clear`
 5. **TTY가 아니면** `--yes` 없이 실행 불가
 6. **타임아웃** — 기본 60초, 최대 180초
@@ -406,6 +414,7 @@ llm --rules
 | 임의 코드 실행 | `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`, `eval`, `sed -i`, `awk`, `xargs` | 무엇이든 실행될 수 있음 |
 | 서비스·컨테이너 변경 | `docker run/build`, `kubectl apply/delete`, `systemctl restart`, `kill`, `pkill` | 실행 중인 환경에 영향 |
 | 파일을 고치는 검사 | `ruff check --fix`, `eslint --fix`, `black .`, `cargo fmt` | 검사 도구지만 파일 수정 |
+| 위험 조각이 섞인 연결 | `ls && rm -rf x`, `pytest -q && npm install`, `ls; cat f`(`;`) | 한 조각이라도 위험하면 전체 확인 |
 
 그 밖의 명령(예: `make install`, `make clean`, `npm run deploy`)도 기본은
 확인 대상이며, `y`(이번만) / `a`(세션 자동 허용) / `n`(거부) 중에서 고릅니다.
