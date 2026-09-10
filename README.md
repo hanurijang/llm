@@ -141,6 +141,7 @@ llm --yes "테스트 돌리고 실패하면 원인 요약해줘"
 | `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 40) |
 | `--no-stream` | 스트리밍 비활성화 |
+| `--no-thinking` | 사고(thinking) 비활성화 (더 빠른 응답, `--chat`에서 유용) |
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
@@ -340,7 +341,8 @@ llm --rules
 
 대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로
 처리됩니다. 중간에 끊긴(도구 호출만 있고 결과가 없는) 턴은 로드 시 자동
-정리됩니다.
+정리됩니다. 사고 과정(`reasoning_content`)은 API 프로토콜상 같은 턴에서만
+되돌려주고, 디스크에는 저장하지 않습니다(`strip_reasoning`).
 
 ---
 
@@ -355,7 +357,7 @@ llm (bash)  →  agent.py (python)
 - **진입/CLI**: `main`, `parse_args`, `resolve_root`
 - **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행 → 결과 피드백 반복
 - **API 계층**: `http_json`, `stream_chat`, `complete` (SSE 스트리밍, 비스트림
-  폴백)
+  폴백, `StreamInterrupted`로 부분 응답 보존, `on_delta`로 진행 표시)
 - **도구 계층**: `tool_*` 함수 + `run_tool` 디스패처 + `tool_schemas`
 - **안전/검증**: `resolve_in_workspace`, `is_secret_path`, `SHELL_DENY`,
   `confirm_shell`
@@ -370,7 +372,7 @@ llm (bash)  →  agent.py (python)
 
 1. 사용자 프롬프트를 세션 기록에 추가하고 저장
 2. 시스템 프롬프트(워크스페이스 정보 + 세션 규칙) 구성
-3. 모델 호출 → 텍스트 또는 도구 호출 수신
+3. 모델 호출 → (사고 과정 진행 표시) → 텍스트 또는 도구 호출 수신
 4. 도구 호출이면 실행 후 결과를 대화에 추가하고 3으로 반복
 5. 최종 텍스트 응답을 저장하고 Markdown으로 출력
 

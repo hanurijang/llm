@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import fnmatch
 import hashlib
+import http.client
 import json
 import os
 import re
@@ -18,7 +19,7 @@ import urllib.error
 import urllib.request
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 API_URL = "https://api.deepseek.com/chat/completions"
 BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -213,6 +214,34 @@ def render_markdown(text: str, raw: bool = False) -> None:
 def clear_status() -> None:
     if sys.stderr.isatty():
         eprint("\r\033[K", end="")
+
+
+def make_stream_progress() -> Callable[[str, str], None]:
+    """스트리밍 중 진행 상황을 stderr 한 줄로 표시한다.
+
+    thinking(사고)과 답변 생성이 오래 걸릴 때 화면이 조용해 보이는 문제를 막는다.
+    """
+    state = {"reasoning": 0, "content": 0}
+
+    def report(kind: str, text: str) -> None:
+        if not sys.stderr.isatty():
+            return
+        if kind == "reasoning":
+            state["reasoning"] += len(text)
+            eprint(
+                f"\r\033[K{C.dim}🧠 사고 중… {state['reasoning']}자{C.reset}",
+                end="",
+                flush=True,
+            )
+            return
+        state["content"] += len(text)
+        eprint(
+            f"\r\033[K{C.dim}✍️  작성 중… {state['content']}자{C.reset}",
+            end="",
+            flush=True,
+        )
+
+    return report
 
 
 def load_dotenv(path: Path = Path("/etc/env/.env")) -> None:
@@ -712,10 +741,21 @@ def load_history(path: Path) -> list[dict[str, Any]]:
 
     return repaired
 
+
+def strip_reasoning(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """디스크에 저장할 때 사고 과정(reasoning_content)은 제거한다."""
+    stripped: list[dict[str, Any]] = []
+    for message in messages:
+        if isinstance(message, dict) and "reasoning_content" in message:
+            message = {k: v for k, v in message.items() if k != "reasoning_content"}
+        stripped.append(message)
+    return stripped
+
+
 def save_history(path: Path, messages: list[dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
-    tmp.write_text(json.dumps(messages, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps(strip_reasoning(messages), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
@@ -1503,8 +1543,23 @@ def http_json(url: str, payload: dict[str, Any] | None = None, timeout: int = 18
         raise RuntimeError(f"API JSON 파싱 실패: {body[:300]}") from exc
 
 
-def stream_chat(payload: dict[str, Any]) -> tuple[str | None, list[dict[str, Any]], str | None]:
-    """content, tool_calls, finish_reason"""
+class StreamInterrupted(RuntimeError):
+    """스트리밍이 중간에 끊겼을 때. 지금까지 받은 내용을 보존한다."""
+
+    def __init__(self, message: str, partial: str = "", finish: str | None = None) -> None:
+        super().__init__(message)
+        self.partial = partial
+        self.finish = finish
+
+
+def stream_chat(
+    payload: dict[str, Any],
+    on_delta: Callable[[str, str], None] | None = None,
+) -> tuple[str | None, list[dict[str, Any]], str | None, str | None]:
+    """content, tool_calls, finish_reason, reasoning_content
+
+    스트림이 중간에 끊기면 StreamInterrupted(부분 응답 보존)를 발생시킨다.
+    """
     headers = {
         "Authorization": f"Bearer {api_key()}",
         "Content-Type": "application/json",
@@ -1513,8 +1568,14 @@ def stream_chat(payload: dict[str, Any]) -> tuple[str | None, list[dict[str, Any
     data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(API_URL, data=data, headers=headers, method="POST")
     content_parts: list[str] = []
+    reasoning_parts: list[str] = []
     tools: dict[int, dict[str, str]] = {}
     finish: str | None = None
+
+    def emit(kind: str, text: str) -> None:
+        if on_delta is not None:
+            on_delta(kind, text)
+
     try:
         with urllib.request.urlopen(req, timeout=180) as resp:
             for raw in resp:
@@ -1528,33 +1589,64 @@ def stream_chat(payload: dict[str, Any]) -> tuple[str | None, list[dict[str, Any
                     event = json.loads(chunk)
                 except json.JSONDecodeError:
                     continue
+                if not isinstance(event, dict):
+                    continue
                 if event.get("error"):
-                    msg = event["error"].get("message") if isinstance(event["error"], dict) else str(event["error"])
+                    err = event["error"]
+                    msg = err.get("message") if isinstance(err, dict) else str(err)
                     raise RuntimeError(msg)
-                choices = event.get("choices") or []
-                if not choices:
+                choices = event.get("choices")
+                if not isinstance(choices, list) or not choices:
                     continue
                 choice = choices[0]
-                delta = choice.get("delta") or {}
+                if not isinstance(choice, dict):
+                    continue
+                delta = choice.get("delta")
+                if not isinstance(delta, dict):
+                    delta = {}
                 piece = delta.get("content")
-                if piece:
+                if isinstance(piece, str) and piece:
                     content_parts.append(piece)
-                for tc in delta.get("tool_calls") or []:
-                    idx = int(tc.get("index") or 0)
+                    emit("content", piece)
+                thought = delta.get("reasoning_content")
+                if isinstance(thought, str) and thought:
+                    reasoning_parts.append(thought)
+                    emit("reasoning", thought)
+                delta_tools = delta.get("tool_calls")
+                if not isinstance(delta_tools, list):
+                    delta_tools = []
+                for tc in delta_tools:
+                    if not isinstance(tc, dict):
+                        continue
+                    try:
+                        idx = int(tc.get("index") or 0)
+                    except (TypeError, ValueError):
+                        idx = 0
                     slot = tools.setdefault(idx, {"id": "", "name": "", "arguments": ""})
                     if tc.get("id"):
-                        slot["id"] = tc["id"]
-                    fn = tc.get("function") or {}
+                        slot["id"] = str(tc["id"])
+                    fn = tc.get("function")
+                    if not isinstance(fn, dict):
+                        continue
                     if fn.get("name"):
-                        slot["name"] = fn["name"]
+                        slot["name"] = str(fn["name"])
                     if fn.get("arguments"):
-                        slot["arguments"] += fn["arguments"]
+                        slot["arguments"] += str(fn["arguments"])
                 if choice.get("finish_reason"):
-                    finish = choice["finish_reason"]
-    except urllib.error.HTTPError as ext:
-        err = ext.read().decode("utf-8", errors="replace")
-        raise RuntimeError(f"API HTTP {ext.code}: {err[:500]}") from ext
+                    finish = str(choice["finish_reason"])
+    except urllib.error.HTTPError as exc:
+        err = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"API HTTP {exc.code}: {err[:500]}") from exc
+    except RuntimeError:
+        raise
+    except (urllib.error.URLError, TimeoutError, OSError, http.client.HTTPException) as exc:
+        raise StreamInterrupted(
+            f"{type(exc).__name__}: {exc}",
+            "".join(content_parts),
+            finish,
+        ) from exc
     content = "".join(content_parts) if content_parts else None
+    reasoning = "".join(reasoning_parts) if reasoning_parts else None
     tool_calls = []
     for idx in sorted(tools):
         slot = tools[idx]
@@ -1567,7 +1659,7 @@ def stream_chat(payload: dict[str, Any]) -> tuple[str | None, list[dict[str, Any
                 "function": {"name": slot["name"], "arguments": slot["arguments"] or "{}"},
             }
         )
-    return content, tool_calls, finish
+    return content, tool_calls, finish, reasoning
 
 
 def complete(
@@ -1575,7 +1667,10 @@ def complete(
     tools: list[dict[str, Any]] | None,
     model: str,
     stream: bool,
-) -> tuple[str | None, list[dict[str, Any]], str | None]:
+    thinking: bool = True,
+    on_delta: Callable[[str, str], None] | None = None,
+) -> tuple[str | None, list[dict[str, Any]], str | None, str | None]:
+    """content, tool_calls, finish_reason, reasoning_content"""
 
     payload: dict[str, Any] = {
         "model": model,
@@ -1583,17 +1678,35 @@ def complete(
         "stream": stream,
     }
 
+    if not thinking:
+        # thinking 은 기본 활성. 비활성 시 사고 과정 없이 바로 답한다.
+        payload["thinking"] = {"type": "disabled"}
+
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = "auto"
 
     if stream:
         try:
-            return stream_chat(payload)
+            return stream_chat(payload, on_delta=on_delta)
+        except StreamInterrupted as exc:
+            if exc.partial:
+                print_warn(
+                    f"스트리밍이 중단되어 받은 내용까지만 사용합니다 ({exc}).",
+                    stream=True,
+                )
+                return exc.partial, [], exc.finish or "interrupted", None
+            print_warn(
+                f"스트리밍 실패, 비스트리밍으로 재시도합니다 ({exc}).",
+                stream=True,
+            )
         except RuntimeError as exc:
-            if "stream" not in str(exc).lower() and "HTTP 4" not in str(exc):
-                raise
-            payload["stream"] = False
+            print_warn(
+                f"스트리밍 실패, 비스트리밍으로 재시도합니다 ({exc}).",
+                stream=True,
+            )
+        # 스트림이 아예 성립하지 않았으므로 일반 요청으로 재시도한다.
+        payload["stream"] = False
 
     data = http_json(API_URL, payload)
 
@@ -1796,6 +1909,7 @@ def cmd_agent(
     model: str,
     max_steps: int,
     stream: bool,
+    thinking: bool = True,
 ) -> int:
     print_banner(session, root, chat_only)
 
@@ -1813,6 +1927,8 @@ def cmd_agent(
     else:
         system = build_system_prompt(root, session)
         tools = tool_schemas()
+
+    progress = make_stream_progress() if stream else None
 
     for _step in range(1, max_steps + 1):
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
@@ -1852,25 +1968,33 @@ def cmd_agent(
         ]
 
         try:
-            content, tool_calls, finish = complete(
+            content, tool_calls, finish, reasoning = complete(
                 api_messages,
                 tools,
                 model,
                 stream,
+                thinking,
+                on_delta=progress,
             )
         except RuntimeError as exc:
+            clear_status()
             print_error(f"API 오류: {exc}", stream=True)
             return 1
 
+        clear_status()
+
         # Agent mode: execute structured tool calls and continue the loop.
         if tool_calls and not chat_only:
-            messages.append(
-                {
-                    "role": "assistant",
-                    "content": content or "",
-                    "tool_calls": tool_calls,
-                }
-            )
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": content or "",
+                "tool_calls": tool_calls,
+            }
+            if reasoning:
+                # tools 사용 시 사고 과정을 함께 되돌려줘야 한다(프로토콜 요구).
+                # 디스크 저장 시에는 strip_reasoning 이 제거한다.
+                assistant_message["reasoning_content"] = reasoning
+            messages.append(assistant_message)
 
             total = len(tool_calls)
             for idx, tc in enumerate(tool_calls, 1):
@@ -1915,6 +2039,7 @@ def cmd_agent(
             messages.append({"role": "assistant", "content": content})
             save_history(history_file, messages)
 
+            clear_status()
             print()
             print_title("🤖 답변")
             render_markdown(content)
@@ -1943,6 +2068,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"모델 (기본: {DEFAULT_MODEL})")
     parser.add_argument("--max-steps", type=int, default=40, help="에이전트 루프 최대 횟수")
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
+    parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
     parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
     parser.add_argument("--rules", action="store_true", help="이 폴더의 세션 규칙 보기")
     parser.add_argument("--summarize", action="store_true", help="현재 대화를 지금 요약·백업 (강제)")
@@ -2060,6 +2186,7 @@ def main(argv: list[str] | None = None) -> int:
         model=args.model,
         max_steps=max(1, args.max_steps),
         stream=not args.no_stream,
+        thinking=not args.no_thinking,
     )
 
 
