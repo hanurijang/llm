@@ -663,6 +663,11 @@ def load_dotenv(path: Path = Path("/etc/env/.env")) -> None:
             os.environ[key] = val
 
 
+def env_flag(name: str) -> bool:
+    """환경변수를 불리언으로 읽는다(1/true/yes/on/y 만 참)."""
+    return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on", "y"}
+
+
 def api_key() -> str:
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
@@ -2734,7 +2739,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--auto-workspace",
         action="store_true",
-        help="작업 폴더 안에서 끝나는 명령은 확인 없이 실행 (폴더 밖·설치·이력 변경은 확인)",
+        help="작업 폴더 안에서 끝나는 명령은 확인 없이 실행 (폴더 밖·설치·이력 변경은 확인, LLM_AUTO_WORKSPACE=1이면 기본 활성)",
     )
     parser.add_argument("--allow-list", action="store_true", help="이 세션의 셸 자동 허용 목록 보기")
     parser.add_argument("--allow-clear", action="store_true", help="이 세션의 셸 자동 허용 목록 비우기")
@@ -2863,7 +2868,9 @@ def main(argv: list[str] | None = None) -> int:
         thinking=not args.no_thinking,
         show_thinking=args.show_thinking,
         auto_safe=not args.confirm_all,
-        auto_workspace=args.auto_workspace and not args.confirm_all,
+        auto_workspace=(
+            args.auto_workspace or env_flag("LLM_AUTO_WORKSPACE")
+        ) and not args.confirm_all,
     )
 
 

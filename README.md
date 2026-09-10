@@ -156,7 +156,7 @@ llm --allow-clear
 | `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 |
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸 명령 실행 확인 생략 |
-| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령은 확인 없이 실행 |
+| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령은 확인 없이 실행 (`LLM_AUTO_WORKSPACE=1`이면 기본 활성) |
 | `--root <경로>` | 작업 디렉터리 지정 (기본: 현재 폴더) |
 | `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 40) |
@@ -418,7 +418,9 @@ llm --rules
 `a`를 선택하면 그 명령을 이후 확인 없이 실행합니다(단일 명령이면 `npm install`
 계열처럼 접두 단위로 저장되어 인자가 달라도 자동 통과). 셸 메타문자가 섞인
 조합 명령은 정확히 같은 명령일 때만 자동 통과하며, 위험 프로그램은 계열
-허용 대상이 아닙니다.
+허용 대상이 아닙니다. 그래서 `cd ... && cat > f <<'PY'` 처럼 내용이 매번
+달라지는 조합은 `a`로 허용해도 다음에는 다시 묻습니다. 이런 반복 작업이
+많으면 `--auto-workspace`(또는 `LLM_AUTO_WORKSPACE=1`)를 쓰세요.
 
 ### 작업 폴더 안 자동 실행 (`--auto-workspace`)
 
@@ -445,6 +447,8 @@ llm --rules
   - **쓰기 옵션을 켠 `find`**: `find . -exec rm {} +`, `find . -delete`,
     `find . -ok ...`
 - `--confirm-all`과 함께 쓰면 `--auto-workspace`는 무시됩니다(모두 확인).
+- 매번 플래그를 치기 번거로우면 `/etc/env/.env`에 `LLM_AUTO_WORKSPACE=1`을
+  넣어 기본으로 켜 둘 수 있습니다(`--confirm-all`이 항상 우선).
 - `--yes`처럼 확인 자체를 없애지는 않으므로, 위험한 명령은 그대로
   `[y/N/a]` 프롬프트를 거칩니다.
 
@@ -476,6 +480,7 @@ llm --rules
 | `DEEPSEEK_API_KEY` | (없음) | **필수**. API 키 |
 | `LLM_MODEL` | `deepseek-flash` | 기본 모델 |
 | `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(glow)을 끄고 원문 출력 |
+| `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐 |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
 `/etc/env/.env` 파일이 있으면 시작 시 로드됩니다(이미 설정된 환경변수는
