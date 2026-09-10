@@ -470,6 +470,9 @@ llm --rules
     `node -e`, 인터프리터 단독 실행, 스크립트 파일 직접 실행
   - **쓰기 옵션을 켠 `find`**: `find . -exec rm {} +`, `find . -delete`,
     `find . -ok ...`
+  - **실행 대상을 바꾸는 환경변수 접두**: `PATH=/evil npm test`,
+    `LD_PRELOAD=...`, `PYTHONPATH=...` (일반 지정 `FOO=1 cmd`는 프로그램 기준
+    으로 판단)
 - `--confirm-all`과 함께 쓰면 `--auto-workspace`는 무시됩니다(모두 확인).
 - 매번 플래그를 치기 번거로우면 `/etc/env/.env`에 `LLM_AUTO_WORKSPACE=1`을
   넣어 기본으로 켜 둘 수 있습니다(`--confirm-all`이 항상 우선).
