@@ -1,0 +1,17 @@
+#!/bin/bash
+# DeepSeek CLI agent 진입점. 실제 로직은 agent.py.
+
+if [ -f /etc/env/.env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    . /etc/env/.env
+    set +a
+fi
+
+SOURCE="${BASH_SOURCE[0]}"
+if command -v readlink >/dev/null 2>&1; then
+    SOURCE="$(readlink -f "$SOURCE" 2>/dev/null || echo "$SOURCE")"
+fi
+DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+exec python3 -u "$DIR/agent.py" "$@"
