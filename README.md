@@ -138,7 +138,7 @@ llm --yes "테스트 돌리고 실패하면 원인 요약해줘"
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸 명령 실행 확인 생략 |
 | `--root <경로>` | 작업 디렉터리 지정 (기본: 현재 폴더) |
-| `--model <이름>` | 모델 지정 (기본: `deepseek-chat`) |
+| `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 40) |
 | `--no-stream` | 스트리밍 비활성화 |
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
@@ -318,7 +318,7 @@ llm --rules
 | 이름 | 기본값 | 설명 |
 |------|--------|------|
 | `DEEPSEEK_API_KEY` | (없음) | **필수**. API 키 |
-| `LLM_MODEL` | `deepseek-chat` | 기본 모델 |
+| `LLM_MODEL` | `deepseek-flash` | 기본 모델 |
 | `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(glow)을 끄고 원문 출력 |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 

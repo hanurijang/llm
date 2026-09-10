@@ -23,7 +23,7 @@ from typing import Any
 API_URL = "https://api.deepseek.com/chat/completions"
 BALANCE_URL = "https://api.deepseek.com/user/balance"
 HISTORY_DIR = Path.home() / ".local/share/llm"
-DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-chat")
+DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-flash")
 MAX_READ_BYTES = 200_000
 MAX_TOOL_CHARS = 80_000
 MAX_GREP_HITS = 80
