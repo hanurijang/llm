@@ -549,12 +549,12 @@ def clear_status() -> None:
         eprint("\r\033[K", end="")
 
 
-def make_stream_progress(show_thinking: bool = True) -> Callable[[str, str], None]:
+def make_stream_progress(show_thinking: bool = False) -> Callable[[str, str], None]:
     """스트리밍 진행 상황을 stderr에 표시한다.
 
     종류(kind)는 `reasoning` | `content` | `end`.
-    - `reasoning`: show_thinking 이면 사고 과정을 회색으로 실시간 출력하고,
-      아니면 글자 수만 한 줄로 보여준다.
+    - `reasoning`: 사고 과정(reasoning) 진행 상황. show_thinking 이면 원문을
+      회색으로 실시간 출력하고, 기본값(False)에서는 글자 수만 한 줄로 보여준다.
     - `content`: 최종 답변은 완료 후 glow 로 한 번만 렌더링하므로 글자 수만 표시.
     - `end`: 열려 있는 사고 블록/상태 줄을 정리한다.
     """
@@ -2500,6 +2500,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ('llm --chat "질문"', "도구 없이 순수 채팅"),
         ('llm --yes "질문"', "셸 명령 확인 생략"),
         ('llm --auto-workspace "질문"', "폴더 안 명령은 자동 실행"),
+        ('llm --show-thinking "질문"', "사고 과정 원문까지 표시"),
         ('llm --root <경로> "질문"', "작업 디렉터리 지정"),
         ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
         ("llm --init-rules", ".llm/rules.md 생성"),
@@ -2546,6 +2547,7 @@ def cmd_agent(
     max_steps: int,
     stream: bool,
     thinking: bool = True,
+    show_thinking: bool = False,
     auto_safe: bool = True,
     auto_workspace: bool = False,
 ) -> int:
@@ -2566,13 +2568,15 @@ def cmd_agent(
         system = build_system_prompt(root, session)
         tools = tool_schemas()
 
-    progress = make_stream_progress(thinking) if stream else None
+    progress = make_stream_progress(show_thinking) if stream else None
     approval = ShellApproval(session) if (not chat_only and not yes) else None
 
     for _step in range(1, max_steps + 1):
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
 
-
+        if not chat_only:
+            # 몇 번째 단계인지 한 줄로 남겨 진행 과정을 따라갈 수 있게 한다.
+            print(f"{C.dim}{rule('─', f'{_step}/{max_steps}단계')}{C.reset}")
 
         messages = maybe_summarize(
             session,
@@ -2623,10 +2627,15 @@ def cmd_agent(
         clear_status()
 
         if not stream and thinking and reasoning:
-            # 비스트리밍 모드에서도 사고 과정을 한 번에 보여준다.
-            report_reasoning = make_stream_progress(True)
-            report_reasoning("reasoning", reasoning)
-            report_reasoning("end", "")
+            # 비스트리밍 모드: 사고 과정은 기본으로 감추고 요약만 알려준다.
+            if show_thinking:
+                report_reasoning = make_stream_progress(True)
+                report_reasoning("reasoning", reasoning)
+                report_reasoning("end", "")
+            else:
+                print_info(
+                    f"사고 과정 {len(reasoning):,}자 진행 (원문은 --show-thinking)"
+                )
 
         # Agent mode: execute structured tool calls and continue the loop.
         if tool_calls and not chat_only:
@@ -2716,6 +2725,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=40, help="에이전트 루프 최대 횟수")
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
     parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
+    parser.add_argument(
+        "--show-thinking",
+        action="store_true",
+        help="모델의 사고 과정(reasoning) 원문을 회색으로 실시간 출력",
+    )
     parser.add_argument("--confirm-all", action="store_true", help="읽기 전용 명령도 확인 후 실행 (자동 실행 비활성)")
     parser.add_argument(
         "--auto-workspace",
@@ -2847,6 +2861,7 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=max(1, args.max_steps),
         stream=not args.no_stream,
         thinking=not args.no_thinking,
+        show_thinking=args.show_thinking,
         auto_safe=not args.confirm_all,
         auto_workspace=args.auto_workspace and not args.confirm_all,
     )
