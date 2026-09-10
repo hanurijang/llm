@@ -87,6 +87,16 @@ SHELL_SAFE_GIT_SUBCOMMANDS = {
 SHELL_SAFE_PY_MODULES = {
     "py_compile", "compileall", "json.tool", "unittest", "pytest", "mypy",
 }
+# 첫 토큰이 안전 목록에 없어도 두 토큰 조합이 조회 전용이면 자동 실행한다
+SHELL_SAFE_PAIRS = {
+    ("npm", "ls"), ("npm", "list"), ("npm", "view"), ("npm", "outdated"),
+    ("npm", "--version"), ("npm", "-v"),
+    ("pip", "list"), ("pip", "show"), ("pip", "freeze"), ("pip", "--version"),
+    ("pip3", "list"), ("pip3", "show"), ("pip3", "freeze"), ("pip3", "--version"),
+    ("node", "--version"), ("node", "-v"),
+    ("cargo", "--version"), ("rustc", "--version"), ("go", "version"),
+    ("java", "-version"), ("docker", "ps"), ("docker", "images"),
+}
 # 안전 판정을 막는 위험 요소(쓰기·임의 실행 유발)
 SHELL_UNSAFE_PATTERN = re.compile(
     r"[><`;]|\$\(|\bsudo\b|\bxargs\b"
@@ -100,6 +110,22 @@ SHELL_UNSAFE_PATTERN = re.compile(
 # 무해한 리다이렉션(출력 버리기/에러 합치기)은 무시한다
 SHELL_HARMLESS_REDIRECT = re.compile(r"\d?>\s*/dev/null|\d?>&\s*\d|&>\s*/dev/null")
 
+# 셸 메타문자(파이프/연결/리다이렉션/치환) — 있으면 접두 자동 허용을 만들지 않는다
+SHELL_META_PATTERN = re.compile(r"[;&|<>`\n]|\$\(")
+# 삭제·설치·임의 실행류: 접두 허용 금지(정확 일치만)
+SHELL_NO_PREFIX_HEADS = {
+    "rm", "rmdir", "mv", "cp", "dd", "truncate", "shred", "chmod", "chown",
+    "chgrp", "ln", "install", "sudo", "su", "sh", "bash", "zsh", "eval",
+    "source", "kill", "pkill", "killall", "tee", "curl", "wget", "env",
+    "python", "python3", "perl", "ruby", "node", "nohup", "xargs",
+}
+# 서브커맨드형 프로그램: "git add"처럼 첫 두 토큰을 접두로 묶는다
+SHELL_SUBCOMMAND_PROGRAMS = {
+    "git", "npm", "yarn", "pnpm", "bun", "cargo", "go", "docker",
+    "docker-compose", "kubectl", "make", "pip", "pip3", "apt", "apt-get",
+    "systemctl", "gh", "poetry", "uv", "deno", "gradle", "mvn", "dotnet",
+}
+
 
 def is_safe_command(command: str) -> bool:
     """확인 없이 실행해도 되는 읽기 전용/검증 명령인지 판단한다."""
@@ -112,7 +138,9 @@ def is_safe_command(command: str) -> bool:
         return _safe_python(tokens[1:])
     if head == "git":
         return len(tokens) > 1 and tokens[1] in SHELL_SAFE_GIT_SUBCOMMANDS
-    return head in SHELL_SAFE_COMMANDS
+    if head in SHELL_SAFE_COMMANDS:
+        return True
+    return len(tokens) > 1 and (head, tokens[1]) in SHELL_SAFE_PAIRS
 
 
 def _safe_python(rest: list[str]) -> bool:
@@ -1587,27 +1615,144 @@ def summarize_shell_command(command: str) -> str:
     return "\n".join(lines)
 
 
-def confirm_shell(command: str, yes: bool) -> bool:
+def allow_file(session: str) -> Path:
+    return HISTORY_DIR / f"shell_allow_{sanitize_session_name(session)}.json"
+
+
+def command_key(command: str) -> str:
+    """공백만 정리한 비교용 명령 문자열."""
+    return re.sub(r"\s+", " ", (command or "").strip())
+
+
+def command_prefix(command: str) -> str | None:
+    """같은 계열로 묶어 자동 허용할 접두 키.
+
+    셸 메타문자(파이프/연결/리다이렉션/치환)가 섞이면 정확 일치만 인정하고,
+    삭제·설치류처럼 위험한 프로그램은 접두 허용을 만들지 않는다.
+    """
+    text = (command or "").strip()
+    if not text or SHELL_META_PATTERN.search(text):
+        return None
+    tokens = text.split()
+    head = Path(tokens[0]).name
+    if head in SHELL_NO_PREFIX_HEADS:
+        return None
+    if head in SHELL_SUBCOMMAND_PROGRAMS:
+        if len(tokens) > 1 and not tokens[1].startswith("-"):
+            return f"{head} {tokens[1]}"
+        return None
+    return head
+
+
+class ShellApproval:
+    """세션별 셸 명령 자동 허용 목록(프롬프트에서 a 선택 시 누적).
+
+    매번 같은 명령을 묻지 않도록 정확 일치(`exact`)와 계열 접두(`prefix`)를
+    세션 파일에 저장한다.
+    """
+
+    def __init__(self, session: str) -> None:
+        self.session = session
+        self.path = allow_file(session)
+        self.exact: set[str] = set()
+        self.prefixes: set[str] = set()
+        self.load()
+
+    def load(self) -> None:
+        if not self.path.is_file():
+            return
+        try:
+            data = json.loads(self.path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        if not isinstance(data, dict):
+            return
+        self.exact = {str(c) for c in data.get("exact") or [] if str(c).strip()}
+        self.prefixes = {str(p) for p in data.get("prefix") or [] if str(p).strip()}
+
+    def save(self) -> None:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self.path.write_text(
+                json.dumps(
+                    {"exact": sorted(self.exact), "prefix": sorted(self.prefixes)},
+                    ensure_ascii=False,
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+        except OSError as exc:
+            print_warn(f"자동 허용 목록 저장 실패: {exc}", stream=True)
+
+    def is_allowed(self, command: str) -> bool:
+        if command_key(command) in self.exact:
+            return True
+        prefix = command_prefix(command)
+        return bool(prefix) and prefix in self.prefixes
+
+    def remember(self, command: str) -> str:
+        self.exact.add(command_key(command))
+        prefix = command_prefix(command)
+        if prefix:
+            self.prefixes.add(prefix)
+        self.save()
+        return prefix or command_key(command)
+
+    def clear(self) -> None:
+        self.exact.clear()
+        self.prefixes.clear()
+        try:
+            self.path.unlink()
+        except FileNotFoundError:
+            pass
+        except OSError as exc:
+            print_warn(f"자동 허용 목록 삭제 실패: {exc}", stream=True)
+
+
+def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = None) -> bool:
     if yes:
+        return True
+    if approval is not None and approval.is_allowed(command):
+        print_info(f"이전에 허용한 명령이라 자동 실행합니다: {command}")
         return True
     if not sys.stdin.isatty():
         print_error("셸 실행은 TTY가 아니면 --yes 가 필요합니다.", stream=True)
         return False
     summary = summarize_shell_command(command)
+    prefix = command_prefix(command) if approval is not None else None
+    hint = (
+        f"   {C.dim}a = 이 명령{'/' + prefix if prefix else ''} 계열 자동 허용 (다시 묻지 않음){C.reset}\n"
+        if approval is not None
+        else ""
+    )
     try:
         answer = input(
             f"{C.yellow}❓ 이 명령을 실행할까요?{C.reset}\n"
             f"{summary}\n"
             f"   {C.dim}── 실행할 명령 ──{C.reset}\n"
             f"   {C.bold}{command}{C.reset}\n"
-            f"   {C.bold}[y/N]{C.reset}: "
-        ).strip()
+            f"{hint}"
+            f"   {C.bold}[y/N/a]{C.reset}: "
+        ).strip().lower()
     except EOFError:
         return False
-    return answer.lower() in {"y", "yes"}
+    if answer in {"y", "yes", "ㅛ"}:
+        return True
+    if answer in {"a", "all", "always", "ㅁ"} and approval is not None:
+        key = approval.remember(command)
+        print_ok(f"자동 허용에 추가했습니다: {key} (해제: llm --allow-clear)")
+        return True
+    return False
 
 
-def tool_shell(root: Path, args: dict[str, Any], yes: bool, auto_safe: bool = True) -> str:
+def tool_shell(
+    root: Path,
+    args: dict[str, Any],
+    yes: bool,
+    auto_safe: bool = True,
+    approval: "ShellApproval | None" = None,
+) -> str:
     command = args.get("command") or ""
     if not command.strip():
         return "ERROR: command가 비어 있습니다."
@@ -1618,10 +1763,12 @@ def tool_shell(root: Path, args: dict[str, Any], yes: bool, auto_safe: bool = Tr
     timeout = max(1, min(timeout, 180))
     if yes:
         pass
+    elif approval is not None and approval.is_allowed(command):
+        print_info(f"이전에 허용한 명령이라 자동 실행합니다: {command}")
     elif auto_safe and is_safe_command(command):
         # 읽기 전용/검증 명령은 매번 묻지 않고 바로 실행한다.
         print_info(f"가벼운 명령은 확인 없이 실행합니다: {command}")
-    elif not confirm_shell(command, yes):
+    elif not confirm_shell(command, yes, approval):
         return "ERROR: 사용자가 셸 실행을 거부했습니다."
     try:
         proc = subprocess.run(
@@ -1663,6 +1810,7 @@ def run_tool(
     root: Path,
     yes: bool,
     auto_safe: bool = True,
+    approval: "ShellApproval | None" = None,
 ) -> str:
     args = parse_tool_args(raw_args)
     if "_error" in args:
@@ -1683,7 +1831,7 @@ def run_tool(
         if name == "grep":
             return tool_grep(root, args)
         if name == "shell":
-            return tool_shell(root, args, yes, auto_safe)
+            return tool_shell(root, args, yes, auto_safe, approval)
         return f"ERROR: 알 수 없는 도구: {name}"
     except ValueError as exc:
         return f"ERROR: {exc}"
@@ -1992,6 +2140,31 @@ def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+def cmd_allow(session: str, clear: bool) -> int:
+    """세션의 셸 자동 허용 목록을 보거나 비운다."""
+    approval = ShellApproval(session)
+    if clear:
+        if not approval.exact and not approval.prefixes:
+            print_info(f"[{session}] 자동 허용 목록이 이미 비어 있습니다.")
+            return 0
+        approval.clear()
+        print_ok(f"[{session}] 셸 자동 허용 목록을 비웠습니다.")
+        return 0
+
+    print_title(f"셸 자동 허용 목록  [{session}]")
+    if not approval.exact and not approval.prefixes:
+        print_info("등록된 항목이 없습니다. 확인 프롬프트에서 a 를 선택하면 추가됩니다.")
+        return 0
+    for prefix in sorted(approval.prefixes):
+        print(f"   {C.green}계열{C.reset}  {prefix} {C.dim}(...){C.reset}")
+    for command in sorted(approval.exact):
+        if command_prefix(command) not in approval.prefixes:
+            print(f"   {C.cyan}정확{C.reset}  {command}")
+    print_info(f"파일: {approval.path}")
+    print_info("해제: llm --allow-clear")
+    return 0
+
+
 def cmd_view(session: str, history_file: Path) -> int:
     if not history_file.is_file():
         print_error(f"[{session}] 세션에 저장된 대화가 없습니다.")
@@ -2074,6 +2247,8 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ("llm --summarize", "현재 대화를 요약·백업 (강제)"),
         ("llm --clear", "현재 세션 내용 비우기"),
         ("llm --delete", "현재 세션 파일 삭제"),
+        ("llm --allow-list", "셸 자동 허용 목록 보기"),
+        ("llm --allow-clear", "셸 자동 허용 목록 비우기"),
         ("llm --balance", "API 잔액 조회 (KRW 환산)"),
     ]
     width = max(display_width(cmd) for cmd, _ in usage)
@@ -2129,6 +2304,7 @@ def cmd_agent(
         tools = tool_schemas()
 
     progress = make_stream_progress(thinking) if stream else None
+    approval = ShellApproval(session) if (not chat_only and not yes) else None
 
     for _step in range(1, max_steps + 1):
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
@@ -2212,7 +2388,7 @@ def cmd_agent(
                 counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
                 print(f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}")
 
-                result = run_tool(name, raw_args, root, yes, auto_safe)
+                result = run_tool(name, raw_args, root, yes, auto_safe, approval)
                 preview = result.splitlines()[0][:120] if result else ""
                 if result.startswith("ERROR:"):
                     print(f"      {C.red}✗ {preview}{C.reset}")
@@ -2276,6 +2452,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
     parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
     parser.add_argument("--confirm-all", action="store_true", help="읽기 전용 명령도 확인 후 실행 (자동 실행 비활성)")
+    parser.add_argument("--allow-list", action="store_true", help="이 세션의 셸 자동 허용 목록 보기")
+    parser.add_argument("--allow-clear", action="store_true", help="이 세션의 셸 자동 허용 목록 비우기")
     parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
     parser.add_argument("--rules", action="store_true", help="이 폴더의 세션 규칙 보기")
     parser.add_argument("--summarize", action="store_true", help="현재 대화를 지금 요약·백업 (강제)")
@@ -2324,7 +2502,10 @@ def main(argv: list[str] | None = None) -> int:
         prompt_parts = prompt_parts[1:]
     prompt = " ".join(prompt_parts).strip()
 
-    inspect_only = args.view or args.run or args.clear or args.delete or args.summarize
+    inspect_only = (
+        args.view or args.run or args.clear or args.delete or args.summarize
+        or args.allow_list or args.allow_clear
+    )
     session: str | None = None
 
     if args.session:
@@ -2361,6 +2542,8 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_run(session, history_file)
     if args.summarize:
         return cmd_summarize(session, history_file, args.model, force=True)
+    if args.allow_list or args.allow_clear:
+        return cmd_allow(session, clear=args.allow_clear)
     if args.delete:
         existed = history_file.is_file()
         if existed:

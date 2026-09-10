@@ -122,6 +122,10 @@ llm --no-thinking --chat "리스트와 튜플 차이는?"
 
 # 읽기 전용 명령도 매번 확인 (자동 실행 비활성)
 llm --confirm-all "이 폴더 상태를 점검해줘"
+
+# 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기
+llm --allow-list
+llm --allow-clear
 ```
 
 세션은 실행한 폴더에 자동으로 연결됩니다. 같은 폴더에서 다시 `llm`을
@@ -152,6 +156,8 @@ llm --confirm-all "이 폴더 상태를 점검해줘"
 | `--no-stream` | 스트리밍 비활성화 |
 | `--no-thinking` | 사고(thinking) 비활성화 (더 빠른 응답, `--chat`에서 유용) |
 | `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (안전 명령 자동 실행 비활성) |
+| `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 |
+| `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 |
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
@@ -328,19 +334,31 @@ llm --rules
    바로 실행하고 `ℹ️  가벼운 명령은 확인 없이 실행합니다: ...`를 안내합니다.
    - 조회 계열: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `stat`,
      `pwd`, `echo`, `env`, `which`, `file`, `du`, `df`, `date` 등
+   - 조회 계열 2단어 조합: `npm ls`, `pip list`, `pip show`, `node -v`, `cargo tree`,
+     `git config --list`, `docker ps` 등 (`SHELL_SAFE_PAIRS`)
    - Git 조회: `git status`, `git log`, `git diff`, `git show`, `git branch` 등
      (조회 계열만; `commit`/`push`/`checkout` 등은 확인 필요)
    - Python 조회: `python3 -m py_compile`, `python3 -m json.tool`, `python3 -m unittest`,
-     `python3 script.py` 등 (`-c`/`-i` 같은 임의 코드 실행은 확인 필요)
+     `python3 script.py`, `python3 --version` 등 (`-c`/`-i` 같은 임의 코드 실행은 확인 필요)
    - 리다이렉션은 위험 판정(`> out.txt` 등), `/dev/null`·`2>&1`은 무해 처리
    - `--confirm-all`로 자동 실행을 끌 수 있습니다.
 3. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 실행 전에 명령을 요약해
-   보여주고 `[y/N]` 확인
+   보여주고 `[y/N/a]` 확인
    - 단일 명령: 요약 + 실제 명령
    - 다중 명령: `;`, `&&`, `||`, `|`로 분해해 **실행 순서와 연결 의미**를 표시
      (성공 시 / 실패 시 / 파이프 / 순차)
-4. **TTY가 아니면** `--yes` 없이 실행 불가
-5. **타임아웃** — 기본 60초, 최대 180초
+4. **자동 허용 목록(`a`)** — 확인 프롬프트에서 `a`를 고르면 같은 명령을
+   **다시 묻지 않고** 실행합니다. `--yes`와 달리 명령별로만 허용되며
+   세션별 파일에 저장됩니다.
+   - 저장 범위: 위험하지 않은 명령은 **"계열"**(`git add` 등 앞 두 토큰)로
+     저장해 `git add -A`, `git add .`을 함께 허용하고, 정확히 한 단어뿐이거나
+     서브커맨드가 없는 명령(`pytest`, `make` 등)은 정확 일치로 저장합니다.
+   - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램과
+     셸 메타문자(`;`, `&&`, `|`, 리다이렉션, `$()`, 백틱 등)가 포함된 명령은
+     계열 허용하지 않습니다(매번 확인).
+   - 목록 확인/해제: `llm --allow-list`, `llm --allow-clear`
+5. **TTY가 아니면** `--yes` 없이 실행 불가
+6. **타임아웃** — 기본 60초, 최대 180초
 
 ### 확인 프롬프트 예시
 
@@ -353,8 +371,13 @@ llm --rules
         git commit -m "save"
    ── 실행할 명령 ──
    git add -A && git commit -m "save"
-   [y/N]:
+   a = 이 명령/git add 계열 자동 허용 (다시 묻지 않음)
+   [y/N/a]:
 ```
+
+`a`를 선택하면 `git add -A`, `git add .` 등 `git add` 계열은 이후 확인 없이
+실행됩니다. 위험 프로그램이나 셸 메타문자가 섞인 명령은 계열 허용 대상이
+아닙니다.
 
 ---
 
@@ -381,6 +404,7 @@ llm --rules
 | `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 |
 | `~/.local/share/llm/current_session` | 마지막 사용 세션 이름 |
 | `~/.local/share/llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 |
+| `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
 
 대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로
@@ -405,7 +429,8 @@ llm (bash)  →  agent.py (python)
   로 사고·본문 진행 표시)
 - **도구 계층**: `tool_*` 함수 + `run_tool` 디스패처 + `tool_schemas`
 - **안전/검증**: `resolve_in_workspace`, `is_secret_path`, `SHELL_DENY`,
-  `is_safe_command`(읽기 전용 자동 실행), `confirm_shell`
+  `is_safe_command`(읽기 전용 자동 실행), `confirm_shell`(`[y/N/a]`),
+  `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)
 - **세션/규칙**: `load_history`/`save_history`, `bind_folder`/`load_bindings`,
   `load_session_rules`
 - **요약/백업**: `should_summarize`, `summarize_messages`, `backup_conversation`,
