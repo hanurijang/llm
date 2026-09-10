@@ -31,13 +31,19 @@ MAX_GREP_HITS = 80
 MAX_RULES_CHARS = 24_000
 RULES_REL = Path(".llm") / "rules.md"
 
-# 대화 자동 요약/백업 설정 (요약이 잦으면 흐름이 끊기므로 임계를 넉넉히 둔다)
+# 대화 자동 요약/백업 설정
+# 트리거는 "압축 대상"(최근 SUMMARY_KEEP_RECENT개를 뺀 앞부분)만 보고 판단한다.
+# 최근 메시지는 어차피 남기므로 대용량 도구 출력 몇 개로 요약이 걸리지 않게 한다.
 SUMMARY_TRIGGER_CHARS = 120_000
-SUMMARY_TRIGGER_MESSAGES = 120
-SUMMARY_KEEP_RECENT = 16
+SUMMARY_TRIGGER_MESSAGES = 160
+SUMMARY_KEEP_RECENT = 24
+# 요약 직후에는 새 메시지가 이만큼 쌓이기 전까지 다시 요약하지 않는다(쿨다운).
+SUMMARY_MIN_NEW_MESSAGES = 40
 SUMMARY_MAX_CHARS = 4_000
 SUMMARY_DIR_NAME = "summaries"
 SUMMARY_MARKER = "[이전 대화 요약]"
+# 요약 시점의 메시지 수를 요약본 본문에 흔적 없이 남겨 쿨다운 판단에 쓴다.
+SUMMARY_STAMP_RE = re.compile(r"<!--\s*llm-summary-at:(\d+)\s*-->")
 IGNORE_DIRS = {
     ".git",
     "node_modules",
@@ -491,11 +497,40 @@ def history_chars(messages: list[dict[str, Any]]) -> int:
     return total
 
 
+def last_summary_count(messages: list[dict[str, Any]]) -> int | None:
+    """마지막 요약 시점의 메시지 수를 요약본에서 읽는다(없으면 None).
+
+    재요약 과정에서 이전 스탬프가 요약문에 섞여 들어올 수 있으므로 가장
+    마지막 값을 사용한다.
+    """
+    if not messages:
+        return None
+    content = messages[0].get("content") or ""
+    matches = SUMMARY_STAMP_RE.findall(content)
+    return int(matches[-1]) if matches else None
+
+
 def should_summarize(messages: list[dict[str, Any]]) -> bool:
-    """문자 수 또는 메시지 수가 임계를 넘으면 True."""
-    if len(messages) > SUMMARY_TRIGGER_MESSAGES:
+    """압축 대상(최근 SUMMARY_KEEP_RECENT개 제외)이 임계를 넘으면 True.
+
+    - 최근 메시지는 어차피 유지되므로 트리거 계산에서 제외한다.
+    - 직전 요약 이후 새 메시지가 SUMMARY_MIN_NEW_MESSAGES개 미만이면 쉰다.
+    """
+    if len(messages) <= SUMMARY_KEEP_RECENT:
+        return False
+
+    head = messages[:-SUMMARY_KEEP_RECENT]
+    # 직전 요약본 하나만 남아 있고 새 대화가 없는 상태(구버전 기록 대비)
+    if len(head) == 1 and SUMMARY_MARKER in (head[0].get("content") or ""):
+        return False
+
+    last = last_summary_count(messages)
+    if last is not None and len(messages) - last < SUMMARY_MIN_NEW_MESSAGES:
+        return False
+
+    if len(head) > SUMMARY_TRIGGER_MESSAGES:
         return True
-    return history_chars(messages) > SUMMARY_TRIGGER_CHARS
+    return history_chars(head) > SUMMARY_TRIGGER_CHARS
 
 
 def summarize_prompt(messages: list[dict[str, Any]]) -> str:
@@ -742,7 +777,16 @@ def apply_summary(
     ]
 
     # 최종 방어
-    return repair_history(reduced)
+    reduced = repair_history(reduced)
+
+    # 요약 시점의 메시지 수를 남겨 직후 재요약(쿨다운)을 막는다.
+    if reduced and reduced[0].get("role") == "user":
+        reduced[0]["content"] = (
+            f"{reduced[0].get('content') or ''}\n"
+            f"<!-- llm-summary-at:{len(reduced)} -->"
+        )
+
+    return reduced
 
 def maybe_summarize(
     session: str,
@@ -757,9 +801,10 @@ def maybe_summarize(
             print_info("요약 기준을 넘지 않아 요약하지 않았습니다.")
         return messages
 
+    head = messages[:-SUMMARY_KEEP_RECENT] or messages
     print_info(
         f"대화가 커져 요약합니다 "
-        f"(메시지 {len(messages)}개, {history_chars(messages):,}자)..."
+        f"(메시지 {len(messages)}개, 압축 대상 {history_chars(head):,}자)..."
     )
     try:
         summary = summarize_messages(messages, model)
