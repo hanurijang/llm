@@ -1943,6 +1943,13 @@ def intent_for_step(command: str) -> str | None:
         if sub in {"test", "t"}:
             return "테스트를 실행합니다"
         if sub in {"run", "exec"}:
+            script = (tokens[2] if len(tokens) > 2 else "").lower()
+            if "test" in script:
+                return "테스트를 실행합니다"
+            if "build" in script:
+                return "빌드를 실행합니다"
+            if "lint" in script or "format" in script:
+                return "코드 스타일을 검사하거나 정리합니다"
             return "스크립트를 실행합니다"
         if sub in {"ls", "list"}:
             return "설치된 패키지를 확인합니다"
@@ -2117,11 +2124,12 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
         print_error("셸 실행은 TTY가 아니면 --yes 가 필요합니다.", stream=True)
         return False
     prefix = command_prefix(command) if approval is not None else None
-    hint = (
-        f"   {C.dim}a = 이 명령{'/' + prefix if prefix else ''} 계열 자동 허용 (다시 묻지 않음){C.reset}\n"
-        if approval is not None
-        else ""
-    )
+    if approval is None:
+        hint = ""
+    elif prefix:
+        hint = f"   {C.dim}a = 이 명령/{prefix} 계열 자동 허용 (다시 묻지 않음){C.reset}\n"
+    else:
+        hint = f"   {C.dim}a = 이 명령만 자동 허용 (다시 묻지 않음){C.reset}\n"
     try:
         answer = input(
             f"{C.yellow}❓ 확인이 필요합니다{C.reset}\n"
