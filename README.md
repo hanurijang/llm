@@ -330,16 +330,28 @@ llm --rules
 
 1. **위험 패턴 차단** — 실행 전 금지 패턴 검사
    (예: `rm -rf /`, `mkfs.*`, `dd of=/dev/*`, fork bomb, `shutdown/reboot` 등)
-2. **읽기 전용 명령 자동 실행** — 아래 화이트리스트에 해당하면 확인 없이
+2. **읽기 전용/검증 명령 자동 실행** — 아래 화이트리스트에 해당하면 확인 없이
    바로 실행하고 `ℹ️  가벼운 명령은 확인 없이 실행합니다: ...`를 안내합니다.
    - 조회 계열: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `stat`,
-     `pwd`, `echo`, `env`, `which`, `file`, `du`, `df`, `date` 등
-   - 조회 계열 2단어 조합: `npm ls`, `pip list`, `pip show`, `node -v`, `cargo tree`,
-     `git config --list`, `docker ps` 등 (`SHELL_SAFE_PAIRS`)
-   - Git 조회: `git status`, `git log`, `git diff`, `git show`, `git branch` 등
-     (조회 계열만; `commit`/`push`/`checkout` 등은 확인 필요)
+     `pwd`, `echo`, `env`, `which`, `file`, `du`, `df`, `date`, `cd`, `sleep` 등
+   - 조회 계열 2단어 조합: `pip list`, `pip show`, `node -v`, `rustc --version`,
+     `tsc --noEmit`, `java -version` 등 (`SHELL_SAFE_PAIRS`)
+   - 서브커맨드 조회/검증: `npm ls`, `npm test`, `cargo test`, `cargo check`,
+     `go build`, `docker ps`, `kubectl get`, `systemctl status` 등
+     (`SHELL_SAFE_SUBCOMMANDS`)
+   - 테스트/린트/타입 검사: `pytest`, `ruff check .`, `flake8`, `mypy`, `eslint`,
+     `shellcheck`, `gofmt`, `black --check`, `prettier --check`
+     (`--fix`/`--write`/`-w`처럼 파일을 고치는 플래그가 있으면 확인 필요,
+     `SHELL_SAFE_CHECKERS`/`SHELL_CHECK_WRITE_FLAGS`)
+   - 프로젝트 스크립트: `npm test`, `npm run <test|lint|build|typecheck|...>`,
+     `make <test|build|check|lint|...>` (`SHELL_SAFE_RUN_SCRIPTS`/`SHELL_SAFE_MAKE_TARGETS`)
+   - Git 조회·스테이징: `git status`, `git log`, `git diff`, `git show`,
+     `git branch`, `git add` (index만 변경, `git reset`으로 되돌림)
+     — `commit`/`push`/`pull`/`checkout`/`reset`/`clean`/`stash`는 확인 필요
    - Python 조회: `python3 -m py_compile`, `python3 -m json.tool`, `python3 -m unittest`,
      `python3 script.py`, `python3 --version` 등 (`-c`/`-i` 같은 임의 코드 실행은 확인 필요)
+   - 버전/도움말: `git --version`, `cargo --version`, `docker --version` 등
+     (경로 실행 `./run.sh --version`은 제외)
    - 리다이렉션은 위험 판정(`> out.txt` 등), `/dev/null`·`2>&1`은 무해 처리
    - `--confirm-all`로 자동 실행을 끌 수 있습니다.
 3. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 실행 전에 명령을 요약해
@@ -350,9 +362,10 @@ llm --rules
 4. **자동 허용 목록(`a`)** — 확인 프롬프트에서 `a`를 고르면 같은 명령을
    **다시 묻지 않고** 실행합니다. `--yes`와 달리 명령별로만 허용되며
    세션별 파일에 저장됩니다.
-   - 저장 범위: 위험하지 않은 명령은 **"계열"**(`git add` 등 앞 두 토큰)로
-     저장해 `git add -A`, `git add .`을 함께 허용하고, 정확히 한 단어뿐이거나
-     서브커맨드가 없는 명령(`pytest`, `make` 등)은 정확 일치로 저장합니다.
+   - 저장 범위: 위험하지 않은 명령은 **"계열"**(`npm install` 등 앞 두 토큰)로
+     저장해 `npm install -g x`, `npm install --save y`를 함께 허용하고, 정확히
+     한 단어뿐이거나 서브커맨드가 없는 명령(`pytest`, `make` 등)은 정확
+     일치로 저장합니다.
    - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램과
      셸 메타문자(`;`, `&&`, `|`, 리다이렉션, `$()`, 백틱 등)가 포함된 명령은
      계열 허용하지 않습니다(매번 확인).
@@ -365,19 +378,38 @@ llm --rules
 ```
 ❓ 이 명령을 실행할까요?
    • 2개 명령을 다음 순서로 실행합니다:
-     1)  git — Git 작업
-        git add -A
-     2) → (성공 시) git — Git 작업
-        git commit -m "save"
+     1)  npm — Node 패키지 관리
+        npm run build
+     2) → (성공 시) docker — 컨테이너
+        docker build -t app .
    ── 실행할 명령 ──
-   git add -A && git commit -m "save"
-   a = 이 명령/git add 계열 자동 허용 (다시 묻지 않음)
+   npm run build && docker build -t app .
+   a = 이 명령 자동 허용 (다시 묻지 않음)
    [y/N/a]:
 ```
 
-`a`를 선택하면 `git add -A`, `git add .` 등 `git add` 계열은 이후 확인 없이
-실행됩니다. 위험 프로그램이나 셸 메타문자가 섞인 명령은 계열 허용 대상이
-아닙니다.
+`a`를 선택하면 그 명령을 이후 확인 없이 실행합니다(단일 명령이면 `npm install`
+계열처럼 접두 단위로 저장되어 인자가 달라도 자동 통과). 셸 메타문자가 섞인
+조합 명령은 정확히 같은 명령일 때만 자동 통과하며, 위험 프로그램은 계열
+허용 대상이 아닙니다.
+
+### 반드시 확인이 필요한 명령
+
+아래는 자동 실행하지 않고 항상 `[y/N/a]` 확인을 받습니다(필요하면 `a`로
+세션 한정 자동 허용).
+
+| 분류 | 예 | 이유 |
+|------|-----|------|
+| 삭제·덮어쓰기·권한 | `rm`, `rmdir`, `mv`, `cp`, `truncate`, `dd`, `shred`, `chmod`, `chown`, `tee` | 되돌리기 어렵거나 데이터 손실 |
+| 다운로드·설치·전송 | `curl`, `wget`, `pip install`, `npm install`, `npm ci`, `uv pip install`, `poetry install`, `apt install` | 외부 통신, 환경 변경 |
+| 원격·이력 변경 | `git commit`, `git push`, `git pull`, `git fetch`, `git checkout`, `git switch`, `git reset`, `git clean`, `git stash` | 이력/원격 상태 변경 |
+| 임의 코드 실행 | `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`, `eval`, `sed -i`, `awk`, `xargs` | 무엇이든 실행될 수 있음 |
+| 서비스·컨테이너 변경 | `docker run/build`, `kubectl apply/delete`, `systemctl restart`, `kill`, `pkill` | 실행 중인 환경에 영향 |
+| 파일을 고치는 검사 | `ruff check --fix`, `eslint --fix`, `black .`, `cargo fmt` | 검사 도구지만 파일 수정 |
+
+그 밖의 명령(예: `make install`, `make clean`, `npm run deploy`)도 기본은
+확인 대상이며, `y`(이번만) / `a`(세션 자동 허용) / `n`(거부) 중에서 고릅니다.
+`llm --yes`는 모든 확인을 건너뜁니다.
 
 ---
 

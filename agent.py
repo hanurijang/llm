@@ -79,23 +79,67 @@ SHELL_SAFE_COMMANDS = {
     "jq", "which", "whereis", "type", "command", "env", "printenv", "echo",
     "date", "whoami", "id", "uname", "hostname", "dirname", "basename",
     "realpath", "readlink", "md5sum", "sha1sum", "sha256sum", "base64",
+    # 셸 자체 부작용이 없는 명령(서브프로세스라 cd는 이후 명령에 영향 없음)
+    "cd", "sleep", "true", "false",
 }
 SHELL_SAFE_GIT_SUBCOMMANDS = {
     "status", "diff", "log", "show", "branch", "remote", "ls-files",
     "rev-parse", "rev-list", "blame", "shortlog", "describe", "tag",
+    # index만 바꾸고 `git reset`으로 되돌릴 수 있어 자동 실행 대상으로 둔다
+    "add",
 }
 SHELL_SAFE_PY_MODULES = {
     "py_compile", "compileall", "json.tool", "unittest", "pytest", "mypy",
 }
+# 테스트/린트/타입 검사 도구: 기본 동작이 "검사"라 자동 실행한다
+SHELL_SAFE_CHECKERS = {
+    "pytest", "ruff", "flake8", "mypy", "pyright", "eslint", "shellcheck",
+    "hadolint", "yamllint", "gofmt", "checkov", "bandit",
+}
+# 위 검사 도구라도 파일을 고치는 플래그가 있으면 확인 대상
+SHELL_CHECK_WRITE_FLAGS = {
+    "--fix", "--write", "--fix-only", "-w", "--in-place", "--install-types",
+}
+# black/prettier 등은 기본 동작이 "쓰기"라 검사 플래그일 때만 자동 실행
+SHELL_PAIRS_ONLY_READONLY = (("black", {"--check", "--diff"}), ("prettier", {"--check"}))
 # 첫 토큰이 안전 목록에 없어도 두 토큰 조합이 조회 전용이면 자동 실행한다
 SHELL_SAFE_PAIRS = {
-    ("npm", "ls"), ("npm", "list"), ("npm", "view"), ("npm", "outdated"),
-    ("npm", "--version"), ("npm", "-v"),
     ("pip", "list"), ("pip", "show"), ("pip", "freeze"), ("pip", "--version"),
     ("pip3", "list"), ("pip3", "show"), ("pip3", "freeze"), ("pip3", "--version"),
     ("node", "--version"), ("node", "-v"),
-    ("cargo", "--version"), ("rustc", "--version"), ("go", "version"),
-    ("java", "-version"), ("docker", "ps"), ("docker", "images"),
+    ("rustc", "--version"), ("java", "-version"),
+    ("tsc", "--noEmit"), ("tsc", "--version"),
+}
+# 서브커맨드로 동작이 갈리는 프로그램: 조회/검증 서브커맨드만 자동 실행
+SHELL_SAFE_SUBCOMMANDS = {
+    "npm": {"ls", "list", "view", "outdated", "test", "why"},
+    "yarn": {"test", "list", "why", "info"},
+    "pnpm": {"test", "list", "why", "outdated"},
+    "bun": {"test"},
+    "cargo": {"test", "build", "check", "clippy", "metadata", "tree", "bench", "doc"},
+    "go": {"test", "build", "vet", "list", "doc", "version", "env"},
+    "docker": {"ps", "images", "version", "info", "inspect"},
+    "kubectl": {
+        "get", "describe", "logs", "version", "explain", "top",
+        "api-resources", "api-versions", "cluster-info",
+    },
+    "systemctl": {
+        "status", "is-active", "is-enabled", "is-failed", "show", "cat",
+        "list-units", "list-timers", "list-dependencies",
+    },
+    "gradle": {"test", "build", "tasks", "--status"},
+    "dotnet": {"test", "build", "--info", "--list-sdks", "--list-runtimes"},
+    "poetry": {"show", "check", "about", "version"},
+}
+# `npm run <script>` / `yarn <script>`: 아래 스크립트 이름만 조회/검증으로 본다
+SHELL_SAFE_RUN_SCRIPTS = {
+    "test", "tests", "lint", "typecheck", "check", "build", "fmt", "format",
+    "verify", "ci", "coverage", "e2e",
+}
+# `make <target>`: 아래 타깃만 자동 실행(clean/install/deploy 등은 확인)
+SHELL_SAFE_MAKE_TARGETS = {
+    "test", "tests", "check", "lint", "build", "fmt", "format", "verify",
+    "ci", "all", "docs", "typecheck",
 }
 # 안전 판정을 막는 위험 요소(쓰기·임의 실행 유발)
 SHELL_UNSAFE_PATTERN = re.compile(
@@ -103,7 +147,7 @@ SHELL_UNSAFE_PATTERN = re.compile(
     r"|\|\s*(?:sh|bash|zsh|node|python3?|perl|ruby|eval|tee|dd|rm|mv|cp)\b"
     r"|\b(?:rm|mv|cp|dd|tee|chmod|chown|chgrp|kill|pkill|truncate|ln|touch"
     r"|mkdir|install|curl|wget|eval|source)\b"
-    r"|\bgit\s+(?:push|commit|checkout|switch|reset|clean|add|rm|mv|apply"
+    r"|\bgit\s+(?:push|commit|checkout|switch|reset|clean|rm|mv|apply"
     r"|stash|fetch|pull)\b"
     r"|-(?:exec|execdir|delete)\b|--output|--in-place"
 )
@@ -134,13 +178,54 @@ def is_safe_command(command: str) -> bool:
         return False
     tokens = text.split()
     head = Path(tokens[0]).name
+    rest = tokens[1:]
     if head in {"python", "python3"}:
-        return _safe_python(tokens[1:])
+        return _safe_python(rest)
     if head == "git":
-        return len(tokens) > 1 and tokens[1] in SHELL_SAFE_GIT_SUBCOMMANDS
+        return bool(rest) and (
+            rest[0] in SHELL_SAFE_GIT_SUBCOMMANDS
+            or rest[0] in {"--version", "--help", "-v"}
+        )
     if head in SHELL_SAFE_COMMANDS:
         return True
-    return len(tokens) > 1 and (head, tokens[1]) in SHELL_SAFE_PAIRS
+    if head in SHELL_SAFE_CHECKERS:
+        if head == "ruff" and rest[:1] == ["format"]:
+            return "--check" in rest or "--diff" in rest  # `ruff format`은 파일을 고친다
+        return not any(tok in SHELL_CHECK_WRITE_FLAGS for tok in rest)
+    for program, readonly_args in SHELL_PAIRS_ONLY_READONLY:
+        if head == program:
+            return bool(rest) and rest[0] in readonly_args
+    if head in {"npm", "yarn", "pnpm", "bun"}:
+        return _safe_package_command(head, rest)
+    if head == "make":
+        return _safe_make(rest)
+    # 경로/스크립트 실행(`./run.sh`)은 제외하고, 순수 명령의 버전/도움말만 허용
+    if tokens[0] == head and "." not in head and rest[:1] in (
+        ["--version"], ["--help"], ["-V"], ["-h"], ["-v"]
+    ):
+        return True
+    if head in SHELL_SAFE_SUBCOMMANDS:
+        if head == "cargo" and rest[:1] == ["fmt"]:
+            return "--check" in rest  # `cargo fmt`는 파일을 고친다
+        return bool(rest) and rest[0] in SHELL_SAFE_SUBCOMMANDS[head]
+    return bool(rest) and (head, rest[0]) in SHELL_SAFE_PAIRS
+
+
+def _safe_package_command(head: str, rest: list[str]) -> bool:
+    """npm/yarn/pnpm/bun 명령이 조회·검증 수준인지 판단한다."""
+    if not rest:
+        return False
+    if rest[0] == "run":
+        return len(rest) > 1 and rest[1] in SHELL_SAFE_RUN_SCRIPTS
+    return rest[0] in SHELL_SAFE_SUBCOMMANDS.get(head, set())
+
+
+def _safe_make(rest: list[str]) -> bool:
+    """make 타깃이 빌드/검증 계열인지 판단한다(clean·install·deploy는 제외)."""
+    targets = [tok for tok in rest if not tok.startswith("-")]
+    if not targets:
+        return False
+    return all(tok in SHELL_SAFE_MAKE_TARGETS for tok in targets)
 
 
 def _safe_python(rest: list[str]) -> bool:
