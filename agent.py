@@ -2087,13 +2087,21 @@ class ShellApproval:
             print_warn(f"자동 허용 목록 저장 실패: {exc}", stream=True)
 
     def is_allowed(self, command: str) -> bool:
+        """명령(조합이면 **모든 조각**)이 자동 허용 상태인지 판단한다."""
         if command_key(command) in self.exact:
+            return True
+        segments = [c for _, c in split_shell_commands(command)] or [command_key(command)]
+        return all(self.segment_allowed(segment) for segment in segments)
+
+    def segment_allowed(self, segment: str) -> bool:
+        """조각 하나가 자동 허용 상태인지 판단한다."""
+        if command_key(segment) in self.exact:
             return True
         # 계열 접두는 인자에 따라 부작용이 켜지는 명령(`find -exec`, `-i` 등)에는
         # 적용하지 않는다. 그런 명령은 매번 확인을 받는다.
-        if has_write_args(command):
+        if has_write_args(segment):
             return False
-        prefix = command_prefix(command)
+        prefix = command_prefix(segment)
         return bool(prefix) and prefix in self.prefixes
 
     def remember(self, command: str) -> str:
@@ -2115,7 +2123,50 @@ class ShellApproval:
             print_warn(f"자동 허용 목록 삭제 실패: {exc}", stream=True)
 
 
+def shell_allow_hint(approval: "ShellApproval | None", target: str) -> str:
+    """`a` 선택 시 무엇이 자동 허용으로 저장되는지 안내한다."""
+    if approval is None:
+        return ""
+    prefix = command_prefix(target)
+    if prefix:
+        return f"   {C.dim}a = 이 명령/{prefix} 계열 자동 허용 (다시 묻지 않음){C.reset}\n"
+    return f"   {C.dim}a = 이 명령만 자동 허용 (다시 묻지 않음){C.reset}\n"
+
+
+def ask_shell_segment(
+    label: str,
+    target: str,
+    approval: "ShellApproval | None",
+    allow_all: bool = False,
+) -> str:
+    """조각 하나에 대한 동의를 묻는다. 반환: `y`(이번만) / `a` / `all` / `n`(거부)."""
+    keys = "[y/N/all/a]" if allow_all else "[y/N/a]"
+    try:
+        answer = input(
+            f"{label}{C.dim}실행할 명령{C.reset}: {C.bold}{target}{C.reset}\n"
+            f"{shell_allow_hint(approval, target)}"
+            f"   {C.bold}{keys}{C.reset}: "
+        ).strip().lower()
+    except EOFError:
+        return "n"
+    if answer in {"y", "yes", "ㅛ"}:
+        return "y"
+    if approval is None:
+        return "n"
+    if allow_all and answer in {"all", "always", "모두"}:
+        return "all"
+    if answer in {"a", "ㅁ"}:
+        return "a"
+    return "n"
+
+
 def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = None) -> bool:
+    """셸 실행 동의를 받는다.
+
+    `&&`/`||`/`|`/`;`로 이어진 조합 명령은 **조각 단위로 하나씩** 묻고 자동
+    허용도 조각별로 저장한다. 그래야 조합 순서나 인자가 바뀌어도 이미 허용한
+    조각은 다시 묻지 않는다.
+    """
     if yes:
         return True
     if approval is not None and approval.is_allowed(command):
@@ -2123,29 +2174,52 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
     if not sys.stdin.isatty():
         print_error("셸 실행은 TTY가 아니면 --yes 가 필요합니다.", stream=True)
         return False
-    prefix = command_prefix(command) if approval is not None else None
-    if approval is None:
-        hint = ""
-    elif prefix:
-        hint = f"   {C.dim}a = 이 명령/{prefix} 계열 자동 허용 (다시 묻지 않음){C.reset}\n"
+
+    segments = [c for _, c in split_shell_commands(command)] or [command_key(command)]
+    pending = [s for s in segments if approval is None or not approval.segment_allowed(s)]
+    if not pending:
+        return True
+
+    compound = len(segments) > 1
+    if compound:
+        print(
+            f"{C.yellow}❓ 확인이 필요합니다{C.reset} "
+            f"{C.dim}(조각 {len(segments)}개 중 {len(pending)}개 확인){C.reset}"
+        )
+        print(f"   {C.dim}전체{C.reset}: {C.bold}{command}{C.reset}")
     else:
-        hint = f"   {C.dim}a = 이 명령만 자동 허용 (다시 묻지 않음){C.reset}\n"
-    try:
-        answer = input(
-            f"{C.yellow}❓ 확인이 필요합니다{C.reset}\n"
-            f"   {C.dim}실행할 명령{C.reset}: {C.bold}{command}{C.reset}\n"
-            f"{hint}"
-            f"   {C.bold}[y/N/a]{C.reset}: "
-        ).strip().lower()
-    except EOFError:
+        print(f"{C.yellow}❓ 확인이 필요합니다{C.reset}")
+
+    added: list[str] = []
+    auto_rest = False
+    for idx, segment in enumerate(segments, 1):
+        if not auto_rest and approval is not None and approval.segment_allowed(segment):
+            if compound:
+                print(f"   {C.dim}{idx}) {segment} (이미 자동 허용){C.reset}")
+            continue
+        if auto_rest:
+            if approval is not None and not approval.segment_allowed(segment):
+                added.append(approval.remember(segment))
+            continue
+        label = f"   {C.dim}{idx}) {C.reset}" if compound else "   "
+        answer = ask_shell_segment(label, segment, approval, allow_all=compound)
+        if answer == "y":
+            continue
+        if answer in {"a", "all"}:
+            if approval is not None:
+                added.append(approval.remember(segment))
+            if answer == "all":
+                auto_rest = True
+            continue
+        print_warn("셸 실행을 취소했습니다.", stream=True)
         return False
-    if answer in {"y", "yes", "ㅛ"}:
-        return True
-    if answer in {"a", "all", "always", "ㅁ"} and approval is not None:
-        key = approval.remember(command)
-        print_ok(f"자동 허용에 추가했습니다: {key} (해제: llm --allow-clear)")
-        return True
-    return False
+    if added:
+        print_ok(
+            "자동 허용에 추가했습니다: "
+            + ", ".join(added)
+            + " (해제: llm --allow-clear)"
+        )
+    return True
 
 
 def tool_shell(

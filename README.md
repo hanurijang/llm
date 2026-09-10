@@ -382,6 +382,9 @@ llm --rules
 3. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 `[y/N/a]` 확인을 받습니다.
    프롬프트에는 **실제로 실행될 명령**만 보여줍니다(무엇을 하려는지는 위의
    `🔧 shell <의도 요약>` 줄에 이미 표시됩니다).
+   - `&&`, `||`, `|`, `;`로 이어진 조합 명령은 한 덩어리로 묻지 않고 **조각
+     단위로 하나씩** 묻습니다(`1)`, `2)` …). 각 조각에 `y`(이번만) / `a`(그
+     조각 자동 허용) / `n`(전체 중단), 남은 조각을 한꺼번에 허용하려면 `all`.
 4. **자동 허용 목록(`a`)** — 확인 프롬프트에서 `a`를 고르면 같은 명령을
    **다시 묻지 않고** 실행합니다. `--yes`와 달리 명령별로만 허용되며
    세션별 파일에 저장됩니다.
@@ -389,11 +392,15 @@ llm --rules
      저장해 `npm install -g x`, `npm install --save y`를 함께 허용하고, 정확히
      한 단어뿐이거나 서브커맨드가 없는 명령(`pytest`, `make` 등)은 정확
      일치로 저장합니다.
-   - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램과
-     셸 메타문자(`;`, `&&`, `|`, 리다이렉션, `$()`, 백틱 등)가 포함된 명령은
-     계열 허용하지 않습니다(매번 확인). 프롬프트에는 계열 허용이면
-     `a = 이 명령/<접두> 계열 자동 허용`, 정확 일치면
-     `a = 이 명령만 자동 허용`으로 표시됩니다.
+   - **조각별 저장**: 조합 명령은 조각마다 따로 기억합니다. `npm run build &&
+     docker build -t app .`의 두 조각을 각각 `a`로 허용하면, 순서를 바꾸거나
+     인자가 달라져도(`docker build -t app:v2 . && npm run build`) 다시 묻지
+     않습니다. `n`으로 중단해도 그 전에 `a`를 고른 조각은 허용 목록에 남습니다.
+   - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램은 계열
+     허용하지 않습니다(정확 일치만). 조각 안에 리다이렉션(`>`), 백그라운드
+     (`&`), 명령 치환(`$()`, 백틱)이 남아 있으면 계열 허용하지 않습니다.
+     프롬프트에는 계열 허용이면 `a = 이 명령/<접두> 계열 자동 허용`,
+     정확 일치면 `a = 이 명령만 자동 허용`으로 표시됩니다.
    - 인자에 따라 쓰기로 바뀌는 명령도 계열 허용하지 않습니다. 검사 도구의
      `--fix`/`-w`/`--install-types`, `find -exec`/`-delete`, `--in-place`,
      `--output`처럼 부작용을 켜는 인자가 붙으면 매번 확인합니다
@@ -405,22 +412,28 @@ llm --rules
 ### 확인 프롬프트 예시
 
 도구 호출 줄에서 무엇을 하려는지 먼저 요약해 보여주고, 확인이 필요한 경우에만
-프롬프트가 뜹니다.
+프롬프트가 뜹니다. 조합 명령은 조각 단위로 하나씩 묻습니다.
 
 ```
 🔧 shell 빌드를 실행합니다 → 컨테이너를 다룹니다
-❓ 확인이 필요합니다
-   실행할 명령: npm run build && docker build -t app .
-   a = 이 명령만 자동 허용 (다시 묻지 않음)
-   [y/N/a]:
+❓ 확인이 필요합니다 (조각 2개 중 2개 확인)
+   전체: npm run build && docker build -t app .
+   1) 실행할 명령: npm run build
+   a = 이 명령/npm run 계열 자동 허용 (다시 묻지 않음)
+   [y/N/all/a]: a
+   2) 실행할 명령: docker build -t app .
+   a = 이 명령/docker build 계열 자동 허용 (다시 묻지 않음)
+   [y/N/all/a]: a
+✅ 자동 허용에 추가했습니다: npm run, docker build (해제: llm --allow-clear)
 ```
 
-`a`를 선택하면 그 명령을 이후 확인 없이 실행합니다(단일 명령이면 `npm install`
-계열처럼 접두 단위로 저장되어 인자가 달라도 자동 통과). 셸 메타문자가 섞인
-조합 명령은 정확히 같은 명령일 때만 자동 통과하며, 위험 프로그램은 계열
-허용 대상이 아닙니다. 그래서 `cd ... && cat > f <<'PY'` 처럼 내용이 매번
-달라지는 조합은 `a`로 허용해도 다음에는 다시 묻습니다. 이런 반복 작업이
-많으면 `--auto-workspace`(또는 `LLM_AUTO_WORKSPACE=1`)를 쓰세요.
+단일 명령이면 이전처럼 한 번만 묻습니다(`[y/N/a]`, `all` 없음). 조각마다 `a`를
+고르면 조각별로 저장되므로 **조합 순서나 인자가 바뀌어도** 이미 허용한 조각은
+다시 묻지 않습니다(예: `docker build -t app:v2 . && npm run build`는 바로 자동
+통과). 위험 프로그램(`rm`, `curl` 등)과 리다이렉션·명령 치환이 섞인 조각은
+정확히 같은 명령일 때만 자동 통과합니다. 그래서 `cd ... && cat > f <<'PY'`
+처럼 내용이 매번 달라지는 조합은 `a`로 허용해도 다음에는 다시 묻습니다. 이런
+반복 작업이 많으면 `--auto-workspace`(또는 `LLM_AUTO_WORKSPACE=1`)를 쓰세요.
 
 ### 작업 폴더 안 자동 실행 (`--auto-workspace`)
 
@@ -465,10 +478,11 @@ llm --rules
 | 임의 코드 실행 | `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`, `eval`, `sed -i`, `awk`, `xargs` | 무엇이든 실행될 수 있음 |
 | 서비스·컨테이너 변경 | `docker run/build`, `kubectl apply/delete`, `systemctl restart`, `kill`, `pkill` | 실행 중인 환경에 영향 |
 | 파일을 고치는 검사 | `ruff check --fix`, `eslint --fix`, `black .`, `cargo fmt` | 검사 도구지만 파일 수정 |
-| 위험 조각이 섞인 연결 | `ls && rm -rf x`, `pytest -q && npm install`, `ls; cat f`(`;`) | 한 조각이라도 위험하면 전체 확인 |
+| 위험 조각이 섞인 연결 | `ls && rm -rf x`, `pytest -q && npm install`, `ls; cat f`(`;`) | 한 조각이라도 위험하면 그 조각은 확인 |
 
 그 밖의 명령(예: `make install`, `make clean`, `npm run deploy`)도 기본은
-확인 대상이며, `y`(이번만) / `a`(세션 자동 허용) / `n`(거부) 중에서 고릅니다.
+확인 대상이며, 조각마다 `y`(이번만) / `a`(그 조각 자동 허용) / `n`(전체 거부)
+중에서 고릅니다(조합 명령이면 `all`로 남은 조각을 한꺼번에 허용).
 `llm --yes`는 모든 확인을 건너뜁니다.
 
 ---
@@ -523,7 +537,7 @@ llm (bash)  →  agent.py (python)
 - **도구 계층**: `tool_*` 함수 + `run_tool` 디스패처 + `tool_schemas`
 - **안전/검증**: `resolve_in_workspace`, `is_secret_path`, `SHELL_DENY`,
   `is_safe_command`(읽기 전용 자동 실행), `intent_summary`(명령 의도 요약),
-  `confirm_shell`(`[y/N/a]`),
+  `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`),
   `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)
 - **세션/규칙**: `load_history`/`save_history`, `bind_folder`/`load_bindings`,
   `load_session_rules`
