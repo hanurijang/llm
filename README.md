@@ -529,7 +529,7 @@ llm --rules
 | 파일을 고치는 검사 | `ruff check --fix`, `eslint --fix`, `black .`, `cargo fmt` | 검사 도구지만 파일 수정 |
 | 위험 조각이 섞인 연결 | `ls && rm -rf x`, `pytest -q && npm install`, `ls; cat f`(`;`) | 한 조각이라도 위험하면 그 조각은 확인 |
 
-그 밖의 명령(예: `make install`, `make clean`, `npm run deploy`)도 기본은
+그 밖의 명령(예: `make install`, `make clean`, `npm run deploy`)도 엄격 모드에서는
 확인 대상이며, 조각마다 `y`(이번만) / `a`(그 조각 자동 허용) / `n`(전체 거부)
 중에서 고릅니다(조합 명령이면 `all`로 남은 조각을 한꺼번에 허용).
 `llm --yes`는 모든 확인을 건너뜁니다.
