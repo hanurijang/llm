@@ -378,6 +378,9 @@ llm --rules
      `ls && rm -rf x`, `pytest -q && npm install`은 확인 대상.
      `;`(순차 연결)은 항상 확인 대상입니다.
    - 리다이렉션은 위험 판정(`> out.txt` 등), `/dev/null`·`2>&1`은 무해 처리
+   - 환경변수 접두: `FOO=1 npm test`처럼 앞에 지정이 붙어도 프로그램을 보고
+     같은 기준으로 판단합니다(`PATH`/`LD_PRELOAD`/`PYTHONPATH` 등 실행 대상을
+     바꾸는 이름이 붙으면 확인 대상)
    - `--confirm-all`로 자동 실행을 끌 수 있습니다.
 3. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 `[y/N/a]` 확인을 받습니다.
    프롬프트에는 **실제로 실행될 명령**만 보여줍니다(무엇을 하려는지는 위의
@@ -385,6 +388,8 @@ llm --rules
    - `&&`, `||`, `|`, `;`로 이어진 조합 명령은 한 덩어리로 묻지 않고 **조각
      단위로 하나씩** 묻습니다(`1)`, `2)` …). 각 조각에 `y`(이번만) / `a`(그
      조각 자동 허용) / `n`(전체 중단), 남은 조각을 한꺼번에 허용하려면 `all`.
+     `n`으로 중단하면 **그 프롬프트에서 `a`로 추가한 항목은 되돌립니다**(전에
+     허용해 둔 항목은 유지).
 4. **자동 허용 목록(`a`)** — 확인 프롬프트에서 `a`를 고르면 같은 명령을
    **다시 묻지 않고** 실행합니다. `--yes`와 달리 명령별로만 허용되며
    세션별 파일에 저장됩니다.
@@ -395,7 +400,13 @@ llm --rules
    - **조각별 저장**: 조합 명령은 조각마다 따로 기억합니다. `npm run build &&
      docker build -t app .`의 두 조각을 각각 `a`로 허용하면, 순서를 바꾸거나
      인자가 달라져도(`docker build -t app:v2 . && npm run build`) 다시 묻지
-     않습니다. `n`으로 중단해도 그 전에 `a`를 고른 조각은 허용 목록에 남습니다.
+     않습니다.
+   - **환경변수 접두**: `FOO=1 npm run build`처럼 앞에 환경변수 지정이 있으면
+     프로그램(`npm run`) 기준으로 접두를 만들고, 같은 이름이 붙은 변형도 함께
+     허용합니다. 다만 `PATH`, `LD_PRELOAD`, `PYTHONPATH`, `GIT_SSH_COMMAND`
+     처럼 실행 대상·로딩을 바꾸는 이름이 붙으면 계열 허용하지 않습니다
+     (정확 일치만). 같은 기준이 읽기 전용 자동 실행과 `--auto-workspace`
+     판정에도 적용됩니다.
    - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램은 계열
      허용하지 않습니다(정확 일치만). 조각 안에 리다이렉션(`>`), 백그라운드
      (`&`), 명령 치환(`$()`, 백틱)이 남아 있으면 계열 허용하지 않습니다.
@@ -537,7 +548,8 @@ llm (bash)  →  agent.py (python)
 - **도구 계층**: `tool_*` 함수 + `run_tool` 디스패처 + `tool_schemas`
 - **안전/검증**: `resolve_in_workspace`, `is_secret_path`, `SHELL_DENY`,
   `is_safe_command`(읽기 전용 자동 실행), `intent_summary`(명령 의도 요약),
-  `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`),
+  `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`, 중단 시 롤백),
+  `command_prefix` / `strip_env_assignments`(자동 허용 접두, 환경변수 지정 인식),
   `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)
 - **세션/규칙**: `load_history`/`save_history`, `bind_folder`/`load_bindings`,
   `load_session_rules`

@@ -154,6 +154,34 @@ SHELL_UNSAFE_PATTERN = re.compile(
 # 무해한 리다이렉션(출력 버리기/에러 합치기)은 무시한다
 SHELL_HARMLESS_REDIRECT = re.compile(r"\d?>\s*/dev/null|\d?>&\s*\d|&>\s*/dev/null")
 
+# `FOO=bar cmd`처럼 명령 앞에 붙는 환경변수 지정
+SHELL_ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*")
+# 값이 코드 로딩/경로 해석을 바꿔 "같은 계열"이라도 동작이 달라지는 이름
+SHELL_ENV_UNSAFE_NAMES = {
+    "PATH", "IFS", "SHELLOPTS", "BASH_ENV", "ENV", "PROMPT_COMMAND",
+    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES",
+    "DYLD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+    "NODE_OPTIONS", "NODE_PATH", "PERL5LIB", "PERL5OPT", "RUBYOPT",
+    "RUBYLIB", "GEM_HOME", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF",
+    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_DIR", "GIT_WORK_TREE",
+    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH", "GOFLAGS",
+    "HISTFILE", "PS4", "BASH_XTRACEFD", "SSH_AUTH_SOCK", "HOME",
+}
+
+
+def strip_env_assignments(tokens: list[str]) -> tuple[list[str], list[str]]:
+    """앞머리 `NAME=value` 지정을 분리해 (지정 목록, 남은 토큰)을 돌려준다."""
+    envs: list[str] = []
+    rest = list(tokens)
+    while len(rest) > 1 and SHELL_ENV_ASSIGN_RE.fullmatch(rest[0]):
+        envs.append(rest.pop(0))
+    return envs, rest
+
+
+def env_assignments_unsafe(envs: list[str]) -> bool:
+    """환경변수 지정이 동작·코드 로딩을 바꿀 수 있는 이름인지 판단한다."""
+    return any(env.split("=", 1)[0] in SHELL_ENV_UNSAFE_NAMES for env in envs)
+
 # 계열(접두) 자동 허용을 만들 때는 인자에 따라 동작이 바뀌는 명령을 막는다.
 # 접두로 묶인 뒤 다른 인자가 붙어 부작용이 생기는 것을 예방한다.
 SHELL_WRITE_ARG_PATTERN = re.compile(
@@ -245,6 +273,10 @@ def _is_safe_simple_command(part: str) -> bool:
     tokens = part.split()
     if not tokens:
         return False
+    # `FOO=1 cmd`의 앞머리 지정은 떼고 프로그램으로 판단한다.
+    envs, tokens = strip_env_assignments(tokens)
+    if env_assignments_unsafe(envs):
+        return False  # PATH/LD_PRELOAD 등은 실행 대상이 달라질 수 있다
     head = Path(tokens[0]).name
     rest = tokens[1:]
     if head in {"python", "python3"}:
@@ -356,6 +388,10 @@ def _workspace_fragment_safe(fragment: str, root: Path) -> bool:
     body = re.sub(r"\d*>>?\s*\S+", " ", fragment).strip()
     if body and body != fragment and is_safe_command(body):
         return True
+    # `FOO=1 cmd`의 앞머리 지정은 떼고 프로그램으로 판단한다.
+    envs, tokens = strip_env_assignments(tokens)
+    if env_assignments_unsafe(envs):
+        return False  # PATH/LD_PRELOAD 등은 실행 대상이 달라질 수 있다
     head = Path(tokens[0]).name
     if head in SHELL_WORKSPACE_BLOCK_HEADS:
         return False
@@ -1910,8 +1946,7 @@ def intent_for_step(command: str) -> str | None:
         return None
     tokens = single.split()
     # `FOO=bar cmd ...` 처럼 앞에 붙은 환경변수 지정은 건너뛴다.
-    while len(tokens) > 1 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", tokens[0]):
-        tokens = tokens[1:]
+    _, tokens = strip_env_assignments(tokens)
     head = tokens[0]
     name = Path(head).name
     sub = tokens[1] if len(tokens) > 1 else ""
@@ -2016,20 +2051,27 @@ def command_prefix(command: str) -> str | None:
     """같은 계열로 묶어 자동 허용할 접두 키.
 
     셸 메타문자(파이프/연결/리다이렉션/치환)가 섞이면 정확 일치만 인정하고,
-    삭제·설치류처럼 위험한 프로그램은 접두 허용을 만들지 않는다.
+    삭제·설치류처럼 위험한 프로그램은 접두 허용을 만들지 않는다. 명령 앞의
+    환경변수 지정(`FOO=1 cmd`)은 건너뛰고 프로그램 기준으로 접두를 만든다.
     """
     text = (command or "").strip()
     if not text or SHELL_META_PATTERN.search(text):
         return None
     tokens = text.split()
-    head = Path(tokens[0]).name
+    envs, bare = strip_env_assignments(tokens)
+    # `PATH=... cmd`처럼 동작을 바꾸는 환경변수는 계열로 묶지 않는다(정확 일치만).
+    if env_assignments_unsafe(envs):
+        return None
+    if not bare:
+        return None
+    head = Path(bare[0]).name
     if head in SHELL_NO_PREFIX_HEADS or head in SHELL_FLAG_SENSITIVE_HEADS:
         return None
     if head in SHELL_SUBCOMMAND_PROGRAMS:
-        if len(tokens) > 1 and not tokens[1].startswith("-"):
-            if (head, tokens[1]) in SHELL_NO_PREFIX_SUBCOMMANDS:
+        if len(bare) > 1 and not bare[1].startswith("-"):
+            if (head, bare[1]) in SHELL_NO_PREFIX_SUBCOMMANDS:
                 return None  # `cargo fmt`처럼 같은 접두 안에 안전/위험 변형이 공존
-            return f"{head} {tokens[1]}"
+            return f"{head} {bare[1]}"
         return None
     return head
 
@@ -2112,6 +2154,18 @@ class ShellApproval:
         self.save()
         return prefix or command_key(command)
 
+    def snapshot(self) -> tuple[set[str], set[str]]:
+        """되돌리기용 현재 상태 복사본."""
+        return set(self.exact), set(self.prefixes)
+
+    def restore(self, snap: tuple[set[str], set[str]]) -> None:
+        """스냅샷 상태로 되돌린다(중단 시 이번에 추가한 항목 취소)."""
+        exact, prefixes = snap
+        if self.exact == exact and self.prefixes == prefixes:
+            return
+        self.exact, self.prefixes = exact, prefixes
+        self.save()
+
     def clear(self) -> None:
         self.exact.clear()
         self.prefixes.clear()
@@ -2165,7 +2219,8 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
 
     `&&`/`||`/`|`/`;`로 이어진 조합 명령은 **조각 단위로 하나씩** 묻고 자동
     허용도 조각별로 저장한다. 그래야 조합 순서나 인자가 바뀌어도 이미 허용한
-    조각은 다시 묻지 않는다.
+    조각은 다시 묻지 않는다. `n`으로 중단하면 이 프롬프트에서 추가한 허용은
+    되돌린다(전에 허용해 둔 항목은 그대로 둔다).
     """
     if yes:
         return True
@@ -2191,6 +2246,7 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
         print(f"{C.yellow}❓ 확인이 필요합니다{C.reset}")
 
     added: list[str] = []
+    snap = approval.snapshot() if approval is not None else None
     auto_rest = False
     for idx, segment in enumerate(segments, 1):
         if not auto_rest and approval is not None and approval.segment_allowed(segment):
@@ -2212,6 +2268,8 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
                 auto_rest = True
             continue
         print_warn("셸 실행을 취소했습니다.", stream=True)
+        if approval is not None and snap is not None:
+            approval.restore(snap)  # 중단했으니 이번에 추가한 허용은 취소
         return False
     if added:
         print_ok(
