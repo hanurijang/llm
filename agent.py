@@ -1781,82 +1781,219 @@ def split_shell_commands(command: str) -> list[tuple[str, str]]:
     return [(o, c) for o, c in parts if c]
 
 
-def describe_shell_command(command: str) -> str:
-    """단일 셸 명령을 한 줄로 요약한다."""
-    head = command.strip().split()[0] if command.strip() else ""
-    name = Path(head).name if head else command.strip()
-    descriptions = {
-        "cd": "디렉터리 이동",
-        "ls": "디렉터리 내용 나열",
-        "cat": "파일 내용 출력",
-        "head": "파일 앞부분 출력",
-        "tail": "파일 뒷부분 출력",
-        "grep": "패턴 검색",
-        "rg": "패턴 검색 (ripgrep)",
-        "find": "파일 검색",
-        "mkdir": "디렉터리 생성",
-        "rm": "파일/디렉터리 삭제",
-        "rmdir": "빈 디렉터리 삭제",
-        "mv": "이동/이름 변경",
-        "cp": "복사",
-        "touch": "빈 파일 생성/수정시각 갱신",
-        "echo": "문자열 출력",
-        "printf": "문자열 출력",
-        "chmod": "권한 변경",
-        "chown": "소유자 변경",
-        "python": "Python 실행",
-        "python3": "Python 실행",
-        "pip": "Python 패키지 관리",
-        "pip3": "Python 패키지 관리",
-        "npm": "Node 패키지 관리",
-        "node": "Node.js 실행",
-        "make": "빌드 실행",
-        "git": "Git 작업",
-        "curl": "HTTP 요청",
-        "wget": "파일 다운로드",
-        "tar": "압축/해제",
-        "unzip": "압축 해제",
-        "zip": "압축 생성",
-        "sudo": "관리자 권한으로 실행",
-        "pytest": "테스트 실행",
-        "go": "Go 작업",
-        "cargo": "Rust 작업",
-        "bash": "bash 스크립트 실행",
-        "sh": "셸 스크립트 실행",
-    }
-    label = descriptions.get(name)
+# 셸 명령을 "무엇을 하려는지"로 요약할 때 쓰는 프로그램별 의도 문구.
+# 명령 원문을 설명하지 않고 작업 의도만 한 줄로 보여주기 위한 표다.
+SHELL_INTENT_PROGRAMS = {
+    "ls": "폴더 내용을 확인합니다",
+    "cat": "파일 내용을 읽습니다",
+    "head": "파일 앞부분을 읽습니다",
+    "tail": "파일 끝부분을 읽습니다",
+    "less": "파일 내용을 읽습니다",
+    "wc": "코드 줄 수를 셉니다",
+    "grep": "코드에서 패턴을 찾습니다",
+    "rg": "코드에서 패턴을 찾습니다",
+    "find": "파일을 찾습니다",
+    "du": "용량을 확인합니다",
+    "df": "디스크 여유 공간을 확인합니다",
+    "tree": "폴더 구조를 봅니다",
+    "mkdir": "새 폴더를 만듭니다",
+    "touch": "새 파일을 만듭니다",
+    "rm": "파일을 삭제합니다",
+    "rmdir": "폴더를 삭제합니다",
+    "shred": "파일을 삭제합니다",
+    "mv": "파일을 이동하거나 이름을 바꿉니다",
+    "cp": "파일을 복사합니다",
+    "chmod": "실행 권한을 조정합니다",
+    "chown": "파일 소유자를 바꿉니다",
+    "ln": "링크를 만듭니다",
+    "sed": "파일 내용을 수정합니다",
+    "awk": "텍스트를 가공합니다",
+    "truncate": "파일을 비웁니다",
+    "tee": "결과를 파일로 저장합니다",
+    "echo": "결과를 출력합니다",
+    "printf": "결과를 출력합니다",
+    "tar": "압축을 풀거나 묶습니다",
+    "zip": "압축 파일을 만듭니다",
+    "unzip": "압축을 풉니다",
+    "curl": "네트워크에서 데이터를 가져옵니다",
+    "wget": "네트워크에서 파일을 받습니다",
+    "sudo": "관리자 권한으로 실행합니다",
+    "kill": "프로세스를 종료합니다",
+    "pkill": "프로세스를 종료합니다",
+    "docker": "컨테이너를 다룹니다",
+    "kubectl": "클러스터를 제어합니다",
+    "systemctl": "서비스를 제어합니다",
+    "pytest": "테스트를 실행합니다",
+    "ruff": "코드 스타일을 검사합니다",
+    "flake8": "코드 스타일을 검사합니다",
+    "black": "코드 스타일을 정리합니다",
+    "eslint": "코드 스타일을 검사합니다",
+    "prettier": "코드 스타일을 정리합니다",
+    "mypy": "타입을 검사합니다",
+    "tsc": "타입을 검사합니다",
+    "make": "빌드를 실행합니다",
+    "sleep": "잠시 기다립니다",
+    "which": "설치 경로를 확인합니다",
+}
+
+SHELL_INTENT_GIT = {
+    "status": "저장소 상태를 확인합니다",
+    "diff": "변경 내용을 확인합니다",
+    "log": "커밋 기록을 확인합니다",
+    "show": "커밋 내용을 확인합니다",
+    "branch": "브랜치를 확인합니다",
+    "remote": "원격 저장소를 확인합니다",
+    "add": "변경을 커밋 대상에 추가합니다",
+    "commit": "변경을 커밋합니다",
+    "tag": "태그를 추가합니다",
+    "rm": "추적 중인 파일을 삭제합니다",
+    "push": "원격 저장소로 올립니다",
+    "pull": "원격 저장소에서 받아옵니다",
+    "fetch": "원격 저장소 정보를 갱신합니다",
+    "clone": "저장소를 복제합니다",
+    "checkout": "다른 브랜치나 버전으로 바꿉니다",
+    "switch": "다른 브랜치로 바꿉니다",
+    "restore": "파일을 되돌립니다",
+    "reset": "커밋 상태를 되돌립니다",
+    "clean": "추적하지 않는 파일을 지웁니다",
+    "stash": "작업 내용을 임시 보관합니다",
+    "init": "저장소를 초기화합니다",
+    "config": "git 설정을 변경합니다",
+    "mv": "파일을 이동합니다",
+}
+
+SHELL_INTENT_PACKAGE_HEADS = {
+    "pip",
+    "pip3",
+    "uv",
+    "poetry",
+    "conda",
+    "apt",
+    "apt-get",
+    "brew",
+    "snap",
+    "gem",
+}
+
+SHELL_INTENT_WRITE_HEADS = {"echo", "printf", "cat", "tee", "sed"}
+SHELL_INTENT_SCRIPT_HEADS = {"bash", "sh", "zsh", "fish", "node", "deno", "ruby", "perl"}
+SHELL_INTENT_CHECKER_HEADS = {"ruff", "black", "prettier", "eslint", "flake8"}
+SHELL_INTENT_HEREDOC = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
+
+
+def strip_heredoc_bodies(command: str) -> str:
+    """heredoc 본문을 제거해 명령 뼈대만 남긴다(의도 요약용).
+
+    본문(`print(1)` 같은 코드 줄)이 별개 명령처럼 해석되는 것을 막는다.
+    """
+    lines = command.splitlines()
+    kept: list[str] = []
+    i = 0
+    while i < len(lines):
+        line = lines[i]
+        kept.append(line)
+        i += 1
+        match = SHELL_INTENT_HEREDOC.search(line)
+        if not match:
+            continue
+        end = match.group(1)
+        while i < len(lines) and lines[i].strip() != end:
+            i += 1
+        i += 1  # 종료 토큰 줄 건너뛰기
+    return "\n".join(kept)
+
+
+def intent_for_step(command: str) -> str | None:
+    """단일 셸 명령에서 "무엇을 하려는지" 한 줄을 뽑는다."""
+    single = command.strip()
+    if not single:
+        return None
+    tokens = single.split()
+    # `FOO=bar cmd ...` 처럼 앞에 붙은 환경변수 지정은 건너뛴다.
+    while len(tokens) > 1 and re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*=\S*", tokens[0]):
+        tokens = tokens[1:]
+    head = tokens[0]
+    name = Path(head).name
+    sub = tokens[1] if len(tokens) > 1 else ""
+
+    if name == "cd":
+        return "작업 폴더를 이동합니다"
+    if re.search(r"(?<![0-9&])>>?", single) and name in SHELL_INTENT_WRITE_HEADS:
+        return "파일을 작성하거나 수정합니다"
+    if name in {"python", "python3", "py"}:
+        if sub == "-m":
+            mod = tokens[2] if len(tokens) > 2 else ""
+            if "pytest" in mod or "unittest" in mod:
+                return "테스트를 실행합니다"
+            if "py_compile" in mod:
+                return "문법을 검사합니다"
+            if "json.tool" in mod:
+                return "JSON을 검사합니다"
+            return "파이썬 모듈을 실행합니다"
+        if sub in SHELL_WORKSPACE_CODE_FLAGS:
+            return "파이썬 코드를 실행합니다"
+        return "파이썬 스크립트를 실행합니다"
+    if name in SHELL_INTENT_SCRIPT_HEADS:
+        return "스크립트를 실행합니다"
+    if name == "git":
+        return SHELL_INTENT_GIT.get(sub, "Git 저장소를 다룹니다")
+    if name in {"npm", "yarn", "pnpm", "bun"}:
+        if sub in {"install", "i", "ci", "add"}:
+            return "패키지를 설치합니다"
+        if sub in {"test", "t"}:
+            return "테스트를 실행합니다"
+        if sub in {"run", "exec"}:
+            return "스크립트를 실행합니다"
+        if sub in {"ls", "list"}:
+            return "설치된 패키지를 확인합니다"
+        return "Node 패키지를 다룹니다"
+    if name in SHELL_INTENT_PACKAGE_HEADS:
+        return "패키지를 설치하거나 관리합니다"
+    if name == "cargo":
+        return {
+            "test": "테스트를 실행합니다",
+            "build": "빌드합니다",
+            "check": "코드를 검사합니다",
+            "fmt": "코드 스타일을 정리합니다",
+            "clippy": "코드를 검사합니다",
+        }.get(sub, "Rust 프로젝트를 다룹니다")
+    if name == "go":
+        return {
+            "test": "테스트를 실행합니다",
+            "build": "빌드합니다",
+            "vet": "코드를 검사합니다",
+            "run": "코드를 실행합니다",
+            "mod": "모듈을 관리합니다",
+        }.get(sub, "Go 프로젝트를 다룹니다")
+    label = SHELL_INTENT_PROGRAMS.get(name)
+    if name in SHELL_INTENT_CHECKER_HEADS:
+        if "--fix" in tokens or name in {"black", "prettier"}:
+            return "코드 스타일을 정리합니다"
+        return "코드 스타일을 검사합니다"
     if label:
-        return f"{name} — {label}"
-    return name or command.strip()
+        return label
+    if head.startswith("./") or name.endswith(SHELL_WORKSPACE_SCRIPT_SUFFIXES):
+        return "스크립트를 실행합니다"
+    return f"{name} 명령을 실행합니다"
 
 
-def summarize_shell_command(command: str) -> str:
-    """실행될 명령을 사람이 읽기 쉬운 여러 줄 요약으로 만든다."""
-    steps = split_shell_commands(command)
-    lines: list[str] = []
-    if not steps:
-        return f"   • {command.strip()}"
-
-    if len(steps) == 1:
-        op, single = steps[0]
-        lines.append(f"   • 실행: {describe_shell_command(single)}")
-        lines.append(f"     {C.dim}{single}{C.reset}")
-        return "\n".join(lines)
-
-    lines.append(f"   • {len(steps)}개 명령을 다음 순서로 실행합니다:")
-    for idx, (op, single) in enumerate(steps, 1):
-        connector = {
-            "": " ",
-            ";": " → (순차)",
-            "&&": " → (성공 시)",
-            "||": " → (실패 시)",
-            "|": " → (파이프 연결)",
-            "\n": " → (순차)",
-        }.get(op, f" {op} ")
-        desc = describe_shell_command(single)
-        lines.append(f"     {idx}){connector} {desc}")
-        lines.append(f"        {C.dim}{single}{C.reset}")
-    return "\n".join(lines)
+def intent_summary(command: str) -> str:
+    """실행할 명령을 "무엇을 하려는지" 한 줄로 요약한다(명령 원문 설명 대신)."""
+    skeleton = strip_heredoc_bodies(command)
+    steps = split_shell_commands(skeleton) or [("", skeleton.strip())]
+    intents: list[str] = []
+    for _, single in steps:
+        text = intent_for_step(single)
+        if text and text not in intents:
+            intents.append(text)
+    if len(intents) > 1:
+        # `cd` 이동은 다른 작업과 함께면 의도 요약에서 뺀다.
+        intents = [i for i in intents if i != "작업 폴더를 이동합니다"] or intents
+    if not intents:
+        return "명령을 실행합니다"
+    if len(intents) > 2:
+        return intents[0] + f" 외 {len(intents) - 1}가지"
+    return " → ".join(intents)
 
 
 def allow_file(session: str) -> Path:
@@ -1975,12 +2112,10 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
     if yes:
         return True
     if approval is not None and approval.is_allowed(command):
-        print_info(f"이전에 허용한 명령이라 자동 실행합니다: {command}")
         return True
     if not sys.stdin.isatty():
         print_error("셸 실행은 TTY가 아니면 --yes 가 필요합니다.", stream=True)
         return False
-    summary = summarize_shell_command(command)
     prefix = command_prefix(command) if approval is not None else None
     hint = (
         f"   {C.dim}a = 이 명령{'/' + prefix if prefix else ''} 계열 자동 허용 (다시 묻지 않음){C.reset}\n"
@@ -1989,10 +2124,8 @@ def confirm_shell(command: str, yes: bool, approval: "ShellApproval | None" = No
     )
     try:
         answer = input(
-            f"{C.yellow}❓ 이 명령을 실행할까요?{C.reset}\n"
-            f"{summary}\n"
-            f"   {C.dim}── 실행할 명령 ──{C.reset}\n"
-            f"   {C.bold}{command}{C.reset}\n"
+            f"{C.yellow}❓ 확인이 필요합니다{C.reset}\n"
+            f"   {C.dim}실행할 명령{C.reset}: {C.bold}{command}{C.reset}\n"
             f"{hint}"
             f"   {C.bold}[y/N/a]{C.reset}: "
         ).strip().lower()
@@ -2023,17 +2156,15 @@ def tool_shell(
             return f"ERROR: 차단된 위험한 명령 패턴입니다: {command}"
     timeout = int(args.get("timeout") or 60)
     timeout = max(1, min(timeout, 180))
-    if yes:
-        pass
-    elif approval is not None and approval.is_allowed(command):
-        print_info(f"이전에 허용한 명령이라 자동 실행합니다: {command}")
-    elif auto_safe and is_safe_command(command):
-        # 읽기 전용/검증 명령은 매번 묻지 않고 바로 실행한다.
-        print_info(f"가벼운 명령은 확인 없이 실행합니다: {command}")
-    elif auto_workspace and is_workspace_command(command, root):
-        # 작업 폴더를 벗어나지 않고 되돌릴 수 있는 명령만 확인 없이 실행한다.
-        print_info(f"작업 폴더 안에서 끝나는 명령이라 확인 없이 실행합니다: {command}")
-    elif not confirm_shell(command, yes, approval):
+    auto_run = (
+        approval is not None
+        and approval.is_allowed(command)
+        or auto_safe
+        and is_safe_command(command)
+        or auto_workspace
+        and is_workspace_command(command, root)
+    )
+    if not yes and not auto_run and not confirm_shell(command, yes, approval):
         return "ERROR: 사용자가 셸 실행을 거부했습니다."
     try:
         proc = subprocess.run(
@@ -2110,7 +2241,7 @@ def summarize_args(name: str, raw_args: str) -> str:
     if "_error" in args:
         return raw_args[:80]
     if name == "shell":
-        return args.get("command", "")[:120]
+        return intent_summary(str(args.get("command", "")))
     if name == "str_replace":
         return str(args.get("path", ""))
     if "path" in args:
