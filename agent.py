@@ -2850,10 +2850,6 @@ def cmd_agent(
     for _step in range(1, max_steps + 1):
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
 
-        if not chat_only:
-            # 몇 번째 단계인지 한 줄로 남겨 진행 과정을 따라갈 수 있게 한다.
-            print(f"{C.dim}{rule('─', f'{_step}/{max_steps}단계')}{C.reset}")
-
         messages = maybe_summarize(
             session,
             history_file,
