@@ -31,10 +31,10 @@ MAX_GREP_HITS = 80
 MAX_RULES_CHARS = 24_000
 RULES_REL = Path(".llm") / "rules.md"
 
-# 대화 자동 요약/백업 설정
-SUMMARY_TRIGGER_CHARS = 60_000
-SUMMARY_TRIGGER_MESSAGES = 60
-SUMMARY_KEEP_RECENT = 12
+# 대화 자동 요약/백업 설정 (요약이 잦으면 흐름이 끊기므로 임계를 넉넉히 둔다)
+SUMMARY_TRIGGER_CHARS = 120_000
+SUMMARY_TRIGGER_MESSAGES = 120
+SUMMARY_KEEP_RECENT = 16
 SUMMARY_MAX_CHARS = 4_000
 SUMMARY_DIR_NAME = "summaries"
 SUMMARY_MARKER = "[이전 대화 요약]"
@@ -64,6 +64,66 @@ SHELL_DENY = (
     re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&"),
     re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"),
 )
+
+# 확인 없이 바로 실행해도 되는 읽기 전용 명령(첫 토큰 기준)
+SHELL_SAFE_COMMANDS = {
+    "pwd", "ls", "tree", "cat", "head", "tail", "wc", "stat", "file", "du", "df",
+    "grep", "rg", "egrep", "fgrep", "find", "fd", "sort", "uniq", "cut", "nl",
+    "tr", "column", "diff", "cmp", "comm", "paste", "fold", "rev", "tac",
+    "jq", "which", "whereis", "type", "command", "env", "printenv", "echo",
+    "date", "whoami", "id", "uname", "hostname", "dirname", "basename",
+    "realpath", "readlink", "md5sum", "sha1sum", "sha256sum", "base64",
+}
+SHELL_SAFE_GIT_SUBCOMMANDS = {
+    "status", "diff", "log", "show", "branch", "remote", "ls-files",
+    "rev-parse", "rev-list", "blame", "shortlog", "describe", "tag",
+}
+SHELL_SAFE_PY_MODULES = {
+    "py_compile", "compileall", "json.tool", "unittest", "pytest", "mypy",
+}
+# 안전 판정을 막는 위험 요소(쓰기·임의 실행 유발)
+SHELL_UNSAFE_PATTERN = re.compile(
+    r"[><`;]|\$\(|\bsudo\b|\bxargs\b"
+    r"|\|\s*(?:sh|bash|zsh|node|python3?|perl|ruby|eval|tee|dd|rm|mv|cp)\b"
+    r"|\b(?:rm|mv|cp|dd|tee|chmod|chown|chgrp|kill|pkill|truncate|ln|touch"
+    r"|mkdir|install|curl|wget|eval|source)\b"
+    r"|\bgit\s+(?:push|commit|checkout|switch|reset|clean|add|rm|mv|apply"
+    r"|stash|fetch|pull)\b"
+    r"|-(?:exec|execdir|delete)\b|--output|--in-place"
+)
+# 무해한 리다이렉션(출력 버리기/에러 합치기)은 무시한다
+SHELL_HARMLESS_REDIRECT = re.compile(r"\d?>\s*/dev/null|\d?>&\s*\d|&>\s*/dev/null")
+
+
+def is_safe_command(command: str) -> bool:
+    """확인 없이 실행해도 되는 읽기 전용/검증 명령인지 판단한다."""
+    text = SHELL_HARMLESS_REDIRECT.sub(" ", (command or "").strip())
+    if not text or SHELL_UNSAFE_PATTERN.search(text):
+        return False
+    tokens = text.split()
+    head = Path(tokens[0]).name
+    if head in {"python", "python3"}:
+        return _safe_python(tokens[1:])
+    if head == "git":
+        return len(tokens) > 1 and tokens[1] in SHELL_SAFE_GIT_SUBCOMMANDS
+    return head in SHELL_SAFE_COMMANDS
+
+
+def _safe_python(rest: list[str]) -> bool:
+    """python3 호출이 검증/실행 수준인지 판단한다(-c 등 임의 코드는 제외)."""
+    if not rest:
+        return False
+    if any(arg in {"-c", "-i", "-e", "-"} for arg in rest):
+        return False
+    if "-m" in rest:
+        idx = rest.index("-m")
+        return len(rest) > idx + 1 and rest[idx + 1] in SHELL_SAFE_PY_MODULES
+    if rest[0].startswith("-"):
+        return all(arg in {"--version", "-V", "-h", "--help"} for arg in rest)
+    script = rest[0]
+    if script.startswith(("/", "~")) or ".." in script:
+        return False
+    return script.endswith(".py")
 
 
 def color_enabled() -> bool:
@@ -216,30 +276,102 @@ def clear_status() -> None:
         eprint("\r\033[K", end="")
 
 
-def make_stream_progress() -> Callable[[str, str], None]:
-    """스트리밍 중 진행 상황을 stderr 한 줄로 표시한다.
+def make_stream_progress(show_thinking: bool = True) -> Callable[[str, str], None]:
+    """스트리밍 진행 상황을 stderr에 표시한다.
 
-    thinking(사고)과 답변 생성이 오래 걸릴 때 화면이 조용해 보이는 문제를 막는다.
+    종류(kind)는 `reasoning` | `content` | `end`.
+    - `reasoning`: show_thinking 이면 사고 과정을 회색으로 실시간 출력하고,
+      아니면 글자 수만 한 줄로 보여준다.
+    - `content`: 최종 답변은 완료 후 glow 로 한 번만 렌더링하므로 글자 수만 표시.
+    - `end`: 열려 있는 사고 블록/상태 줄을 정리한다.
     """
-    state = {"reasoning": 0, "content": 0}
+    width = max(24, terminal_width() - 1)
+    indent = "   "
+    state: dict[str, Any] = {
+        "reasoning": 0,
+        "content": 0,
+        "col": 0,         # 현재 줄의 표시 폭
+        "status": False,  # 상태(카운터) 한 줄이 떠 있는지
+        "dim": False,     # 회색 사고 블록이 열려 있는지
+        "header": False,  # 사고 헤더(🧠)를 이미 출력했는지
+    }
+
+    def end_line() -> None:
+        eprint("", flush=True)
+        state["col"] = 0
+
+    def close_status() -> None:
+        if state["status"]:
+            eprint("\r\033[K", end="", flush=True)
+            state["status"] = False
+
+    def close_thinking() -> None:
+        if state["col"]:
+            end_line()
+        if state["dim"]:
+            eprint(C.reset, end="", flush=True)
+            state["dim"] = False
+
+    def write_thinking(text: str) -> None:
+        buf: list[str] = []
+
+        def spill() -> None:
+            if buf:
+                eprint("".join(buf), end="")
+                buf.clear()
+
+        for ch in text:
+            if ch == "\n":
+                spill()
+                end_line()
+                continue
+            w = char_width(ch)
+            if state["col"] + w > width:
+                spill()
+                end_line()
+            if state["col"] == 0:
+                if state["header"]:
+                    buf.append(indent)
+                    state["col"] = len(indent)
+                else:
+                    state["header"] = True
+                    state["dim"] = True
+                    buf.append(f"{C.dim}🧠 ")
+                    state["col"] = display_width("🧠 ")
+            buf.append(ch)
+            state["col"] += w
+        spill()
+        eprint("", end="", flush=True)
 
     def report(kind: str, text: str) -> None:
         if not sys.stderr.isatty():
             return
-        if kind == "reasoning":
-            state["reasoning"] += len(text)
+        if kind == "end":
+            close_thinking()
+            close_status()
+            return
+        if kind == "content":
+            state["content"] += len(text)
+            close_thinking()
             eprint(
-                f"\r\033[K{C.dim}🧠 사고 중… {state['reasoning']}자{C.reset}",
+                f"\r\033[K{C.dim}✍️  작성 중… {state['content']}자{C.reset}",
                 end="",
                 flush=True,
             )
+            state["status"] = True
             return
-        state["content"] += len(text)
+        state["reasoning"] += len(text)
+        if show_thinking:
+            close_status()
+            write_thinking(text)
+            return
+        close_thinking()
         eprint(
-            f"\r\033[K{C.dim}✍️  작성 중… {state['content']}자{C.reset}",
+            f"\r\033[K{C.dim}🧠 사고 중… {state['reasoning']}자{C.reset}",
             end="",
             flush=True,
         )
+        state["status"] = True
 
     return report
 
@@ -1430,7 +1562,7 @@ def confirm_shell(command: str, yes: bool) -> bool:
     return answer.lower() in {"y", "yes"}
 
 
-def tool_shell(root: Path, args: dict[str, Any], yes: bool) -> str:
+def tool_shell(root: Path, args: dict[str, Any], yes: bool, auto_safe: bool = True) -> str:
     command = args.get("command") or ""
     if not command.strip():
         return "ERROR: command가 비어 있습니다."
@@ -1439,7 +1571,12 @@ def tool_shell(root: Path, args: dict[str, Any], yes: bool) -> str:
             return f"ERROR: 차단된 위험한 명령 패턴입니다: {command}"
     timeout = int(args.get("timeout") or 60)
     timeout = max(1, min(timeout, 180))
-    if not confirm_shell(command, yes):
+    if yes:
+        pass
+    elif auto_safe and is_safe_command(command):
+        # 읽기 전용/검증 명령은 매번 묻지 않고 바로 실행한다.
+        print_info(f"가벼운 명령은 확인 없이 실행합니다: {command}")
+    elif not confirm_shell(command, yes):
         return "ERROR: 사용자가 셸 실행을 거부했습니다."
     try:
         proc = subprocess.run(
@@ -1475,7 +1612,13 @@ def parse_tool_args(raw: str) -> dict[str, Any]:
         return {"_error": f"JSON 파싱 실패: {raw[:200]}"}
 
 
-def run_tool(name: str, raw_args: str, root: Path, yes: bool) -> str:
+def run_tool(
+    name: str,
+    raw_args: str,
+    root: Path,
+    yes: bool,
+    auto_safe: bool = True,
+) -> str:
     args = parse_tool_args(raw_args)
     if "_error" in args:
         return f"ERROR: {args['_error']}"
@@ -1495,7 +1638,7 @@ def run_tool(name: str, raw_args: str, root: Path, yes: bool) -> str:
         if name == "grep":
             return tool_grep(root, args)
         if name == "shell":
-            return tool_shell(root, args, yes)
+            return tool_shell(root, args, yes, auto_safe)
         return f"ERROR: 알 수 없는 도구: {name}"
     except ValueError as exc:
         return f"ERROR: {exc}"
@@ -1645,6 +1788,8 @@ def stream_chat(
             "".join(content_parts),
             finish,
         ) from exc
+    finally:
+        emit("end", "")
     content = "".join(content_parts) if content_parts else None
     reasoning = "".join(reasoning_parts) if reasoning_parts else None
     tool_calls = []
@@ -1718,6 +1863,15 @@ def complete(
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") or {}
     content = message.get("content")
+    reasoning = message.get("reasoning_content")
+
+    if on_delta is not None:
+        # 비스트리밍/폴백 경로에서는 사고·본문을 완료 후 한 번에 표시한다.
+        if thinking and reasoning:
+            on_delta("reasoning", reasoning)
+        if content:
+            on_delta("content", content)
+        on_delta("end", "")
 
     raw_tools = message.get("tool_calls") or []
     tool_calls = []
@@ -1735,7 +1889,7 @@ def complete(
             }
         )
 
-    return content, tool_calls, choice.get("finish_reason")
+    return content, tool_calls, choice.get("finish_reason"), reasoning
 
 
 def print_banner(session: str, root: Path, chat_only: bool) -> None:
@@ -1910,6 +2064,7 @@ def cmd_agent(
     max_steps: int,
     stream: bool,
     thinking: bool = True,
+    auto_safe: bool = True,
 ) -> int:
     print_banner(session, root, chat_only)
 
@@ -1928,7 +2083,7 @@ def cmd_agent(
         system = build_system_prompt(root, session)
         tools = tool_schemas()
 
-    progress = make_stream_progress() if stream else None
+    progress = make_stream_progress(thinking) if stream else None
 
     for _step in range(1, max_steps + 1):
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
@@ -1983,6 +2138,12 @@ def cmd_agent(
 
         clear_status()
 
+        if not stream and thinking and reasoning:
+            # 비스트리밍 모드에서도 사고 과정을 한 번에 보여준다.
+            report_reasoning = make_stream_progress(True)
+            report_reasoning("reasoning", reasoning)
+            report_reasoning("end", "")
+
         # Agent mode: execute structured tool calls and continue the loop.
         if tool_calls and not chat_only:
             assistant_message: dict[str, Any] = {
@@ -2006,7 +2167,7 @@ def cmd_agent(
                 counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
                 print(f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}")
 
-                result = run_tool(name, raw_args, root, yes)
+                result = run_tool(name, raw_args, root, yes, auto_safe)
                 preview = result.splitlines()[0][:120] if result else ""
                 if result.startswith("ERROR:"):
                     print(f"      {C.red}✗ {preview}{C.reset}")
@@ -2069,6 +2230,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--max-steps", type=int, default=40, help="에이전트 루프 최대 횟수")
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
     parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
+    parser.add_argument("--confirm-all", action="store_true", help="읽기 전용 명령도 확인 후 실행 (자동 실행 비활성)")
     parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
     parser.add_argument("--rules", action="store_true", help="이 폴더의 세션 규칙 보기")
     parser.add_argument("--summarize", action="store_true", help="현재 대화를 지금 요약·백업 (강제)")
@@ -2187,6 +2349,7 @@ def main(argv: list[str] | None = None) -> int:
         max_steps=max(1, args.max_steps),
         stream=not args.no_stream,
         thinking=not args.no_thinking,
+        auto_safe=not args.confirm_all,
     )
 
 
