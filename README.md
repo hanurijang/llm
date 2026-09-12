@@ -157,12 +157,13 @@ llm --allow-clear
 
 | 옵션 | 설명 |
 |------|------|
-| `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 |
+| `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |
+| `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |
+| `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |
 | `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일) |
 | `--auto-workspace` | 작업 폴더 안에서 끝나는 명령만 확인 없이 실행 (기본보다 엄격, `LLM_AUTO_WORKSPACE=1`이면 기본 활성) |
-| `--root <경로>` | 작업 디렉터리 지정 (기본: 현재 폴더) |
 | `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 50). 한도에 도달하면 종료하지 않고 **이어서 N회 더 진행할지 `[y/N]`으로 확인** |
 | `--no-stream` | 스트리밍 비활성화 |
@@ -186,11 +187,17 @@ llm --allow-clear
 ### 사용 예
 
 ```bash
-# 다른 폴더를 작업 루트로 지정
-llm --root ~/project/src "타입 힌트가 빠진 함수를 찾아줘"
-
-# 세션 이름을 명시적으로 고정
+# 세션 이름을 명시적으로 고정 (이 폴더에 바인딩)
 llm -s mysession "이 대화는 mysession으로 저장해줘"
+
+# 다른 폴더의 세션을 이 폴더로 옮김 (명시적)
+llm -s mysession --rebind
+
+# 이 폴더의 세션 매핑만 해제 (기록은 유지)
+llm --unbind
+
+# 다른 폴더 세션의 대화 내용 보기 (읽기 전용)
+llm -s other --view
 
 # 최근 답변의 스크립트를 추출해 실행
 llm --run
@@ -201,24 +208,38 @@ llm --delete
 ```
 
 > 옵션과 프롬프트를 함께 쓸 때는 프롬프트를 `--`로 구분할 수 있습니다.
-> 예: `llm --root . -- "질문"`
+> 예: `llm -s mysession -- "질문"`
 
 ---
 
 ## 세션과 폴더 매핑
 
+- **작업 폴더는 항상 지금 있는 폴더(`cwd`)입니다.** 경로를 지정하는
+  `--root`는 없습니다.
 - 하나의 **세션 이름**은 하나의 **폴더**에만 연결됩니다. 대화 기록은
   `~/.local/share/llm/history_<세션>.json`에 저장됩니다.
-- 폴더-세션 매핑은 `~/.local/share/llm/bindings.json`에 저장됩니다.
+- 폴더-세션 매핑은 `~/.local/share/llm/bindings.json`에 저장되며, 경로 키는
+  로드·저장 시 **정규화**됩니다(심볼릭 링크 해소, 뒤쪽 구분자 제거,
+  macOS/Windows 대소문자 통일). `a`, `a/`, `a/.`, 심볼릭 링크 경로는 모두
+  같은 폴더로 취급됩니다.
 - 매핑이 없는 폴더에서 대화를 시작하면 **폴더 이름 기반으로 세션이 자동
   생성**됩니다. (예: `~/work/api` → 세션 `api`; 이름 충돌 시 해시 접미사 추가)
-- `-s <이름>`으로 세션을 옮길 수 있고, 이전 폴더 매핑이 있으면 어디서
-  옮겨왔는지 안내합니다.
-- `--view/--clear/--delete` 같은 조회·삭제 명령은 다른 세션을 가로채지
-  않습니다.
 
-현재 세션 이름은 `~/.local/share/llm/current_session`에 마지막 값이
-기록됩니다.
+### 소유와 권한
+
+| 동작 | 이 폴더의 세션 | 다른 폴더의 세션 |
+|------|------|------|
+| 대화·이어가기 / `--clear` / `--delete` / `--summarize` / `--run` / `--allow-clear` | 가능 | **거부** |
+| `-s <이름>` 으로 매핑(설정) | 가능 | **거부** |
+| `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |
+
+- 다른 폴더가 소유한 세션 이름을 `-s`로 지정하면 거부하고 소유 폴더만
+  안내합니다. 매핑 파일은 바뀌지 않습니다.
+- 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `--view`처럼 보기만 하는
+  명령만 허용됩니다. 보고만 하는 명령은 바인딩을 만들지 않습니다.
+- 세션을 옮기려면 `llm -s <이름> --rebind`로 **명시적으로** 지정해야 합니다.
+  이전 소유 폴더는 매핑이 해제됩니다.
+- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.
 
 ---
 
@@ -558,8 +579,7 @@ llm --rules
 |------|------|
 | `/etc/env/.env` | API 키 등 환경변수 (자동 로드) |
 | `~/.local/share/llm/history_<세션>.json` | 세션별 대화 기록 |
-| `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 |
-| `~/.local/share/llm/current_session` | 마지막 사용 세션 이름 |
+| `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (경로 키 정규화) |
 | `~/.local/share/llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 |
 | `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
@@ -579,7 +599,7 @@ llm (bash)  →  agent.py (python)
 
 `agent.py`의 주요 구성:
 
-- **진입/CLI**: `main`, `parse_args`, `resolve_root`
+- **진입/CLI**: `main`, `parse_args`, `canonical_folder`
 - **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행 → 결과 피드백 반복
 - **API 계층**: `http_json`, `stream_chat`, `complete` (SSE 스트리밍, 비스트림
   폴백, `StreamInterrupted`로 부분 응답 보존, `on_delta`/`make_stream_progress`
@@ -591,7 +611,8 @@ llm (bash)  →  agent.py (python)
   `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`, 중단 시 롤백),
   `command_prefix` / `strip_env_assignments`(자동 허용 접두, 환경변수 지정 인식),
   `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)
-- **세션/규칙**: `load_history`/`save_history`, `bind_folder`/`load_bindings`,
+- **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`
+  (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),
   `load_session_rules`
 - **요약/백업**: `should_summarize`, `summarize_messages`, `backup_conversation`,
   `apply_summary`, `maybe_summarize`, `cmd_summarize`

@@ -775,11 +775,24 @@ def api_key() -> str:
     return key
 
 
-def session_paths(name: str) -> tuple[Path, Path]:
+def history_file_for(session: str) -> Path:
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    current = HISTORY_DIR / "current_session"
-    history = HISTORY_DIR / f"history_{name}.json"
-    return current, history
+    return HISTORY_DIR / f"history_{session}.json"
+
+
+def canonical_folder(path: Path | str) -> str:
+    """폴더 경로를 비교용 정규 키로 만든다(심볼릭 링크 해소·구분자/대소문자 정리).
+
+    세션 바인딩의 진실은 이 키 하나뿐이다. 원본 문자열은 표시용으로만 쓴다.
+    """
+    p = os.path.realpath(os.fspath(path))
+    if len(p) > 1:
+        p = p.rstrip("/\\") or os.sep
+    if sys.platform == "darwin" or os.name == "nt":
+        p = p.lower()
+    if os.name == "nt" and len(p) > 2 and p[1] == ":":
+        p = p[0].upper() + p[1:]
+    return p
 
 
 def bindings_file() -> Path:
@@ -797,14 +810,21 @@ def load_bindings() -> dict[str, str]:
     folders = data.get("folders")
     if not isinstance(folders, dict):
         return {}
-    return {str(k): str(v) for k, v in folders.items() if k and v}
+    # 키는 로드 시 정규화한다(예전에 저장된 raw 경로도 같은 폴더로 인식).
+    normalized: dict[str, str] = {}
+    for path_str, session in folders.items():
+        if not path_str or not session:
+            continue
+        normalized[canonical_folder(str(path_str))] = str(session)
+    return normalized
 
 
 def save_bindings(folders: dict[str, str]) -> None:
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    normalized = {canonical_folder(path): session for path, session in folders.items()}
     path = bindings_file()
     tmp = path.with_suffix(".tmp")
-    tmp.write_text(json.dumps({"folders": folders}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    tmp.write_text(json.dumps({"folders": normalized}, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     tmp.replace(path)
 
 
@@ -815,8 +835,8 @@ def sanitize_session_name(name: str) -> str:
 
 
 def auto_session_name(root: Path, folders: dict[str, str]) -> str:
-    root_s = str(root.resolve())
-    parts = [p for p in root.resolve().parts if p not in {"/", ""}]
+    root_s = canonical_folder(root)
+    parts = [p for p in Path(root_s).parts if p not in {"/", ""}]
     slugs: list[str] = []
     for i in range(1, min(4, len(parts) + 1)):
         slug = sanitize_session_name("_".join(parts[-i:]))
@@ -825,25 +845,39 @@ def auto_session_name(root: Path, folders: dict[str, str]) -> str:
     if not slugs:
         slugs = ["workspace"]
     for name in slugs:
-        owner = next((path for path, sess in folders.items() if sess == name), None)
+        owner = folder_for_session(folders, name)
         if owner is None or owner == root_s:
             return name
     digest = hashlib.sha1(root_s.encode("utf-8")).hexdigest()[:6]
     return f"{slugs[0]}_{digest}"
 
 
-def bind_folder(folders: dict[str, str], root: Path, session: str) -> tuple[dict[str, str], str | None]:
-    """한 세션은 폴더 하나에만 붙인다. 이전 폴더가 있으면 그 경로를 반환한다."""
-    root_s = str(root.resolve())
-    previous = next((path for path, sess in folders.items() if sess == session and path != root_s), None)
-    folders = {path: sess for path, sess in folders.items() if sess != session and path != root_s}
-    folders[root_s] = session
+def ensure_binding(
+    folders: dict[str, str], root: Path, session: str, *, reassign: bool = False
+) -> tuple[dict[str, str], str | None, str | None]:
+    """이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.
+
+    반환: (folders, error, detail)
+      - error="folder_already_bound" → detail=이 폴더에 이미 묶인 세션 이름
+      - error="session_bound_elsewhere" → detail=세션을 소유한 폴더 경로
+    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.
+    """
+    folder_s = canonical_folder(root)
+    owner = folder_for_session(folders, session)  # 세션을 소유한 폴더
+    existing = folders.get(folder_s)  # 이 폴더에 묶인 세션
+    if not reassign:
+        if existing is not None and existing != session:
+            return folders, "folder_already_bound", existing
+        if owner is not None and owner != folder_s:
+            return folders, "session_bound_elsewhere", owner
+    folders = {p: s for p, s in folders.items() if s != session and p != folder_s}
+    folders[folder_s] = session
     save_bindings(folders)
-    return folders, previous
+    return folders, None, None
 
 
 def unbind_session(folders: dict[str, str], session: str) -> dict[str, str]:
-    folders = {path: sess for path, sess in folders.items() if sess != session}
+    folders = {canonical_folder(path): sess for path, sess in folders.items() if sess != session}
     save_bindings(folders)
     return folders
 
@@ -2849,7 +2883,7 @@ def cmd_run(session: str, history_file: Path) -> int:
 def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> None:
     files = {f.name[len("history_") : -len(".json")]: f for f in HISTORY_DIR.glob("history_*.json")}
     names = sorted(set(files) | set(folders.values()))
-    mapped = folders.get(str(root))
+    mapped = folders.get(canonical_folder(root))
 
     print_title("💡 DeepSeek LLM CLI")
     print(f"  {C.dim}📂 작업 폴더{C.reset}  {root}")
@@ -2866,8 +2900,9 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ('llm --yes "질문"', "셸 명령 확인 생략"),
         ('llm --auto-workspace "질문"', "폴더 안 명령은 자동 실행"),
         ('llm --show-thinking "질문"', "사고 과정 원문까지 표시"),
-        ('llm --root <경로> "질문"', "작업 디렉터리 지정"),
         ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
+        ("llm -s <이름> --rebind", "다른 폴더의 세션을 이 폴더로 재지정"),
+        ("llm --unbind", "이 폴더의 세션 매핑 해제 (기록은 유지)"),
         ("llm --init-rules", ".llm/rules.md 생성"),
         ("llm --rules", "세션 규칙 보기"),
         ("llm --run", "직전 응답의 스크립트 실행"),
@@ -3115,9 +3150,10 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="DeepSeek CLI 에이전트",
     )
     parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑)")
+    parser.add_argument("--rebind", action="store_true", help="다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)")
+    parser.add_argument("--unbind", action="store_true", help="이 폴더의 세션 매핑만 해제 (기록은 유지)")
     parser.add_argument("--chat", action="store_true", help="도구 없이 순수 채팅")
     parser.add_argument("-y", "--yes", action="store_true", help="셸 명령 확인 생략")
-    parser.add_argument("--root", help="작업 디렉터리 (기본: 현재 디렉터리)")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"모델 (기본: {DEFAULT_MODEL})")
     parser.add_argument(
         "--max-steps",
@@ -3157,28 +3193,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def resolve_root(args: argparse.Namespace) -> Path:
-    if args.root:
-        return Path(args.root).expanduser().resolve()
-    return Path.cwd().resolve()
-
-
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     init_color()
     args = parse_args(argv if argv is not None else sys.argv[1:])
 
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    current_file = HISTORY_DIR / "current_session"
-    folders = load_bindings()
-
     if args.balance:
         return cmd_balance()
 
-    root = resolve_root(args)
+    # 세션은 "지금 이 폴더"에만 묶인다. --root 같은 경로 우회는 두지 않는다.
+    root = Path.cwd().resolve()
     if not root.is_dir():
         print_error(f"작업 디렉터리가 없습니다: {root}")
         return 1
+    folder_key = canonical_folder(root)
+    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    folders = load_bindings()
 
     if args.init_rules:
         rc = cmd_init_rules(root)
@@ -3197,25 +3227,72 @@ def main(argv: list[str] | None = None) -> int:
         args.view or args.run or args.clear or args.delete or args.summarize
         or args.allow_list or args.allow_clear
     )
+    # 남의 세션에도 허용되는 "보기만" 하는 명령.
+    read_only = bool(args.view or args.allow_list)
+
+    owned = folders.get(folder_key)  # 이 폴더에 묶인 세션
     session: str | None = None
+
+    if args.unbind:
+        if owned is None:
+            print_info("이 폴더에 매핑된 세션이 없습니다.")
+            return 0
+        folders = unbind_session(folders, owned)
+        print_ok(f"이 폴더의 세션 매핑을 해제했습니다 (세션: {owned}).")
+        print_info(f"대화 기록은 남아 있습니다: {history_file_for(owned)}")
+        return 0
+
+    if args.rebind and not args.session:
+        print_error("--rebind 는 -s <이름> 과 함께 사용하세요.")
+        return 1
 
     if args.session:
         session = args.session.strip()
         if not session:
             print_error("세션 이름이 비어 있습니다.")
             return 1
-        # 대화 시작이거나 `llm -s name`만 친 경우에 이 폴더에 매핑.
-        # --view/--delete 등 조회·삭제는 다른 세션을 훔치지 않는다.
-        if prompt or not inspect_only:
-            folders, previous = bind_folder(folders, root, session)
-            if previous:
-                print_info(f"세션 '{session}' 폴더 매핑: {previous} → {root}")
+        owner = folder_for_session(folders, session)  # 세션을 소유한 폴더
+
+        if args.rebind:
+            # 명시적 재지정: 이 폴더로 옮긴다(기존 소유 폴더는 해제됨).
+            folders, err, _ = ensure_binding(folders, root, session, reassign=True)
+            if err:
+                print_error(f"세션을 이 폴더로 옮기지 못했습니다: {err}")
+                return 1
+            if owner is not None and owner != folder_key:
+                print_info(f"세션 '{session}' 폴더 매핑: {owner} → {root}")
+            if owned is not None and owned != session:
+                print_info(f"이 폴더의 이전 세션 '{owned}' 매핑을 해제했습니다.")
+        elif owner is not None and owner != folder_key:
+            # 남의 세션: 설정·수정·삭제는 거부, 조회(--view/--allow-list)만 허용.
+            if not (inspect_only and read_only):
+                print_error(f"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:")
+                print_info(f"  {owner}")
+                print_info("이 폴더에서는 조회(--view)만 가능합니다.")
+                print_info(f"옮기려면  llm -s {session} --rebind")
+                return 1
+        elif owner is None and inspect_only and read_only:
+            pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.
+        else:
+            # 내 세션이거나, 아직 주인이 없는 이름 → 이 폴더에 바인딩.
+            folders, err, detail = ensure_binding(folders, root, session)
+            if err == "folder_already_bound":
+                print_error(f"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.")
+                print_info("세션을 바꾸려면  llm -s <이름> --rebind")
+                return 1
+            if err == "session_bound_elsewhere":
+                print_error(f"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:")
+                print_info(f"  {detail}")
+                return 1
     else:
-        session = folders.get(str(root))
+        session = owned
         if session is None:
             if prompt:
                 session = auto_session_name(root, folders)
-                folders, _ = bind_folder(folders, root, session)
+                folders, err, _ = ensure_binding(folders, root, session)
+                if err:
+                    print_error(f"세션을 만들지 못했습니다: {err}")
+                    return 1
             elif inspect_only:
                 print_error("이 폴더에 매핑된 세션이 없습니다.")
                 print_info("대화를 시작하거나  llm -s <이름>  으로 지정하세요.")
@@ -3224,8 +3301,7 @@ def main(argv: list[str] | None = None) -> int:
                 list_sessions(None, folders, root)
                 return 0
 
-    current_file.write_text(session + "\n", encoding="utf-8")
-    _, history_file = session_paths(session)
+    history_file = history_file_for(session)
 
     if args.view:
         return cmd_view(session, history_file)
