@@ -819,7 +819,12 @@ def load_bindings() -> dict[str, str]:
     for path_str, session in folders.items():
         if not path_str or not session:
             continue
-        normalized[canonical_folder(str(path_str))] = str(session)
+        key = canonical_folder(str(path_str))
+        # 폴더가 사라진(고아) 바인딩은 무시한다. 예: 프로젝트 폴더를 mv/rm 한 뒤.
+        # 파일은 그대로 두므로, 경로가 다시 생기면(마운트 복구 등) 매핑도 되살아난다.
+        if not os.path.isdir(key):
+            continue
+        normalized[key] = str(session)
     return normalized
 
 
@@ -859,20 +864,17 @@ def auto_session_name(root: Path, folders: dict[str, str]) -> str:
 def ensure_binding(
     folders: dict[str, str], root: Path, session: str
 ) -> tuple[dict[str, str], str | None, str | None]:
-    """이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.
+    """이 폴더를 세션에 바인딩한다(이 폴더의 기존 매핑은 덮어쓴다).
 
-    이미 다른 폴더가 소유한 세션은 이 폴더로 끌어오지 않는다(남의 소유를 존중).
-    소유권을 옮기려면 소유 폴더에서 `llm --unbind` 후 이 폴더에서 다시 지정한다.
+    - 이미 다른 폴더가 소유한 세션은 끌어오지 않는다(남의 소유를 존중).
+    - 이 폴더가 다른 세션에 묶여 있던 경우에는 조용히 갈아탄다. 이전 세션의
+      대화 기록은 그대로 남고, 매핑만 풀린다.
 
     반환: (folders, error, detail)
-      - error="folder_already_bound" → detail=이 폴더에 이미 묶인 세션 이름
       - error="session_bound_elsewhere" → detail=세션을 소유한 폴더 경로
     """
     folder_s = canonical_folder(root)
     owner = folder_for_session(folders, session)  # 세션을 소유한 폴더
-    existing = folders.get(folder_s)  # 이 폴더에 묶인 세션
-    if existing is not None and existing != session:
-        return folders, "folder_already_bound", existing
     if owner is not None and owner != folder_s:
         return folders, "session_bound_elsewhere", owner
     folders = {p: s for p, s in folders.items() if s != session and p != folder_s}
@@ -2961,9 +2963,8 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ('llm --yes "질문"', "셸 명령 확인 생략"),
         ('llm --auto-workspace "질문"', "폴더 안 명령은 자동 실행"),
         ('llm --show-thinking "질문"', "사고 과정 원문까지 표시"),
-        ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
+        ("llm -s <이름>", "이 폴더를 해당 세션에 매핑 (기존 매핑은 갈아탐)"),
         ("llm --ref <이름>", "다른 세션 맥락을 이번 세션에 1회 주입"),
-        ("llm --unbind", "이 폴더의 세션 매핑 해제 (기록은 유지)"),
         ("llm --init-rules", ".llm/rules.md 생성"),
         ("llm --rules", "세션 규칙 보기"),
         ("llm --run", "직전 응답의 스크립트 실행"),
@@ -3210,8 +3211,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         add_help=True,
         description="DeepSeek CLI 에이전트",
     )
-    parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑)")
-    parser.add_argument("--unbind", action="store_true", help="이 폴더의 세션 매핑만 해제 (기록은 유지)")
+    parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑, 기존 매핑은 갈아탐)")
     parser.add_argument(
         "--ref",
         action="append",
@@ -3299,15 +3299,6 @@ def main(argv: list[str] | None = None) -> int:
     owned = folders.get(folder_key)  # 이 폴더에 묶인 세션
     session: str | None = None
 
-    if args.unbind:
-        if owned is None:
-            print_info("이 폴더에 매핑된 세션이 없습니다.")
-            return 0
-        folders = unbind_session(folders, owned)
-        print_ok(f"이 폴더의 세션 매핑을 해제했습니다 (세션: {owned}).")
-        print_info(f"대화 기록은 남아 있습니다: {history_file_for(owned)}")
-        return 0
-
     if args.session:
         session = args.session.strip()
         if not session:
@@ -3322,21 +3313,18 @@ def main(argv: list[str] | None = None) -> int:
                 print_info(f"  {owner}")
                 print_info("이 폴더에서는 조회(--view)만 가능합니다.")
                 print_info(f"맥락이 필요하면  llm --ref {session} \"질문\"")
-                print_info(f"소유권을 옮기려면 {owner} 에서  llm --unbind  후 여기서 다시 지정하세요.")
                 return 1
         elif owner is None and inspect_only and read_only:
             pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.
         else:
-            # 내 세션이거나, 아직 주인이 없는 이름 → 이 폴더에 바인딩.
+            # 내 세션이거나, 아직 주인이 없는 이름 → 이 폴더에 바인딩(기존 매핑은 갈아탐).
             folders, err, detail = ensure_binding(folders, root, session)
-            if err == "folder_already_bound":
-                print_error(f"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.")
-                print_info("바꾸려면  llm --unbind  후  llm -s <이름>")
-                return 1
-            if err == "session_bound_elsewhere":
+            if err:
                 print_error(f"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:")
                 print_info(f"  {detail}")
                 return 1
+            if owned is not None and owned != session:
+                print_info(f"이 폴더의 이전 세션 '{owned}' 매핑을 해제했습니다 (기록은 유지).")
     else:
         session = owned
         if session is None:
