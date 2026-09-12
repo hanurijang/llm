@@ -1194,5 +1194,29 @@
   {
     "role": "assistant",
     "content": "이제 대화 기록이 **매 실행 종료 시 자동으로 커밋·push**됩니다(다음 턴으로 미루지 않음). 이번 턴 기록도 이미 올렸고, 최종 답변까지 포함하도록 종료 직후 재동기화를 예약했습니다.\n\n## 변경한 파일\n- `agent.py`: `AUTO_SYNC_ENV`(=`LLM_AUTO_SYNC`) 상수, `auto_sync_enabled()`, `auto_sync_history()` 추가. `main()`에서 **에이전트 실행 끝 · `--summarize` · `--clear` · `--delete` · `--ref`(프롬프트 없음)** 뒤에 호출 → 이 세션 기록·요약만 커밋 → `pull --rebase --autostash` → `push`. 기록에 변경이 없거나 git 저장소가 아니거나 `LLM_HISTORY=home`이면 조용히 통과, upstream 없으면 커밋만. 시작 시 안내문구도 자동 동기화 여부에 맞게 분기.\n- `.llm/rules.md`: 「대화 기록 위치와 동기화」에 **매 턴 자동 커밋·push, 미루지 않음**(`LLM_AUTO_SYNC=0`이면 `--sync-history`) 명시, 체크포인트 절도 동일하게 정리.\n- `README.md`: 「대화 기록 동기화」 자동 동작 설명, `--sync-history` 표 행, 설정표에 `LLM_AUTO_SYNC`(기본 켜짐) 추가, FAQ·개발 규칙 8번·내부 함수 목록 갱신.\n\n## 검증\n- `python3 -m py_compile agent.py` 통과.\n- 임시 저장소 3케이스: ① 변경 없음 → 아무 출력 없음 ② 기록 변경 → 자동 커밋+push 확인(원격 로그 `llm: 대화 기록 동기화`) ③ `LLM_AUTO_SYNC=0` → `enabled=False`, 변경 미커밋 유지.\n- 실제 CLI e2e: `agent.py -s zautotest --clear` → `🔄 대화 기록 동기화` 블록과 함께 원격 반영, `LLM_AUTO_SYNC=0`에서는 미반영.\n- 임시 폴더·bindings의 self-test 매핑(`/tmp/zautotest_cli.*/w`) 정리 완료.\n\n## 원격 상태\n- `bba83d0`(코드·규칙·README) → `3c82492`(기록 동기화) 순으로 push, `origin/main`과 0/0.\n- 이 세션 종료(PID 56051) 감지 후 `--sync-history`를 한 번 더 돌리는 워처(PID 56329, 로그 `/tmp/llm_sync.log`)를 예약해 **이 답변까지** 원격에 올라가게 했습니다.\n\n## 남은 일\n- 없음. 이후 턴부터는 코드 수정 여부와 무관하게 실행 끝에 기록이 자동으로 올라갑니다."
+  },
+  {
+    "role": "user",
+    "content": "커밋 푸시"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_EhusqHRuviGgxHnq2nOw2780",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm\\necho \\\"=== pull ===\\\"; git pull --rebase --autostash 2>&1 | tail -2\\necho \\\"=== 상태 ===\\\"; git status --porcelain\\necho \\\"=== 검증 ===\\\"; python3 -m py_compile agent.py && echo \\\"py_compile OK\\\"\", \"timeout\": 150}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_EhusqHRuviGgxHnq2nOw2780",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n=== pull ===\n이미 업데이트 상태입니다.\n=== 상태 ===\n M .llm/history_llm.json\n=== 검증 ===\npy_compile OK\n"
   }
 ]
