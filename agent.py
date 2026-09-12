@@ -61,6 +61,14 @@ TODO_MAX_ITEMS = 50
 TODO_GOAL_MAX_CHARS = 200
 TODO_RESTORE_MAX_ITEMS = 200
 TODO_STATUSES = ("pending", "in_progress", "done")
+# 항목 아래에 남기는 하위 작업 로그(도구 실행 등)의 화면/보관 상한과 블록 전체 줄 수.
+# 화면에는 항목마다 최근 TODO_LOG_SHOW 줄만 남기고, 넘치면 오래된 로그부터 접는다.
+TODO_LOG_SHOW = 6
+TODO_LOG_KEEP = 40
+TODO_BLOCK_MAX = 24
+# 계획 블록 들여쓰기: 항목 줄과 그 항목의 하위 로그 줄.
+TODO_ITEM_INDENT = "   "
+TODO_LOG_INDENT = "        "
 # 최초 턴에 계획을 세우지 않을 때 1회 주입하는 상기 메시지.
 TODO_REMINDER = (
     "작업을 시작하기 전에 먼저 `todo` 도구로 `goal`(이번 작업의 목표·결정한 조치를 "
@@ -74,6 +82,11 @@ TODO_REMINDER = (
 CURRENT_TODO_GOAL = ""
 # 현재 실행 중인 에이전트의 작업 계획(런마다 초기화). 요약 시 스냅샷으로 보존한다.
 CURRENT_TODO: list[dict[str, str]] = []
+# 항목별 하위 작업 로그(항목 index → 화면에 찍은 줄). 화면 표시 전용이라 모델에는
+# 보내지 않는다. 항목 내용이 같으면 계획이 갱신돼도 로그를 그대로 이어 붙인다.
+TODO_LOGS: list[list[str]] = []
+# 지금 그리는 단계 번호(계획 블록 머리말에 표시). 에이전트 루프가 갱신한다.
+AGENT_STEP = 0
 # 요약문에 실어 보내는 작업 계획 스냅샷(압축·다음 실행에서 같은 계획을 이어가기 위함).
 TODO_STAMP_RE = re.compile(r"<!--\s*llm-todo:(.*?)\s*-->", re.S)
 
@@ -583,6 +596,13 @@ def terminal_width() -> int:
         return 80
 
 
+def terminal_height() -> int:
+    try:
+        return shutil.get_terminal_size().lines
+    except OSError:
+        return 24
+
+
 RULE_WIDTH = 60
 
 
@@ -595,6 +615,76 @@ def char_width(ch: str) -> int:
 
 def display_width(text: str) -> int:
     return sum(char_width(ch) for ch in text)
+
+
+ANSI_SEQ_RE = re.compile(r"\033\[[0-9;]*m")
+
+
+def visible_width(text: str) -> int:
+    """색 코드를 뺀 표시 폭."""
+    return display_width(ANSI_SEQ_RE.sub("", text))
+
+
+def take_width(text: str, width: int) -> str:
+    """표시 폭이 width 를 넘지 않는 최대 앞부분."""
+    used = 0
+    for i, ch in enumerate(text):
+        w = char_width(ch)
+        if used + w > width:
+            return text[:i]
+        used += w
+    return text
+
+
+def clip_ansi(text: str, width: int, ellipsis: str = "…") -> str:
+    """색 코드는 남기고 표시 폭 기준으로 자른다(한 논리 줄 = 한 물리 줄)."""
+    if visible_width(text) <= width:
+        return text
+    out: list[str] = []
+    used = 0
+    idx = 0
+    while idx < len(text):
+        seq = ANSI_SEQ_RE.match(text, idx)
+        if seq:  # 색 코드는 폭을 차지하지 않는다
+            out.append(seq.group())
+            idx = seq.end()
+            continue
+        ch = text[idx]
+        w = char_width(ch)
+        if used + w > max(0, width - display_width(ellipsis)):
+            out.append(ellipsis)
+            break
+        out.append(ch)
+        used += w
+        idx += 1
+    if out and ANSI_SEQ_RE.search(text):
+        out.append(C.reset)
+    return "".join(out)
+
+
+def physical_rows(text: str) -> int:
+    """터미널에서 이 줄이 차지하는 물리 줄 수(자동 줄바꿈 포함)."""
+    cols = max(1, terminal_width())
+    return max(1, (visible_width(text) + cols - 1) // cols)
+
+
+def wrap_text(text: str, width: int) -> list[str]:
+    """공백 기준으로 표시 폭에 맞춰 줄바꿈한다(긴 단어는 잘라서 넘긴다)."""
+    width = max(8, width)
+    lines: list[str] = []
+    for para in str(text or "").split("\n"):
+        cur = ""
+        for word in para.split():
+            if cur and display_width(cur) + 1 + display_width(word) > width:
+                lines.append(cur)
+                cur = ""
+            cur = f"{cur} {word}".strip()
+            while display_width(cur) > width:
+                head = take_width(cur, width)
+                lines.append(head)
+                cur = cur[len(head):]
+        lines.append(cur)
+    return lines or [""]
 
 
 def pad(text: str, width: int) -> str:
@@ -615,24 +705,28 @@ def rule(char: str = "─", label: str | None = None) -> str:
 
 
 class StepPanel:
-    """한 단계에서 실행한 도구 결과를 **같은 자리에서** 갱신해 보여주는 패널.
+    """진행 상황(작업 계획 블록 + 도구 줄)을 **같은 자리에서** 갱신해 보여주는 패널.
 
-    도구를 실행할 때마다 이전 그림을 지우고 다시 그리므로, 결과 줄이 터미널에
-    계속 쌓이지 않는다. 진행 중인 단계의 도구 줄만 남고, 다음 단계가 시작되면
-    (`begin`) 그 자리를 새 단계가 이어받는다.
+    작업 계획이 있으면 `block`(목표 + 번호 매긴 항목 + 항목별 하위 작업 로그)을
+    그리고, 도구 줄은 진행 중인 항목의 하위 로그로 쌓인다. 그릴 때마다 이전 그림을
+    지우고 다시 그리므로 화면이 쌓이지 않고, 계획이 위에서 아래로 차례로 진행되는
+    모습이 한자리에서 보인다.
 
-    TTY 가 아니거나 `LLM_RAW` 가 설정되면 비활성화되고, 각 줄을 새 줄로 출력해
-    로그로 남긴다(기존 동작).
+    TTY 가 아니거나 `LLM_RAW` 가 설정되면 비활성화되고, 블록에서 **바뀐 줄만**
+    새 줄로 출력해 로그로 남긴다(순서대로 내려가는 기록).
     """
 
     def __init__(self) -> None:
         self.enabled = bool(sys.stdout.isatty() and not os.environ.get("LLM_RAW"))
-        self.header = ""            # 단계 머리말(그릴 도구 줄이 있을 때만 함께 그린다)
-        self.lines: list[str] = []  # 이번 단계의 도구 줄(논리 상태)
-        self.drawn: list[str] = []  # 화면에 실제로 그려 둔 줄
+        self.header = ""             # 단계 머리말(블록이 없고 도구 줄이 있을 때만)
+        self.block: list[str] = []   # 항상 그리는 여러 줄 블록(작업 계획 등)
+        self.lines: list[str] = []   # 블록 아래에 붙는 도구 줄(블록이 없을 때)
+        self.drawn: list[str] = []   # 화면에 실제로 그려 둔 줄
+        self.printed: list[str] = []  # 마지막으로 출력한 블록(바뀐 줄만 찍기 위한 기록)
+        self.static = False          # 화면보다 큰 그림: 자리 갱신 대신 바뀐 줄만 찍는다
 
     def begin(self, header: str = "") -> None:
-        """새 단계 시작: 이전 단계 그림을 지우고 상태를 초기화한다."""
+        """새 단계 시작: 단계 도구 줄을 비운다(계획 블록은 그대로 유지)."""
         self.suspend()
         self.header = header
         self.lines = []
@@ -645,8 +739,38 @@ class StepPanel:
         self.drawn = []
 
     def close(self) -> None:
-        """에이전트 종료 시 그림을 지운다."""
+        """에이전트 종료 시 그림을 지운다(계획 블록도 화면에서 사라진다)."""
         self.suspend()
+
+    def freeze(self) -> None:
+        """그림을 화면에 남긴 채 관리에서 뺀다(최종 답변 직전 계획을 보존).
+
+        이미 화면에 그려져 있으므로 다시 그리지 않는다(다시 그리면 아래에 복사된다).
+        """
+        self.drawn = []
+        self.block = []
+        self.lines = []
+
+    def set_block(self, lines: list[str]) -> None:
+        """여러 줄 블록(작업 계획)을 설정하고 다시 그린다."""
+        if not self.enabled:
+            self._print_diff(lines)
+            return
+        if lines == self.block and self.drawn:
+            return
+        self.block = list(lines)
+        self._flush()
+
+    def redraw(self) -> None:
+        """지워진 그림(블록/도구 줄)을 현재 커서 위치에 다시 그린다."""
+        if self.enabled and (self.block or self.lines):
+            self._flush()
+
+    def clear_block(self) -> None:
+        """블록을 비운다(계획이 없어지거나 종료할 때)."""
+        if self.block:
+            self.block = []
+            self._flush()
 
     def tool_open(self, text: str) -> int:
         """도구 호출 줄을 추가한다(실행 전). 반환: 이번 단계에서의 줄 인덱스."""
@@ -668,19 +792,62 @@ class StepPanel:
             print(f"      {text}", flush=True)
 
     def _erase(self) -> None:
-        sys.stdout.write(f"\033[{len(self.drawn)}A\033[J")
+        rows = self._rows(self.drawn)
+        if rows <= 0:
+            return
+        sys.stdout.write(f"\033[{rows}A\033[J")
+        sys.stdout.flush()
+
+    def _write(self, lines: list[str]) -> None:
+        clipped = [clip_ansi(line, terminal_width()) for line in lines]
+        sys.stdout.write("\n".join(clipped) + "\n")
         sys.stdout.flush()
 
     def _flush(self) -> None:
-        drawn = ([self.header] if self.header and self.lines else []) + self.lines
-        if drawn == self.drawn:
+        drawn = list(self.block)
+        if not self.block and self.header and self.lines:
+            drawn.append(self.header)
+        drawn += self.lines
+        if not self.static and drawn == self.drawn:
+            return
+        if not self.static and self._rows(drawn) >= max(4, terminal_height() - 2):
+            # 화면보다 큰 그림은 자리 갱신(위로 올려 지우기)이 어긋날 수 있다.
+            # 이때부터는 바뀐 줄만 새 줄로 찍어 기록으로 남긴다.
+            self.static = True
+            self.drawn = []
+            self.printed = []
+        if self.static:
+            self.drawn = []
+            self._print_diff(drawn)
             return
         if self.drawn:
             self._erase()
         self.drawn = drawn
         if drawn:
-            sys.stdout.write("\n".join(drawn) + "\n")
-            sys.stdout.flush()
+            self._write(drawn)
+
+    def _rows(self, lines: list[str]) -> int:
+        """물리 줄 수(터미널 폭을 넘는 줄은 자동 줄바꿈으로 한 줄 더 차지)."""
+        return sum(physical_rows(line) for line in lines) if lines else 0
+
+    def _print_diff(self, lines: list[str]) -> None:
+        """이전 블록과 달라진 줄(새로 생긴/바뀐 줄)만 새 줄로 출력한다.
+
+        TTY 가 아니거나 그림이 화면보다 커져 자리 갱신을 포기한 경우에 쓴다.
+        """
+        if not self.printed:
+            new_lines = list(lines)
+        else:
+            matcher = difflib.SequenceMatcher(None, self.printed, lines, autojunk=False)
+            new_lines = [
+                line
+                for tag, _i1, _i2, j1, j2 in matcher.get_opcodes()
+                if tag in ("insert", "replace")
+                for line in lines[j1:j2]
+            ]
+        self.printed = list(lines)
+        for line in new_lines:
+            print(line, flush=True)
 
 
 PANEL = StepPanel()
@@ -691,10 +858,17 @@ def suspend_panel() -> None:
     PANEL.suspend()
 
 
+def resume_panel() -> None:
+    """`suspend_panel` 로 지운 계획 블록을 새 출력 아래에 다시 그린다."""
+    if PANEL.block or PANEL.lines:
+        PANEL.redraw()
+
+
 def print_title(label: str) -> None:
     suspend_panel()
     line = rule("─", label)
     print(f"{C.bold}{C.cyan}{line}{C.reset}")
+    resume_panel()
 
 
 def print_section(label: str) -> None:
@@ -702,28 +876,33 @@ def print_section(label: str) -> None:
     print()
     print(f"{C.bold}{label}{C.reset}")
     print(f"{C.dim}{rule()}{C.reset}")
+    resume_panel()
 
 
 def print_info(message: str) -> None:
     suspend_panel()
     print(f"{C.cyan}ℹ️  {message}{C.reset}")
+    resume_panel()
 
 
 def print_ok(message: str) -> None:
     suspend_panel()
     print(f"{C.green}✅ {message}{C.reset}")
+    resume_panel()
 
 
 def print_warn(message: str, stream: bool = False) -> None:
     suspend_panel()
     out = eprint if stream else print
     out(f"{C.yellow}⚠️  {message}{C.reset}")
+    resume_panel()
 
 
 def print_error(message: str, stream: bool = True) -> None:
     suspend_panel()
     out = eprint if stream else print
     out(f"{C.red}❌ {message}{C.reset}")
+    resume_panel()
 
 
 def render_markdown(text: str, raw: bool = False) -> None:
@@ -2105,54 +2284,246 @@ def todo_marker(status: str) -> str:
 
 def reset_todo() -> None:
     """새 에이전트 실행을 시작할 때 작업 계획을 비운다."""
-    global CURRENT_TODO, CURRENT_TODO_GOAL
+    global CURRENT_TODO, CURRENT_TODO_GOAL, TODO_LOGS, AGENT_STEP
     CURRENT_TODO = []
     CURRENT_TODO_GOAL = ""
+    TODO_LOGS = []
+    AGENT_STEP = 0
+    PANEL.clear_block()
 
 
-def todo_rows(items: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
-    """화면에 그릴 항목만 고른다(상한 초과 시 완료된 항목부터 접는다).
+def todo_rows(items: list[dict[str, str]]) -> tuple[list[int], int]:
+    """화면에 그릴 항목의 index 목록(상한 초과 시 완료된 항목부터 접는다).
 
-    반환: (그릴 항목, 접힌 개수). 순서는 유지하고 이미 끝난 일부터 접어서
-    **진행 중인 흐름**이 계속 보이게 한다(하나의 작업으로 이어가기 위함).
+    반환: (그릴 항목 index 목록, 접힌 개수). 순서는 유지하고 이미 끝난 일부터
+    접어서 **진행 중인 흐름**이 계속 보이게 한다(하나의 작업으로 이어가기 위함).
     """
-    rows = [dict(it) for it in items]
+    order = list(range(len(items)))
     folded = 0
     i = 0
-    while len(rows) > TODO_MAX_ITEMS and i < len(rows):
-        if rows[i].get("status") == "done":
-            rows.pop(i)
+    while len(order) > TODO_MAX_ITEMS and i < len(order):
+        if str(items[order[i]].get("status") or "pending") == "done":
+            order.pop(i)
             folded += 1
         else:
             i += 1
-    if len(rows) > TODO_MAX_ITEMS:  # 미완료만으로도 넘치면 뒤에서 자른다
-        folded += len(rows) - TODO_MAX_ITEMS
-        rows = rows[:TODO_MAX_ITEMS]
-    return rows, folded
+    if len(order) > TODO_MAX_ITEMS:  # 미완료만으로도 넘치면 뒤에서 자른다
+        folded += len(order) - TODO_MAX_ITEMS
+        order = order[:TODO_MAX_ITEMS]
+    return order, folded
 
 
-def render_todo(items: list[dict[str, str]], goal: str = "") -> None:
-    """에이전트의 작업 계획(목표/조치 요약 + 항목)을 터미널에 보여준다."""
-    done = sum(1 for it in items if it.get("status") == "done")
-    rows, folded = todo_rows(items)
-    suspend_panel()
-    print()
-    if goal:
-        print(f"{C.cyan}🎯 {goal}{C.reset}")
-    print(f"{C.bold}{TODO_LABEL}  ({done}/{len(items)} 완료){C.reset}")
-    print(f"{C.dim}{rule()}{C.reset}")
-    for it in rows:
-        status = str(it.get("status") or "pending")
-        content = str(it.get("content") or "")
-        mark = todo_marker(status)
-        if status == "done":
-            print(f"   {C.green}{mark}{C.reset} {C.dim}{content}{C.reset}")
-        elif status == "in_progress":
-            print(f"   {C.yellow}{mark}{C.reset} {C.bold}{content}{C.reset}")
+def todo_active_index(items: list[dict[str, str]] | None = None) -> int | None:
+    """진행 중(`in_progress`)인 항목의 index. 없으면 None."""
+    for i, it in enumerate(CURRENT_TODO if items is None else items):
+        if str(it.get("status") or "") == "in_progress":
+            return i
+    return None
+
+
+def todo_item_number(index: int, total: int) -> str:
+    """항목 번호(`3/8`). 자리수를 맞춰 아래로 내려가는 순서가 눈에 들어오게 한다."""
+    return f"{index + 1:>{len(str(total))}}/{total}"
+
+
+def todo_log_target() -> int | None:
+    """하위 로그를 붙일 항목 index.
+
+    진행 중인 항목 → 아직 끝나지 않은 첫 항목 → 마지막 항목 순으로 고른다.
+    계획이 없으면 None(단계 패널로 되돌아간다).
+    """
+    if not CURRENT_TODO:
+        return None
+    index = todo_active_index()
+    if index is None:
+        index = next(
+            (i for i, it in enumerate(CURRENT_TODO) if str(it.get("status") or "") != "done"),
+            None,
+        )
+    return len(CURRENT_TODO) - 1 if index is None else index
+
+
+def todo_item_logs(index: int) -> list[str]:
+    """항목 index 의 하위 로그 리스트(없으면 만들어 준다)."""
+    while len(TODO_LOGS) <= index:
+        TODO_LOGS.append([])
+    return TODO_LOGS[index]
+
+
+def todo_remap_logs(
+    old_items: list[dict[str, str]],
+    old_logs: list[list[str]],
+    new_items: list[dict[str, str]],
+) -> list[list[str]]:
+    """계획이 갱신돼도 내용이 같은 항목의 하위 로그는 그대로 이어 붙인다.
+
+    같은 리스트 객체를 재사용하므로, 실행 중인 도구 줄에 잡아 둔 참조도 살아 있다.
+    """
+    by_content: dict[str, list[str]] = {}
+    for it, logs in zip(old_items, old_logs):
+        key = str(it.get("content") or "")
+        bucket = by_content.setdefault(key, [])
+        bucket.extend(logs)
+    out: list[list[str]] = []
+    reused: set[str] = set()
+    for it in new_items:
+        key = str(it.get("content") or "")
+        if key in by_content and key not in reused:
+            reused.add(key)
+            out.append(by_content[key])
         else:
-            print(f"   {C.dim}{mark} {content}{C.reset}")
+            out.append([])
+    return out
+
+
+def todo_item_prefix(index: int, total: int, item: dict[str, str]) -> str:
+    """항목 줄의 머리말(`   ▶ 3/8 `): 표시 + 번호."""
+    status = str(item.get("status") or "pending")
+    return f"{TODO_ITEM_INDENT}{todo_marker(status)} {todo_item_number(index, total)} "
+
+
+def todo_item_lines(index: int, total: int, item: dict[str, str], width: int) -> list[str]:
+    """항목 한 줄(번호 + 표시 + 내용). 내용이 길면 들여쓰기를 맞춰 줄바꿈한다."""
+    status = str(item.get("status") or "pending")
+    prefix = todo_item_prefix(index, total, item)
+    cont = " " * display_width(prefix)
+    texts = wrap_text(str(item.get("content") or ""), max(12, width - display_width(prefix)))
+    out: list[str] = []
+    for i, text in enumerate(texts):
+        head = prefix if i == 0 else cont
+        if status == "done":
+            out.append(f"{head}{C.dim}{text}{C.reset}")
+        elif status == "in_progress":
+            out.append(f"{C.yellow}{head}{C.reset}{C.bold}{text}{C.reset}")
+        else:
+            out.append(f"{C.dim}{head}{text}{C.reset}")
+    return out
+
+
+def todo_log_lines(index: int, indent: str = TODO_LOG_INDENT) -> list[str]:
+    """항목 아래에 붙는 하위 작업 로그 줄(최근 TODO_LOG_SHOW 줄만)."""
+    logs = TODO_LOGS[index] if index < len(TODO_LOGS) else []
+    shown = logs[-TODO_LOG_SHOW:] if TODO_LOG_SHOW > 0 else []
+    out: list[str] = []
+    skipped = len(logs) - len(shown)
+    if skipped > 0:
+        out.append(f"{indent}{C.dim}… 앞선 로그 {skipped}줄 접음{C.reset}")
+    out.extend(f"{indent}{line}" for line in shown)
+    return out
+
+
+def todo_block_lines() -> list[str]:
+    """작업 계획 블록(목표 + 번호 매긴 항목 + 항목별 하위 작업 로그)을 줄 목록으로.
+
+    목표는 터미널 폭에 맞춰 줄바꿈하고, 항목은 `3/8`처럼 번호를 붙여 진행 위치가
+    보이게 한다. 화면이 넘칠 때는 오래된 항목의 로그부터 접는다(진행 중인 흐름을
+    계속 보이게 하기 위함).
+    """
+    if not CURRENT_TODO and not CURRENT_TODO_GOAL:
+        return []
+    width = max(24, terminal_width() - 1)
+    total = len(CURRENT_TODO)
+    done = sum(1 for it in CURRENT_TODO if str(it.get("status") or "") == "done")
+    active = todo_active_index()
+
+    lines: list[str] = []
+    if CURRENT_TODO_GOAL:
+        goal = wrap_text(CURRENT_TODO_GOAL, width - 3)
+        for i, text in enumerate(goal):
+            lines.append(f"{C.cyan}{'🎯 ' if i == 0 else '   '}{text}{C.reset}")
+    bits = [f"완료 {done}/{total}"]
+    if active is not None:
+        bits.append(f"진행 중 {todo_item_number(active, total)}")
+    if AGENT_STEP:
+        bits.append(f"⚙️ {AGENT_STEP}단계")
+    lines.append(f"{C.bold}{TODO_LABEL}  ({' · '.join(bits)}){C.reset}")
+    lines.append(f"{C.dim}{rule()}{C.reset}")
+
+    order, folded = todo_rows(CURRENT_TODO)
+    groups: list[list[str]] = []
+    log_span: list[int] = []
+    for index in order:
+        item = CURRENT_TODO[index]
+        indent = " " * display_width(todo_item_prefix(index, total, item))
+        item_lines = todo_item_lines(index, total, item, width)
+        log_lines = todo_log_lines(index, indent)
+        groups.append(item_lines + log_lines)
+        log_span.append(len(log_lines))
+
+    limit = max(8, min(TODO_BLOCK_MAX, terminal_height() - 6))
+    dropped = 0
+    while sum(len(g) for g in groups) + len(lines) + 1 > limit:
+        # 오래된 항목의 로그부터 접는다(진행 중인 항목의 로그는 마지막까지 남는다).
+        target = next((i for i, span in enumerate(log_span) if span > 0), None)
+        if target is None:
+            break
+        del groups[target][len(groups[target]) - log_span[target]:]
+        dropped += log_span[target]
+        log_span[target] = 0
+
+    for group in groups:
+        lines.extend(group)
+    if dropped:
+        lines.append(f"{TODO_ITEM_INDENT}{C.dim}… 지난 로그 {dropped}줄 접음{C.reset}")
     if folded:
-        print(f"   {C.dim}… 완료 {folded}개 접음 (전체 {len(items)}개 항목, 계속 이어감){C.reset}")
+        lines.append(
+            f"{TODO_ITEM_INDENT}{C.dim}… 완료 {folded}개 접음 "
+            f"(전체 {total}개 항목, 계속 이어감){C.reset}"
+        )
+    return lines
+
+
+def refresh_todo_block() -> None:
+    """작업 계획 블록을 다시 그린다(계획이 없으면 블록을 비운다)."""
+    PANEL.set_block(todo_block_lines())
+
+
+def render_todo() -> None:
+    """에이전트의 작업 계획(목표/조치 요약 + 항목 + 하위 작업 로그)을 보여준다."""
+    refresh_todo_block()
+
+
+def todo_log_open(text: str) -> tuple[list[str], int] | None:
+    """진행 중인 항목의 하위 작업 로그에 줄을 추가한다.
+
+    반환: (로그 리스트, 줄 index). 계획이 없으면 None(단계 패널로 되돌아간다).
+    """
+    index = todo_log_target()
+    if index is None:
+        return None
+    logs = todo_item_logs(index)
+    if len(logs) >= TODO_LOG_KEEP:  # 보관 상한: 오래된 줄부터 버린다
+        del logs[: len(logs) - TODO_LOG_KEEP + 1]
+    logs.append(text)
+    refresh_todo_block()
+    return logs, len(logs) - 1
+
+
+def todo_log_close(handle: tuple[list[str], int] | None, text: str) -> None:
+    """실행 결과(✓/✗)를 그 줄에 붙이고 다시 그린다."""
+    if handle is None:
+        return
+    logs, index = handle
+    if 0 <= index < len(logs):
+        logs[index] = f"{logs[index]}  {text}"
+    refresh_todo_block()
+
+
+def tool_line_open(text: str) -> tuple[str, Any]:
+    """도구 실행 줄을 연다: 계획이 있으면 그 항목의 하위 로그, 없으면 단계 패널."""
+    handle = todo_log_open(text)
+    if handle is not None:
+        return "todo", handle
+    return "panel", PANEL.tool_open(text)
+
+
+def tool_line_done(slot: tuple[str, Any], text: str) -> None:
+    """도구 실행 결과(✓/✗)를 그 줄에 붙인다."""
+    kind, handle = slot
+    if kind == "todo":
+        todo_log_close(handle, text)
+    else:
+        PANEL.tool_done(handle, text)
 
 
 def todo_plan_text() -> str:
@@ -2234,13 +2605,15 @@ def tool_todo(args: dict[str, Any]) -> str:
     if not items:
         return "ERROR: 유효한 항목이 없습니다."
     goal = str(args.get("goal") or "").strip()
-    global CURRENT_TODO, CURRENT_TODO_GOAL
+    global CURRENT_TODO, CURRENT_TODO_GOAL, TODO_LOGS
     if goal:
         CURRENT_TODO_GOAL = (
             goal if len(goal) <= TODO_GOAL_MAX_CHARS else goal[:TODO_GOAL_MAX_CHARS] + "…"
         )
+    TODO_LOGS = todo_remap_logs(CURRENT_TODO, TODO_LOGS, items)  # 같은 항목의 로그는 이어감
     CURRENT_TODO = items
-    render_todo(items, CURRENT_TODO_GOAL)
+    PANEL.begin()  # 계획을 그리기 전에 단계 패널 자리를 정리한다
+    render_todo()
     done = sum(1 for it in items if it["status"] == "done")
     active = next((it["content"] for it in items if it["status"] == "in_progress"), "")
     bits = [f"총 {len(items)}개, 완료 {done}개"]
@@ -3985,8 +4358,14 @@ def cmd_agent(
                 return 1
             step_limit += max_steps
 
-        # 이전 단계의 도구 결과 그림을 지우고 새 단계 자리를 마련한다.
-        PANEL.begin(f"{C.dim}⚙️ {step}단계{C.reset}")
+        # 새 단계 자리를 마련한다. 작업 계획이 있으면 계획 블록(그 안의 하위 로그)으로
+        # 진행 상황을 보여주고, 없으면 예전처럼 단계 머리말 아래에 도구 줄을 그린다.
+        global AGENT_STEP
+        AGENT_STEP = step
+        if CURRENT_TODO:
+            refresh_todo_block()
+        else:
+            PANEL.begin(f"{C.dim}⚙️ {step}단계{C.reset}")
 
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
 
@@ -4082,7 +4461,7 @@ def cmd_agent(
 
                 summary = summarize_args(name, raw_args)
                 counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
-                slot = PANEL.tool_open(
+                slot = tool_line_open(
                     f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}"
                 )
 
@@ -4098,9 +4477,9 @@ def cmd_agent(
                 )
                 preview = result.splitlines()[0][:120] if result else ""
                 if result.startswith("ERROR:"):
-                    PANEL.tool_done(slot, f"{C.red}✗ {preview}{C.reset}")
+                    tool_line_done(slot, f"{C.red}✗ {preview}{C.reset}")
                 else:
-                    PANEL.tool_done(slot, f"{C.green}✓{C.reset} {C.dim}{preview}{C.reset}")
+                    tool_line_done(slot, f"{C.green}✓{C.reset} {C.dim}{preview}{C.reset}")
 
                 messages.append(
                     {
@@ -4129,7 +4508,10 @@ def cmd_agent(
             save_history(history_file, messages)
 
             clear_status()
-            PANEL.close()
+            if chat_only:
+                PANEL.close()
+            else:
+                PANEL.freeze()  # 마지막 계획(작업 순서)을 화면에 남긴다
             print()
             if not chat_only:
                 # 동작을 마친 뒤 처리 결과(답변)로 연결한다.
