@@ -51,6 +51,19 @@ SUMMARY_STAMP_RE = re.compile(r"<!--\s*llm-summary-at:(\d+)\s*-->")
 # 다른 세션 참조(--ref): 이번 세션 대화에 1회 주입할 맥락의 상한.
 REF_MARKER = "[참고: 다른 세션의 맥락]"
 REF_MAX_CHARS = 24_000
+
+# 에이전트 작업 계획(todo): 표시 이름과 항목 수 상한.
+TODO_LABEL = "📋 작업 계획"
+TODO_MAX_ITEMS = 40
+TODO_STATUSES = ("pending", "in_progress", "done")
+# 최초 턴에 계획을 세우지 않을 때 1회 주입하는 상기 메시지.
+TODO_REMINDER = (
+    "작업을 시작하기 전에 먼저 `todo` 도구로 전체 작업 계획(짧은 항목 목록)을 "
+    "세워 사용자에게 보여주세요. 이후 진행에 따라 status(pending/in_progress/done)를 "
+    "갱신하며 작업하세요."
+)
+# 현재 실행 중인 에이전트의 작업 계획(런마다 초기화). 종료 요약에 쓴다.
+CURRENT_TODO: list[dict[str, str]] = []
 IGNORE_DIRS = {
     ".git",
     "node_modules",
@@ -1562,6 +1575,8 @@ def build_system_prompt(root: Path, session: str) -> str:
         "Prefer grep/glob/list_dir before reading large files.\n"
         "Edit with str_replace when changing existing files; use write_file for new files.\n"
         "Keep changes minimal and correct. After edits, sanity-check with read or tests if appropriate.\n"
+        "Work with a todo list: ALWAYS call the `todo` tool first to lay out a concise\n"
+        "plan, then update each item's status (pending/in_progress/done) as you progress.\n"
         "Do not exfiltrate secrets. Never print API keys or .env contents.\n"
         "Reply in Korean unless the user writes in another language.\n"
         f"Session name: {session}\n"
@@ -1617,6 +1632,31 @@ def tool_schemas() -> list[dict[str, Any]]:
         }
 
     return [
+        fn(
+            "todo",
+            "작업 계획(todo)을 설정하거나 갱신한다. 에이전트는 작업을 시작할 때 "
+            "반드시 이것을 먼저 호출해 할 일 목록을 사용자에게 보여주고, 진행에 따라 "
+            "각 항목의 status 를 갱신한다. 호출할 때마다 전체 목록을 다시 보낸다.",
+            {
+                "items": {
+                    "type": "array",
+                    "description": "전체 할 일 목록(현재 상태 포함).",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "content": {"type": "string", "description": "할 일 한 줄"},
+                            "status": {
+                                "type": "string",
+                                "enum": ["pending", "in_progress", "done"],
+                                "description": "진행 상태 (기본 pending)",
+                            },
+                        },
+                        "required": ["content"],
+                    },
+                }
+            },
+            ["items"],
+        ),
         fn(
             "read_file",
             "Read a text file. 1-indexed line numbers are prefixed. Use offset/limit for large files.",
@@ -1782,6 +1822,62 @@ def tool_delete_file(root: Path, args: dict[str, Any]) -> str:
         return f"ERROR: 파일이 없습니다: {path}"
     path.unlink()
     return f"deleted {path.relative_to(root)}"
+
+
+def todo_marker(status: str) -> str:
+    return {"done": "✅", "in_progress": "▶"}.get(status, "☐")
+
+
+def reset_todo() -> None:
+    """새 에이전트 실행을 시작할 때 작업 계획을 비운다."""
+    global CURRENT_TODO
+    CURRENT_TODO = []
+
+
+def render_todo(items: list[dict[str, str]]) -> None:
+    """에이전트의 작업 계획을 요약해 터미널에 보여준다."""
+    done = sum(1 for it in items if it.get("status") == "done")
+    print_section(f"{TODO_LABEL}  ({done}/{len(items)} 완료)")
+    for it in items:
+        status = str(it.get("status") or "pending")
+        content = str(it.get("content") or "")
+        mark = todo_marker(status)
+        if status == "done":
+            print(f"   {C.green}{mark}{C.reset} {C.dim}{content}{C.reset}")
+        elif status == "in_progress":
+            print(f"   {C.yellow}{mark}{C.reset} {C.bold}{content}{C.reset}")
+        else:
+            print(f"   {C.dim}{mark} {content}{C.reset}")
+
+
+def tool_todo(args: dict[str, Any]) -> str:
+    raw_items = args.get("items")
+    if not isinstance(raw_items, list) or not raw_items:
+        return "ERROR: items 는 비어있지 않은 배열이어야 합니다."
+    items: list[dict[str, str]] = []
+    for entry in raw_items[:TODO_MAX_ITEMS]:
+        if isinstance(entry, str):
+            items.append({"content": entry.strip(), "status": "pending"})
+            continue
+        if not isinstance(entry, dict):
+            continue
+        content = str(entry.get("content") or "").strip()
+        if not content:
+            continue
+        status = str(entry.get("status") or "pending").strip().lower()
+        if status not in TODO_STATUSES:
+            status = "pending"
+        items.append({"content": content, "status": status})
+    items = [it for it in items if it["content"]]
+    if not items:
+        return "ERROR: 유효한 항목이 없습니다."
+    global CURRENT_TODO
+    CURRENT_TODO = items
+    render_todo(items)
+    done = sum(1 for it in items if it["status"] == "done")
+    active = next((it["content"] for it in items if it["status"] == "in_progress"), "")
+    tail = f" · 진행 중: {active}" if active else ""
+    return f"{TODO_LABEL} 갱신: 총 {len(items)}개, 완료 {done}개{tail}"
 
 
 def tool_list_dir(root: Path, args: dict[str, Any]) -> str:
@@ -2481,6 +2577,8 @@ def run_tool(
     if "_error" in args:
         return f"ERROR: {args['_error']}"
     try:
+        if name == "todo":
+            return tool_todo(args)
         if name == "read_file":
             return tool_read_file(root, args)
         if name == "write_file":
@@ -2512,6 +2610,23 @@ def summarize_args(name: str, raw_args: str) -> str:
         return raw_args[:80]
     if name == "shell":
         return intent_summary(str(args.get("command", "")))
+    if name == "todo":
+        items = args.get("items")
+        if isinstance(items, list):
+            done = sum(
+                1 for it in items if isinstance(it, dict) and it.get("status") == "done"
+            )
+            active = next(
+                (
+                    str(it.get("content") or "")
+                    for it in items
+                    if isinstance(it, dict) and it.get("status") == "in_progress"
+                ),
+                "",
+            )
+            base = f"{len(items)}개 항목 ({done} 완료)"
+            return f"{base} · {active}" if active else base
+        return ""
     if name == "str_replace":
         return str(args.get("path", ""))
     if "path" in args:
@@ -2765,8 +2880,8 @@ def print_banner(session: str, root: Path, chat_only: bool) -> None:
     )
 
 
-def cmd_balance() -> int:
-    print_info("DeepSeek 계정 잔액을 조회합니다...")
+def fetch_balance() -> tuple[str, str]:
+    """(CNY 잔액 문자열, KRW 환산 문자열) 을 돌려준다."""
     data = http_json(BALANCE_URL)
     infos = data.get("balance_infos") or []
     cny = "0.00"
@@ -2775,16 +2890,39 @@ def cmd_balance() -> int:
             cny = str(info.get("total_balance") or "0.00")
             break
     try:
-        krw = float(cny) * 220
-        krw_s = f"{krw:,.2f}"
+        krw_s = f"{float(cny) * 220:,.2f}"
     except ValueError:
         krw_s = "?"
+    return cny, krw_s
+
+
+def print_balance_block(cny: str, krw_s: str) -> None:
     print_title("💵 DeepSeek 잔액 정보")
     print(f"  {C.dim}위안화 (CNY){C.reset}  {C.bold}{cny}{C.reset} CNY")
     print(f"  {C.dim}원화   (KRW){C.reset}  {C.bold}{krw_s}{C.reset} 원")
     print(f"{C.dim}{rule()}{C.reset}")
     print(f"  {C.dim}적용 환율: 1 CNY = 220 KRW{C.reset}")
+
+
+def cmd_balance() -> int:
+    print_info("DeepSeek 계정 잔액을 조회합니다...")
+    cny, krw_s = fetch_balance()
+    print_balance_block(cny, krw_s)
     return 0
+
+
+def show_balance_footer() -> None:
+    """에이전트 종료 후 잔액을 보여준다. 실패해도 흐름을 막지 않는다."""
+    if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        print_warn("API 키가 없어 잔액 표시를 건너뜁니다.", stream=True)
+        return
+    try:
+        cny, krw_s = fetch_balance()
+    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
+        print_warn(f"잔액을 조회하지 못했습니다: {exc}", stream=True)
+        return
+    print()
+    print_balance_block(cny, krw_s)
 
 
 def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:
@@ -2975,6 +3113,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ("llm --allow-list", "셸 자동 허용 목록 보기"),
         ("llm --allow-clear", "셸 자동 허용 목록 비우기"),
         ("llm --balance", "API 잔액 조회 (KRW 환산)"),
+        ("llm --no-balance", "에이전트 종료 후 잔액 표시 생략"),
     ]
     width = max(display_width(cmd) for cmd, _ in usage)
     for cmd, desc in usage:
@@ -3033,6 +3172,7 @@ def cmd_agent(
     auto_safe: bool = True,
     auto_workspace: bool = False,
     allow_all: bool = False,
+    no_balance: bool = False,
 ) -> int:
     print_banner(session, root, chat_only)
 
@@ -3050,9 +3190,14 @@ def cmd_agent(
     else:
         system = build_system_prompt(root, session)
         tools = tool_schemas()
+        reset_todo()  # 이번 실행의 작업 계획은 비워 두고 시작한다.
 
     progress = make_stream_progress(show_thinking) if stream else None
     approval = ShellApproval(session) if (not chat_only and not yes) else None
+
+    # 최초 도구 턴에 계획(todo)을 세우지 않으면 딱 한 번 상기시킨다.
+    todo_seen = False
+    todo_reminded = False
 
     step = 0
     step_limit = max_steps
@@ -3132,6 +3277,18 @@ def cmd_agent(
 
         # Agent mode: execute structured tool calls and continue the loop.
         if tool_calls and not chat_only:
+            names = [(tc.get("function") or {}).get("name") for tc in tool_calls]
+            if "todo" in names:
+                todo_seen = True
+            if not todo_seen and not todo_reminded:
+                # 아직 계획이 없다: 도구를 실행하지 않고 계획을 먼저 세우도록 1회 요청.
+                # (assistant 턴을 저장하지 않으므로 tool_calls/tool 짝도 깨지지 않는다.)
+                todo_reminded = True
+                print_warn("먼저 작업 계획(todo)을 세우도록 요청합니다.", stream=True)
+                messages.append({"role": "user", "content": TODO_REMINDER})
+                save_history(history_file, messages)
+                continue
+
             assistant_message: dict[str, Any] = {
                 "role": "assistant",
                 "content": content or "",
@@ -3197,6 +3354,11 @@ def cmd_agent(
 
             clear_status()
             print()
+            if not chat_only:
+                # 동작을 마친 뒤 처리 결과(답변)로 연결한다.
+                print_ok(f"작업 완료 ({step}단계)")
+                if not no_balance:
+                    show_balance_footer()
             print_title("🤖 답변")
             render_markdown(content)
             return 0
@@ -3228,6 +3390,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help=f"에이전트 루프 최대 횟수 (기본: {DEFAULT_MAX_STEPS}, 도달 시 이어서 진행할지 확인)",
     )
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
+    parser.add_argument(
+        "--no-balance",
+        action="store_true",
+        help="에이전트 종료 후 잔액 표시 생략",
+    )
     parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
     parser.add_argument(
         "--show-thinking",
@@ -3410,6 +3577,7 @@ def main(argv: list[str] | None = None) -> int:
         auto_safe=not args.confirm_all,
         auto_workspace=auto_workspace,
         allow_all=allow_all,
+        no_balance=args.no_balance,
     )
 
 
