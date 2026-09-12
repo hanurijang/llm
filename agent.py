@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.3.0"
+VERSION = "0.4.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -45,6 +45,14 @@ HISTORY_SCOPE_HOME = "home"
 # 실행이 끝나면 대화 기록을 자동으로 커밋·push 할지 정하는 환경변수(기본 켜짐).
 # `LLM_AUTO_SYNC=0`(false/no/off)이면 끄고 `--sync-history`로 직접 올린다.
 AUTO_SYNC_ENV = "LLM_AUTO_SYNC"
+# 질의 전에 원격의 최신 기록을 자동으로 받아올지 정하는 환경변수(기본 켜짐).
+# `LLM_AUTO_PULL=0`(false/no/off) 또는 `--no-pull` 로 끈다(실패해도 로컬로 계속).
+AUTO_PULL_ENV = "LLM_AUTO_PULL"
+# 같은 폴더에서 연달아 실행할 때 매번 원격을 확인하지 않도록 두는 최소 간격(초).
+AUTO_PULL_TTL_ENV = "LLM_AUTO_PULL_TTL"
+AUTO_PULL_TTL_DEFAULT = 120
+# 마지막으로 원격을 확인한 시각을 적어 두는 기기 로컬 파일(커밋·동기화 대상 아님).
+AUTO_PULL_STAMP_FILE = HISTORY_DIR / "autopull.json"
 # 실행 시 `set_history_base()`가 정한다. 기본값은 홈(폴더를 알기 전 폴백).
 HISTORY_BASE = HISTORY_DIR
 DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-flash")
@@ -4791,6 +4799,117 @@ def auto_sync_history(root: Path, session: str) -> None:
         print_info(f"자동 동기화를 끄려면 {AUTO_SYNC_ENV}=0 으로 실행하세요.")
 
 
+def auto_pull_enabled() -> bool:
+    """질의 전 원격 기록 자동 수신 여부(기본 켜짐, `LLM_AUTO_PULL=0`이면 끔)."""
+    val = os.environ.get(AUTO_PULL_ENV, "").strip().lower()
+    return val not in {"0", "false", "no", "off"}
+
+
+def auto_pull_interval() -> int:
+    """같은 폴더에서 원격을 다시 확인하기까지의 최소 간격(초)."""
+    raw = os.environ.get(AUTO_PULL_TTL_ENV, "").strip()
+    return int(raw) if raw.isdigit() else AUTO_PULL_TTL_DEFAULT
+
+
+def _auto_pull_seen(repo: str) -> float:
+    """이 폴더에서 마지막으로 원격을 확인한 시각(없으면 0)."""
+    try:
+        data = json.loads(AUTO_PULL_STAMP_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0.0
+    if not isinstance(data, dict):
+        return 0.0
+    try:
+        return float(data.get(repo) or 0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _mark_auto_pull(repo: str) -> None:
+    """확인 시각을 기록한다(실패해도 조용히 넘어감)."""
+    try:
+        data = json.loads(AUTO_PULL_STAMP_FILE.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {}
+    except (OSError, json.JSONDecodeError):
+        data = {}
+    data[repo] = time.time()
+    try:
+        AUTO_PULL_STAMP_FILE.parent.mkdir(parents=True, exist_ok=True)
+        AUTO_PULL_STAMP_FILE.write_text(json.dumps(data), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def maybe_auto_pull(root: Path, *, enabled: bool = True) -> None:
+    """질의 전에 원격의 최신 대화 기록을 받아온다(다른 PC에서 이어가기).
+
+    - 원격에 새 커밋이 있을 때만 fast-forward 로 받는다(`git pull --ff-only --autostash`).
+      내려받은 기록은 이어지는 `load_history()`가 그대로 읽어 맥락이 이어진다.
+    - 커밋되지 않은 기록 변경이 있으면 받아오지 않는다(autostash 충돌로 기록이
+      깨지는 것을 막고 로컬 기록을 지킨다). 그때는 올리는 방법만 안내한다.
+    - 원격이 없거나 확인·수신에 실패하면 경고만 하고 **로컬 기록으로 계속**한다.
+      (로컬 커밋이 갈라져 fast-forward 가 안 되는 경우에도 임의로 rebase 하지 않는다.)
+    - 같은 폴더에서 `LLM_AUTO_PULL_TTL`(기본 120초) 안에는 다시 확인하지 않는다.
+    """
+    if not enabled or not auto_pull_enabled() or not history_scope_is_repo():
+        return
+    if not (root / ".git").exists() and git_run(root, "rev-parse", "--git-dir")[0] != 0:
+        return
+    if git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] != 0:
+        return  # upstream 이 없으면 받아올 원격이 없다.
+    repo = canonical_folder(root)
+    if time.time() - _auto_pull_seen(repo) < auto_pull_interval():
+        return
+    _mark_auto_pull(repo)  # 수신에 실패해도 잠시 쉬도록 먼저 기록한다.
+
+    code, out = git_run(root, "fetch", "--quiet")
+    if code != 0:
+        print_warn("원격 대화 기록을 확인하지 못했습니다 — 로컬 기록으로 계속합니다.")
+        return
+    code, out = git_run(root, "rev-list", "--count", "HEAD..@{u}")
+    behind = int(out) if code == 0 and out.isdigit() else 0
+    if behind <= 0:
+        return  # 원격이 앞서지 않았으면 조용히 넘어간다.
+    # 커밋되지 않은 기록 변경이 있으면 받아오지 않는다. (--autostash 는 충돌 시
+    # 충돌 표시가 든 파일을 남겨 JSON 기록을 깨뜨리고, 그러면 기록을 통째로
+    # 잃을 수 있다 — 로컬 기록을 그대로 두고 사용자가 직접 해결하게 한다.)
+    rel_history = os.path.relpath(HISTORY_BASE, root)
+    if not rel_history.startswith(".."):
+        code, dirty = git_run(
+            root,
+            "status",
+            "--porcelain",
+            "--untracked-files=no",
+            "--",
+            rel_history,
+        )
+        if code == 0 and dirty:
+            print_warn(
+                "커밋되지 않은 대화 기록 변경이 있어 자동 수신을 건너뜁니다"
+                " — 로컬 기록으로 계속합니다."
+            )
+            print_info(
+                "  `llm --sync-history` 로 먼저 올린 뒤 다시 실행하면 원격 기록을"
+                " 받아옵니다."
+            )
+            return
+    print_info(f"원격에 새 변경이 있습니다({behind}개 커밋) — 대화 기록을 받아오는 중…")
+    code, out = git_run(root, "pull", "--ff-only", "--autostash")
+    if code != 0:
+        print_warn("원격 기록을 자동으로 받아오지 못했습니다 — 로컬 기록으로 계속합니다.")
+        print_info("  직접 `git pull --rebase --autostash` 로 받아온 뒤 다시 실행하세요.")
+        return
+    # pull 은 성공했는데 autostash 복원이 충돌하면 파일에 충돌 표시가 남는다.
+    code, conflicted = git_run(root, "diff", "--name-only", "--diff-filter=U")
+    if code == 0 and conflicted:
+        print_warn("원격 기록은 받아왔지만 내 변경과 충돌했습니다 — 확인이 필요합니다.")
+        print_info("  충돌 파일: " + ", ".join(conflicted.split()))
+        print_info("  내 변경은 autostash 에 남아 있습니다 — `git status` 로 해결하세요.")
+        return
+    print_ok("원격의 최신 대화 기록을 받아왔습니다 — 이어서 진행합니다.")
+
+
 def cmd_sync_history(root: Path, session: str) -> int:
     """대화 기록(.llm/)만 커밋하고 pull --rebase 후 push 한다."""
     if not history_scope_is_repo():
@@ -5004,8 +5123,11 @@ def cmd_agent(
     ask_mode: str = "risky",
     ask_source: str = "",
     no_balance: bool = False,
+    auto_pull: bool = True,
 ) -> int:
     print_banner(session, root, chat_only, ask_mode=ask_mode, ask_source=ask_source)
+    # 다른 PC에서 올려 둔 최신 대화를 먼저 받아온다(아래 load_history 가 그대로 읽는다).
+    maybe_auto_pull(root, enabled=auto_pull)
     print_history_sync_hint(root, history_file)
 
     stripped = prompt.strip().lower()
@@ -5287,6 +5409,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="대화 기록(.llm/)만 커밋하고 pull --rebase 후 push (다른 PC에서 이어가기)",
     )
+    parser.add_argument(
+        "--no-pull",
+        action="store_true",
+        help="이번 실행은 원격의 최신 대화 기록을 자동으로 받아오지 않음 (LLM_AUTO_PULL=0과 동일)",
+    )
     parser.add_argument("--balance", action="store_true")
     parser.add_argument("--view", action="store_true")
     parser.add_argument("--run", action="store_true")
@@ -5473,6 +5600,7 @@ def main(argv: list[str] | None = None) -> int:
         ask_mode=ask_mode,
         ask_source=ask_source,
         no_balance=args.no_balance,
+        auto_pull=not args.no_pull,
     )
     # 실행이 끝나면 대화 기록을 자동으로 커밋·push 한다(다음 턴으로 미루지 않는다).
     auto_sync_history(root, session)

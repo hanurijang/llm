@@ -45,8 +45,8 @@
 - 대화 기록은 **작업 폴더 안 `<작업폴더>/.llm/history_<세션>.json`**(기본)에
   저장한다. `LLM_HISTORY=home`이면 예전처럼 `~/.local/share/llm/`에 저장한다
   (이 폴백은 유지한다).
-- **기기 로컬 정보(`bindings.json`, `shell_allow_*.json`, `rates.json`)는 항상
-  홈**에 둔다. 대화 기록 위치 변경과 무관하다.
+- **기기 로컬 정보(`bindings.json`, `shell_allow_*.json`, `rates.json`,
+  `autopull.json`)는 항상 홈**에 둔다. 대화 기록 위치 변경과 무관하다.
 - 홈에만 있던 기록은 그 폴더에서 처음 실행할 때 `.llm/`으로 **한 번** 옮기고,
   양쪽에 있으면 더 긴 쪽을 채택하며 홈 원본은 `*.migrated`로 남긴다.
 - **대화 기록도 매 턴 끝에 자동으로 커밋·push 한다**(에이전트 실행이 끝나면
@@ -54,12 +54,21 @@
   "다음 턴에 올리자"고 미루지 않는다. `LLM_AUTO_SYNC=0`(false/no/off)이면 꺼지고,
   그때는 `llm --sync-history`(이 세션 기록·요약만 커밋 → `pull --rebase
   --autostash` → `push`)로 직접 올린다.
+- **다른 PC에서 이어갈 때는 첫 질의 전에 원격 최신 기록을 먼저 받아온다**
+  (`maybe_auto_pull`: `git fetch` → 원격이 앞서면 `git pull --ff-only --autostash`,
+  받아온 기록을 그대로 읽어 맥락을 잇는다). 실패(네트워크·인증·갈라진 커밋)하면
+  경고만 하고 **로컬 기록으로 계속**하며 임의로 rebase하지 않는다. **커밋되지
+  않은 기록 변경이 있으면 받아오지 않고** 올리는 방법만 안내한다(autostash 충돌로
+  기록 JSON이 깨져 대화를 잃는 것을 막는다). 끄는 방법은
+  `LLM_AUTO_PULL=0`(false/no/off) 또는 `--no-pull`, 재확인 간격은
+  `LLM_AUTO_PULL_TTL`(기본 120초, 확인 시각은 홈의 `autopull.json`).
 - `.llm/`이 `.gitignore`에 있으면 에러로 안내하고 중단한다.
 - `LLM_HISTORY=home`으로 되돌리면 홈의 `*.migrated` 기록을 다시 꺼내 온다.
 - 이 동작을 바꿀 때는 `agent.py`의 `HISTORY_*`/`REPO_HISTORY_DIR_NAME`/
   `history_scope_dir`/`set_history_base`/`find_history_file`/
   `migrate_legacy_session`/`cmd_sync_history`/`auto_sync_enabled`/
-  `auto_sync_history`/`AUTO_SYNC_ENV`와 README 「대화 기록 동기화」·
+  `auto_sync_history`/`AUTO_SYNC_ENV`/`auto_pull_enabled`/`auto_pull_interval`/
+  `maybe_auto_pull`/`AUTO_PULL_*`와 README 「대화 기록 동기화」·
   「파일/데이터 위치」·「설정과 환경변수」 표를 함께 갱신한다.
 
 ## README 갱신 (필수)

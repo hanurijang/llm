@@ -168,7 +168,7 @@ source ~/.bashrc
 
 ```bash
 which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.3.0) 표시 (API 호출 없음)
+llm                 # 상태 + 버전(v0.4.0) 표시 (API 호출 없음)
 llm --balance       # 키·네트워크 확인
 llm --chat "안녕"   # 모델 응답 확인
 llm "이 폴더 요약해줘"   # 도구까지 확인
@@ -180,8 +180,10 @@ llm "이 폴더 요약해줘"   # 도구까지 확인
   목록·환율 캐시)는 첫 실행 때 만들어집니다. 따로 만들 필요가 없습니다.
 - **대화 기록은 저장소와 함께 옵니다**: 기록이 `<작업폴더>/.llm/`에 있어
   `git pull`(또는 clone)만 하면 이전 PC의 대화가 그대로 이어집니다.
-  이쪽 대화도 **매 턴 끝에 자동으로 커밋·push**됩니다(`LLM_AUTO_SYNC=0`이면
-  꺼지고, 그때는 `llm --sync-history`로 직접 올립니다).
+  다른 PC에서 작업했다면 **첫 질의 때 원격 최신 기록을 자동으로 받아온 뒤**
+  이어가고(`LLM_AUTO_PULL=0`/`--no-pull`이면 끔), 이쪽 대화도 **매 턴 끝에
+  자동으로 커밋·push**됩니다(`LLM_AUTO_SYNC=0`이면 꺼지고, 그때는
+  `llm --sync-history`로 직접 올립니다).
 - **저장소 폴더 이름을 같게 유지**하세요(README의 설치 경로 그대로면 자동).
   세션 이름이 폴더 이름에서 만들어지므로, 이름이 다르면 `llm -s <이름>`으로
   지정하거나 `llm --view`가 알려주는 `-s` 안내를 따르면 됩니다.
@@ -278,6 +280,7 @@ llm --allow-clear
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
 | `--sync-history` | 이 세션의 대화 기록·요약만 커밋 → `git pull --rebase --autostash` → `push` (다른 PC에서 이어가기). 실행 종료 시에는 자동으로 수행됨(`LLM_AUTO_SYNC=0`이면 꺼짐) |
+| `--no-pull` | 이번 실행은 원격의 최신 대화 기록을 자동으로 받아오지 않음 (`LLM_AUTO_PULL=0`과 동일) |
 | `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |
 | `--view` | 세션 대화 내용 보기 (Markdown) |
 | `--clear` | 현재 세션 내용만 비우기 |
@@ -293,11 +296,11 @@ llm --allow-clear
 경우에는 그 사실과 해제 방법을 함께 안내합니다.
 
 ```text
-── 에이전트 v0.3.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
+── 에이전트 v0.4.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
 ℹ️  환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다 (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다.
 ```
 
-시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.3.0`)이
+시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.4.0`)이
 표시됩니다. 인자 없이 `llm`만 실행했을 때의 머리말과 세션 목록 상단에도 같은
 버전이 나옵니다. 버전 값은 `agent.py`의 `VERSION` 상수 하나로 관리합니다.
 
@@ -346,10 +349,13 @@ llm --delete
 ### 대화 기록 동기화 (다른 PC에서 이어가기)
 
 대화 기록이 작업 폴더 안 `.llm/`에 있으므로, **커밋·push만 하면 다른 PC에서
-`git pull`(또는 clone) 후 같은 세션으로 그대로 이어집니다.**
+`git pull`(또는 clone) 후 같은 세션으로 그대로 이어집니다.** 다른 PC에서 이미
+작업했다면 **첫 질의 때 원격의 최신 기록을 자동으로 먼저 받아온 뒤** 그 내용을
+읽어 맥락을 이어갑니다(수동 `git pull` 없이도 됩니다).
 
 ```bash
-llm "다음 작업 해줘"       # 실행이 끝나면 기록을 자동으로 커밋 → pull --rebase → push
+llm "이어서 작업 해줘"     # 시작 때 원격 최신 기록 자동 수신 → 끝나면 자동 커밋·push
+llm --no-pull "질문"       # 이번 실행은 자동 수신을 건너뜀 (LLM_AUTO_PULL=0과 동일)
 llm --sync-history        # 방금/지난 대화를 지금 올리고 싶을 때 (자동과 같은 동작)
 ```
 
@@ -357,6 +363,22 @@ llm --sync-history        # 방금/지난 대화를 지금 올리고 싶을 때 
   커밋하고 `git pull --rebase --autostash` 후 `push` 합니다(화면에
   `🔄 대화 기록 동기화` 블록이 뜸). 그래서 **최종 답변까지 포함해 매 턴 원격에
   올라가고**, 다음 PC에서는 `git pull`만 하면 이어집니다.
+- **질의 전 자동 수신**: 실행을 시작할 때도 원격을 확인해, 새 커밋이 있으면
+  `git pull --ff-only --autostash`로 최신 대화를 받아옵니다(배너 뒤
+  `원격의 최신 대화 기록을 받아왔습니다` 안내). 내려받은 기록을 곧바로 읽어
+  맥락을 잇습니다.
+  - 원격이 앞서지 않았으면 아무 것도 하지 않고, **받아오기에 실패해도 경고만
+    하고 로컬 기록으로 계속**합니다(로컬 커밋이 갈라져 fast-forward가 안 되는
+    경우에도 임의로 rebase하지 않습니다).
+  - **커밋되지 않은 기록 변경이 있으면 받아오지 않고** 올리는 방법만 안내합니다.
+    (`--autostash`가 충돌하면 기록 파일에 충돌 표시가 남아 JSON이 깨지고, 그대로
+    덮어써지면 대화를 잃을 수 있어 로컬 기록을 지킵니다.) 코드 파일 등 원격과
+    충돌한 경우에는 받아온 뒤 충돌 파일을 알려 줍니다(내 변경은 autostash에 보존).
+  - 같은 폴더에서 `LLM_AUTO_PULL_TTL`(기본 120초) 안에는 다시 확인하지 않아
+    연달아 실행할 때 매번 네트워크를 타지 않습니다.
+  - 끄려면 `LLM_AUTO_PULL=0`(또는 `false`/`no`/`off`)이나 `--no-pull`을 씁니다.
+  - 마지막 확인 시각은 기기 로컬 파일 `~/.local/share/llm/autopull.json`에
+    적습니다(커밋·동기화 대상 아님).
 - 끄려면 `LLM_AUTO_SYNC=0`(또는 `false`/`no`/`off`)으로 실행하거나 `.env`에
   넣습니다. 이때는 `llm --sync-history`로 직접 올리세요.
 - `LLM_HISTORY=home`(홈 저장)이거나 git 저장소가 아니거나 기록에 변경이 없으면
@@ -1003,6 +1025,8 @@ llm --rules
 | `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 파일 경로를 직접 지정 (아래 조회 순서에서 가장 먼저) |
 | `LLM_HISTORY` | (미설정) | 대화 기록 저장 위치. `home` 이면 예전처럼 `~/.local/share/llm/`(동기화 안 됨), 그 외/미설정이면 작업 폴더 `.llm/` |
 | `LLM_AUTO_SYNC` | `1`(켜짐) | `0`/`false`/`no`/`off` 이면 실행 종료 시 자동 커밋·push를 끔(직접 `--sync-history`로 올림) |
+| `LLM_AUTO_PULL` | `1`(켜짐) | `0`/`false`/`no`/`off` 이면 질의 전 원격 최신 기록 자동 수신을 끔 (`--no-pull`과 동일) |
+| `LLM_AUTO_PULL_TTL` | `120` | 같은 폴더에서 원격을 다시 확인하기까지의 최소 간격(초) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
 `.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는
@@ -1033,10 +1057,12 @@ llm --rules
 | `~/.local/share/llm/summaries/<세션>/` | 요약 백업 (`LLM_HISTORY=home`일 때만) |
 | `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답, 기기 로컬) |
 | `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효, 기기 로컬) |
+| `~/.local/share/llm/autopull.json` | 폴더별 마지막 원격 확인 시각 (질의 전 자동 수신 간격 판단, 기기 로컬) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
 
-> **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`rates.json`)는 대화
-> 기록 위치와 무관하게 항상 홈에 저장됩니다(경로·환율 같은 이 PC 전용 정보).
+> **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`rates.json`·
+> `autopull.json`)는 대화 기록 위치와 무관하게 항상 홈에 저장됩니다(경로·환율·
+> 마지막 확인 시각 같은 이 PC 전용 정보).
 
 대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로
 처리됩니다. 중간에 끊긴(도구 호출만 있고 결과가 없는) 턴은 로드 시 자동
@@ -1087,7 +1113,11 @@ llm (bash)  →  agent.py (python)
   `*.migrated`), `history_sync_paths`/`git_run`/`cmd_sync_history`
   (`--sync-history`: 기록만 커밋 → `pull --rebase --autostash` → `push`),
   `auto_sync_enabled`/`auto_sync_history`(실행 종료 시 자동 동기화, 기본 켜짐·
-  `LLM_AUTO_SYNC=0`으로 끔), `print_history_sync_hint`, `repo_history_sessions`/`hint_repo_history`
+  `LLM_AUTO_SYNC=0`으로 끔), `auto_pull_enabled`/`auto_pull_interval`/
+  `maybe_auto_pull`(질의 전 원격 최신 기록 자동 수신, 기본 켜짐·`LLM_AUTO_PULL=0`/
+  `--no-pull`로 끔, `autopull.json`에 확인 시각 기록, 커밋되지 않은 기록 변경이
+  있으면 수신을 건너뜀), `print_history_sync_hint`,
+  `repo_history_sessions`/`hint_repo_history`
   (매핑 없이 `.llm/`에 기록만 있으면 `llm -s <이름>` 안내)
 - **작업 계획(todo)**: `tool_todo`/`render_todo`(목표 + 번호 매긴 항목 + 항목별
   하위 작업 로그를 화면에 그리기), `todo_block_lines`/`refresh_todo_block`
@@ -1174,8 +1204,13 @@ llm (bash)  →  agent.py (python)
 ### 다른 PC에서 대화가 안 보임
 
 - 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있고, **매 턴 끝에 자동으로
-  커밋·push**됩니다(끄려면 `LLM_AUTO_SYNC=0`). 다른 PC에서 `git pull` 후
-  **같은 폴더**에서 실행하세요. 지난 대화를 지금 올리려면 `llm --sync-history`.
+  커밋·push**됩니다(끄려면 `LLM_AUTO_SYNC=0`). 다른 PC에서는 **같은 폴더**에서
+  실행만 하면 시작할 때 원격 최신 기록을 자동으로 받아옵니다(끄려면
+  `LLM_AUTO_PULL=0`/`--no-pull`). 지난 대화를 지금 올리려면 `llm --sync-history`.
+- 자동 수신이 안 되면 `git status`로 확인하세요: 로컬 커밋이 갈라졌거나(fast-forward
+  불가), 커밋되지 않은 기록 변경이 있거나, 네트워크·인증 문제면 경고만 하고 로컬
+  기록으로 진행합니다. 이때는 `llm --sync-history`(또는
+  `git pull --rebase --autostash`)로 정리한 뒤 다시 실행하세요.
 - `.llm/`이 `.gitignore`에 있으면 push가 안 됩니다. 그 줄을 지우세요
   (`.llm/rules.md`는 저장소에, 기록은 다른 PC로 — 둘 다 `.llm/` 안입니다).
 - `LLM_HISTORY=home`으로 실행하면 기록이 홈에 남아 동기화되지 않습니다.
