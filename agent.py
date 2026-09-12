@@ -79,6 +79,10 @@ TODO_STAMP_RE = re.compile(r"<!--\s*llm-todo:(.*?)\s*-->", re.S)
 # 폴더 이동(mv) 감지: 사라진 폴더의 세션 중 이어받을 후보를 고를 때의 상한/기준.
 MOVE_CANDIDATE_LIMIT = 5
 MOVE_SIMILARITY_MIN = 0.3  # 부모 경로만 같아도(+0.3) 후보로 올린다.
+
+# 잔액 환산에 쓰는 가정 환율(API 가 환율을 주지 않아 고정값으로 계산한다).
+KRW_PER_CNY = 220.0
+KRW_PER_USD = 1350.0
 IGNORE_DIRS = {
     ".git",
     "node_modules",
@@ -1053,28 +1057,76 @@ def find_move_candidates(root: Path) -> list[tuple[str, str]]:
     return out[:MOVE_CANDIDATE_LIMIT]
 
 
-def prompt_move_binding(root: Path, new_session: str) -> str | None:
+def print_move_candidates(candidates: list[tuple[str, str]], root: Path) -> None:
+    """mv 이어받기 후보 `(세션, 이전 경로)`를 번호 목록으로 보여준다."""
+    root_base = os.path.basename(canonical_folder(root))
+    for idx, (session, old_path) in enumerate(candidates, 1):
+        hint = f" {C.dim}(이름 일치){C.reset}" if os.path.basename(old_path) == root_base else ""
+        print(f"   {C.bold}{idx}){C.reset} {C.cyan}{session}{C.reset}  {C.dim}← {old_path}{C.reset}{hint}")
+
+
+def hint_move_candidates(root: Path) -> int:
+    """mv 로 옮겨온 것으로 보이는 세션 후보를 **안내만** 한다(묻지 않음).
+
+    TTY 여부와 무관하게 쓸 수 있다. 후보가 없으면 아무것도 하지 않고 0.
+    반환: 보여준 후보 개수.
+    """
+    candidates = find_move_candidates(root)
+    if not candidates:
+        return 0
+    print()
+    print_info("사라진 폴더에 남은 세션 후보입니다 (폴더를 옮기셨나요?):")
+    print_move_candidates(candidates, root)
+    names = ", ".join(session for session, _ in candidates)
+    print_info(f"이어받으려면  llm -s <이름>  {C.dim}(예: {names}){C.reset}")
+    return len(candidates)
+
+
+def apply_move_binding(
+    folders: dict[str, str], root: Path, session: str
+) -> tuple[dict[str, str], bool]:
+    """이어받기로 고른 세션을 이 폴더에 바인딩하고 이후 안내를 출력한다.
+
+    반환: (folders, 이어받았는지). 실패하면 폴더는 그대로이고 False.
+    """
+    folders, err, _ = ensure_binding(folders, root, session)
+    if err:
+        print_warn(f"이전 세션 '{session}'을(를) 이어받지 못했습니다: {err}")
+        return folders, False
+    print_ok(f"이전 세션 '{session}'을(를) 이어받았습니다.")
+    print_info(
+        f"이후 이 폴더는 세션 '{session}'(으)로 이어집니다"
+        f" {C.dim}(다시 지정하려면  llm -s <이름>){C.reset}"
+    )
+    return folders, True
+
+
+def prompt_move_binding(root: Path, new_session: str | None = None) -> str | None:
     """폴더 이동(mv)으로 보이는 세션 후보를 보여주고 이어받을지 확인한다.
 
-    반환: 이어받을 세션 이름, 또는 None(새 세션 그대로).
+    반환: 이어받을 세션 이름, 또는 None(이어받지 않음/묻지 못함).
+    - `new_session` 이 주어지면 Enter = 새 세션 '<이름>'(대화를 시작하는 실행).
+    - None 이면 Enter = 취소(조회/정리처럼 새 세션을 만들지 않는 실행).
     TTY 가 아니면(자동화/파이프) 묻지 않고 None.
     """
     candidates = find_move_candidates(root)
     if not candidates or not sys.stdin.isatty():
         return None
 
-    root_base = os.path.basename(canonical_folder(root))
     print()
     print_info("이 폴더는 아직 세션에 연결되어 있지 않습니다.")
     print_info("사라진 폴더에 남은 세션 후보입니다 (폴더를 옮기셨나요?):")
-    for idx, (session, old_path) in enumerate(candidates, 1):
-        hint = f" {C.dim}(이름 일치){C.reset}" if os.path.basename(old_path) == root_base else ""
-        print(f"   {C.bold}{idx}){C.reset} {C.cyan}{session}{C.reset}  {C.dim}← {old_path}{C.reset}{hint}")
+    print_move_candidates(candidates, root)
 
+    if new_session:
+        tail = f"{C.dim}Enter=새 세션 '{new_session}'{C.reset}"
+        cancel_txt = f"새 세션 '{new_session}'"
+    else:
+        tail = f"{C.dim}Enter=취소{C.reset}"
+        cancel_txt = "취소"
     prompt_txt = (
         f"{C.yellow}❓ 이어받을 번호{C.reset} "
-        f"{C.bold}[1-{len(candidates)}]{C.reset} / "
-        f"{C.dim}Enter=새 세션 '{new_session}'{C.reset}: "
+        f"{C.bold}[1-{len(candidates)}]{C.reset} / {tail}: "
     )
     while True:
         try:
@@ -1086,7 +1138,7 @@ def prompt_move_binding(root: Path, new_session: str) -> str | None:
             return None
         if answer.isdigit() and 1 <= int(answer) <= len(candidates):
             return candidates[int(answer) - 1][0]
-        print_warn(f"1~{len(candidates)} 사이 번호를 입력하거나 Enter 로 새 세션을 만드세요.")
+        print_warn(f"1~{len(candidates)} 사이 번호를 입력하거나 Enter 로 {cancel_txt} 하세요.")
 
 
 def summaries_dir(session: str) -> Path:
@@ -3216,8 +3268,8 @@ USAGE_KEYS = (
     "prompt_cache_hit_tokens",
     "prompt_cache_miss_tokens",
 )
-# 에이전트 시작 시점에 조회한 잔액 (CNY, KRW). 종료 시 소요 비용 계산에 쓴다.
-START_BALANCE: tuple[str, str] | None = None
+# 에이전트 시작 시점에 조회한 잔액 (CNY, KRW, USD). 종료 시 소요 비용 계산에 쓴다.
+START_BALANCE: tuple[str, str, str] | None = None
 
 
 def reset_usage() -> None:
@@ -3235,8 +3287,22 @@ def record_usage(usage: Any) -> None:
     USAGE_TOTAL["calls"] = USAGE_TOTAL.get("calls", 0) + 1
 
 
-def fetch_balance() -> tuple[str, str]:
-    """(CNY 잔액 문자열, KRW 환산 문자열) 을 돌려준다."""
+def cny_to_krw(cny: float) -> float:
+    """CNY 금액을 원화로 환산한다(가정 환율 `KRW_PER_CNY`)."""
+    return cny * KRW_PER_CNY
+
+
+def krw_to_usd(krw: float) -> float:
+    """원화 금액을 미국달러로 환산한다(가정 환율 `KRW_PER_USD`)."""
+    return krw / KRW_PER_USD
+
+
+def fetch_balance() -> tuple[str, str, str]:
+    """(CNY 잔액, KRW 환산, USD 환산) 문자열을 돌려준다.
+
+    DeepSeek API 는 환율을 주지 않으므로 가정 환율(`KRW_PER_CNY`,
+    `KRW_PER_USD`)로 환산한다. 잔액이 숫자가 아니면 환산값은 `?`.
+    """
     data = http_json(BALANCE_URL)
     infos = data.get("balance_infos") or []
     cny = "0.00"
@@ -3245,26 +3311,34 @@ def fetch_balance() -> tuple[str, str]:
             cny = str(info.get("total_balance") or "0.00")
             break
     try:
-        krw_s = f"{float(cny) * 220:,.2f}"
+        krw = cny_to_krw(float(cny))
+        krw_s = f"{krw:,.2f}"
+        usd_s = f"{krw_to_usd(krw):,.2f}"
     except ValueError:
-        krw_s = "?"
-    return cny, krw_s
+        krw_s = usd_s = "?"
+    return cny, krw_s, usd_s
 
 
-def print_balance_block(cny: str, krw_s: str, extras: list[str] | None = None) -> None:
+def print_balance_block(
+    cny: str, krw_s: str, usd_s: str, extras: list[str] | None = None
+) -> None:
     print_title("💵 DeepSeek 잔액 정보")
-    print(f"  {C.dim}위안화 (CNY){C.reset}  {C.bold}{cny}{C.reset} CNY")
-    print(f"  {C.dim}원화   (KRW){C.reset}  {C.bold}{krw_s}{C.reset} 원")
+    print(f"  {C.dim}위안화   (CNY){C.reset}  {C.bold}{cny}{C.reset} CNY")
+    print(f"  {C.dim}원화     (KRW){C.reset}  {C.bold}{krw_s}{C.reset} 원")
+    print(f"  {C.dim}미국달러 (USD){C.reset}  {C.bold}{usd_s}{C.reset} USD")
     print(f"{C.dim}{rule()}{C.reset}")
-    print(f"  {C.dim}적용 환율: 1 CNY = 220 KRW{C.reset}")
+    print(
+        f"  {C.dim}적용 환율(가정): 1 CNY = {KRW_PER_CNY:,.0f} KRW"
+        f" · 1 USD = {KRW_PER_USD:,.0f} KRW{C.reset}"
+    )
     for line in extras or []:
         print(f"  {line}")
 
 
 def cmd_balance() -> int:
     print_info("DeepSeek 계정 잔액을 조회합니다...")
-    cny, krw_s = fetch_balance()
-    print_balance_block(cny, krw_s)
+    cny, krw_s, usd_s = fetch_balance()
+    print_balance_block(cny, krw_s, usd_s)
     return 0
 
 
@@ -3279,12 +3353,14 @@ def prefetch_balance() -> None:
     if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
         return
     try:
-        cny, krw_s = fetch_balance()
+        cny, krw_s, usd_s = fetch_balance()
     except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
         print_warn(f"시작 잔액을 조회하지 못했습니다: {exc}", stream=True)
         return
-    START_BALANCE = (cny, krw_s)
-    print_info(f"시작 잔액: {C.bold}{cny}{C.reset} CNY ({krw_s} 원)")
+    START_BALANCE = (cny, krw_s, usd_s)
+    print_info(
+        f"시작 잔액: {C.bold}{cny}{C.reset} CNY ({krw_s} 원 · {usd_s} USD)"
+    )
 
 
 def balance_cost(end_cny: str) -> float | None:
@@ -3298,7 +3374,7 @@ def balance_cost(end_cny: str) -> float | None:
 
 
 def cost_text(cost: float) -> str:
-    """비용(CNY)을 `X.XX CNY (Y 원)` 로 표기한다.
+    """비용(CNY)을 `X.XX CNY (Y 원 · Z USD)` 로 표기한다.
 
     잔액은 소수 2자리로만 오므로 0.01 미만 소모는 구분할 수 없다. 그때는
     금액을 지어내지 않고 `0.01 미만`이라고만 표시한다.
@@ -3306,7 +3382,8 @@ def cost_text(cost: float) -> str:
     amount = abs(cost)
     if amount < 0.005:
         return "0.01 미만"
-    return f"{amount:.2f} CNY ({amount * 220:,.2f} 원)"
+    krw = cny_to_krw(amount)
+    return f"{amount:.2f} CNY ({krw:,.2f} 원 · {krw_to_usd(krw):,.2f} USD)"
 
 
 def usage_lines() -> list[str]:
@@ -3333,7 +3410,7 @@ def show_balance_footer() -> None:
         print_warn("API 키가 없어 잔액 표시를 건너뜁니다.", stream=True)
         return
     try:
-        cny, krw_s = fetch_balance()
+        cny, krw_s, usd_s = fetch_balance()
     except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
         print_warn(f"잔액을 조회하지 못했습니다: {exc}", stream=True)
         return
@@ -3354,7 +3431,7 @@ def show_balance_footer() -> None:
     extras += usage_lines()
 
     print()
-    print_balance_block(cny, krw_s, extras=extras)
+    print_balance_block(cny, krw_s, usd_s, extras=extras)
 
 
 def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:
@@ -3525,6 +3602,9 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
     rules_file = rules_path(root)
     rules_txt = str(rules_file) if rules_file.is_file() else f"{C.yellow}(없음 — llm --init-rules){C.reset}"
     print(f"  {C.dim}📜 세션 규칙{C.reset}  {rules_txt}")
+    if mapped is None:
+        # 폴더를 옮겨 온 흔적이 있으면, 대화를 시작하기 전에 이어받을 후보를 알려준다.
+        hint_move_candidates(root)
 
     print_section("사용법")
     usage = [
@@ -3544,7 +3624,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ("llm --delete", "현재 세션 파일 삭제"),
         ("llm --allow-list", "셸 자동 허용 목록 보기"),
         ("llm --allow-clear", "셸 자동 허용 목록 비우기"),
-        ("llm --balance", "API 잔액 조회 (KRW 환산)"),
+        ("llm --balance", "API 잔액 조회 (CNY·KRW·USD 환산)"),
         ("llm --no-balance", "에이전트 종료 후 잔액 표시 생략"),
     ]
     width = max(display_width(cmd) for cmd, _ in usage)
@@ -3948,16 +4028,27 @@ def main(argv: list[str] | None = None) -> int:
                 # 이전 세션을 이어받을지 확인한다(사용자 확인 후 적용).
                 picked = prompt_move_binding(root, session)
                 if picked:
-                    session = picked
-                    print_ok(f"이전 세션 '{session}'을(를) 이어받았습니다.")
+                    folders, ok = apply_move_binding(folders, root, picked)
+                    if ok:
+                        session = picked
                 folders, err, _ = ensure_binding(folders, root, session)
                 if err:
                     print_error(f"세션을 만들지 못했습니다: {err}")
                     return 1
             elif inspect_only:
-                print_error("이 폴더에 매핑된 세션이 없습니다.")
-                print_info("대화를 시작하거나  llm -s <이름>  으로 지정하세요.")
-                return 1
+                # 조회/정리(--view/--clear/--summarize 등)도 폴더를 옮겨 온
+                # 흔적이 있으면 이어받을 후보를 보여주고, TTY면 골라 이어받게 한다.
+                picked = prompt_move_binding(root, None) if sys.stdin.isatty() else None
+                if picked:
+                    folders, ok = apply_move_binding(folders, root, picked)
+                    if ok:
+                        session = picked
+                if session is None:
+                    if not sys.stdin.isatty():
+                        hint_move_candidates(root)  # 자동화/파이프: 안내만
+                    print_error("이 폴더에 매핑된 세션이 없습니다.")
+                    print_info("대화를 시작하거나  llm -s <이름>  으로 지정하세요.")
+                    return 1
             else:
                 list_sessions(None, folders, root)
                 return 0
