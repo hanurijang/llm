@@ -1193,6 +1193,10 @@ llm (bash)  →  agent.py (python)
 5. 한글 응답을 기본으로 합니다.
 6. `.env`, 키 파일 등 비밀 정보는 출력하지 않습니다.
 7. 편집 후에는 가능한 범위에서 검증합니다(문법 검사, 실행 확인 등).
+8. **코드 수정 전 `git pull --rebase --autostash`, 검증 통과 후 커밋·`git push`**
+   를 수행합니다. 검증 실패·중단 시에는 되돌리고 push하지 않습니다.
+   대화만 한 세션의 기록은 `llm --sync-history`로 옮깁니다(절차 원본:
+   [`.llm/rules.md`](.llm/rules.md)).
 
 세션 규칙 원본은 [`.llm/rules.md`](.llm/rules.md)에서 관리됩니다.
 
