@@ -182,7 +182,7 @@ llm --allow-clear
 | `--view` | 세션 대화 내용 보기 (Markdown) |
 | `--clear` | 현재 세션 내용만 비우기 |
 | `--delete` | 현재 세션 파일 삭제 및 폴더 매핑 해제 |
-| `--balance` | DeepSeek API 잔액 조회 (CNY · KRW · USD 환산) |
+| `--balance` | DeepSeek API 잔액 조회 (화폐별 잔액 + 원화 환산) |
 
 셸 실행 범위 우선순위: `--confirm-all` > `--allow-all`/`LLM_ALLOW_ALL` >
 `--auto-workspace`/`LLM_AUTO_WORKSPACE` > 기본(허용 모드).
@@ -409,29 +409,37 @@ llm --delete
 ### 잔액·소요 비용 표시 (`--no-balance`)
 
 에이전트 모드는 **시작할 때 잔액을 먼저 조회해 캐시**하고
-(`ℹ️ 시작 잔액: 2.95 CNY (649.00 원 · 0.48 USD)`), 정상 종료하면
-(`작업 완료 (N단계)`) **최종 답변 직전에** 아래를 `--balance`와 같은 형식으로
-보여줍니다.
+(`ℹ️ 시작 잔액: 2.95 CNY (649.00 원)`), 정상 종료하면(`작업 완료 (N단계)`)
+**최종 답변 직전에** 아래를 `--balance`와 같은 형식으로 보여줍니다.
 
 ```text
 ──────────────────────── 💵 DeepSeek 잔액 정보 ────────────────────────
-  위안화   (CNY)  2.95 CNY
-  원화     (KRW)  649.00 원
-  미국달러 (USD)  0.48 USD
+  위안화 (CNY)  2.95 CNY
+  미국달러 (USD)  0.41 USD
+  원화 (KRW)  1,202.50 원  (환산)
 ────────────────────────────────────────────────────────────────────────
   적용 환율(가정): 1 CNY = 220 KRW · 1 USD = 1,350 KRW
-  소요 비용: 0.05 CNY (11.00 원 · 0.01 USD)   (시작 3.00 → 종료 2.95)
+  소요 비용: 24.50 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 종료 2.95 CNY · 0.99 USD)
   토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회
 ```
 
-- 잔액은 DeepSeek API가 **CNY로만** 주므로, 원화·미국달러는 **가정 환율**로
-  환산합니다: `KRW_PER_CNY`(220) · `KRW_PER_USD`(1,350). 따라서
-  `USD = CNY × 220 ÷ 1,350`, `KRW = CNY × 220` 입니다. 실제 환율과 다를 수
-  있으니 참고용으로만 쓰세요. 잔액이 숫자가 아니면 환산값은 `?`로 표시합니다.
-- **소요 비용** = 시작 잔액 − 종료 잔액. 잔액이 **소수 2자리로만** 오므로
-  0.01 미만 소모는 구분할 수 없습니다. 그때는 `소요 비용: 0.01 미만`과 함께
-  "정확한 비용은 알 수 없습니다" 안내를 붙이고, 잔액이 늘었으면 `잔액 증가`로
-  표기합니다.
+- **계정 잔액은 화폐별로 존재**할 수 있습니다(위안화 `CNY`, 미국달러 `USD`
+  등). API가 준 **화폐별 잔액을 그대로** 보여주며, 없는 화폐는 표시하지
+  않습니다(지어내지 않음).
+- **환산해 보여주는 화폐는 원화(KRW) 하나**입니다. `원화 (KRW)` 줄이 화폐별
+  잔액을 원화로 환산한 합계이고(옆에 `(환산)` 표시), 화폐별 금액은 각 줄에
+  그대로 나옵니다.
+- 환산에는 **가정 환율**을 씁니다: `CURRENCY_KRW_RATE` = `1 CNY = 220 KRW`
+  (`KRW_PER_CNY`) · `1 USD = 1,350 KRW` (`KRW_PER_USD`). 실제 환율과 다를 수
+  있으니 참고용으로만 쓰세요. 환율을 모르는 화폐가 섞이면 그 줄에
+  `(환율 미지정)`을 붙이고 원화 합계는 `?`가 됩니다.
+- **소요 비용** = 시작 잔액 − 종료 잔액(화폐별로 계산해 원화로 환산).
+  - 계정에 화폐가 하나뿐이면 그 화폐로도 보여줍니다: `0.05 CNY (11.00 원)`,
+    `0.01 USD (13.50 원)`. 여러 화폐면 원화 합계를 앞세우고 화폐별 내역을
+    괄호에 붙입니다: `24.50 원 (0.05 CNY · 0.01 USD)`.
+  - 잔액이 **화폐 최소 단위(0.01)로만** 오므로, 환산액이 그 절반에도 못 미치면
+    구분할 수 없습니다. 그때는 `소요 비용: 0.01 미만`과 함께 "정확한 비용은 알
+    수 없습니다" 안내를 붙이고, 잔액이 늘었으면 `잔액 증가`로 표기합니다.
 - **토큰 사용량**은 API 응답의 `usage`를 누적한 값입니다(입력/출력/합계,
   프롬프트 캐시 적중·미적중, API 호출 횟수). 스트리밍에서도 받도록
   `stream_options.include_usage`를 켭니다. 제공되지 않는 모델/버전에서는
@@ -774,9 +782,11 @@ llm (bash)  →  agent.py (python)
 - **작업 계획(todo)**: `tool_todo`/`render_todo`(목표 + 항목 표시),
   `todo_rows`(상한 초과 시 완료 항목부터 접기), `reset_todo`/`restore_todo`/
   `todo_plan_text`/`todo_stamp`(요약·다음 실행을 넘어 같은 계획 이어가기)
-- **비용/UI**: `prefetch_balance`/`balance_cost`/`cost_text`/`show_balance_footer`
-  (시작 잔액 캐시 → 종료 시 소요 비용·토큰 표시), `fetch_balance`/`cny_to_krw`/
-  `krw_to_usd`(CNY→KRW→USD 환산, 가정 환율 `KRW_PER_CNY`/`KRW_PER_USD`),
+- **비용/UI**: `prefetch_balance`/`balance_cost`(화폐별 소모액)/`cost_krw`/
+  `cost_negligible`/`cost_text`/`show_balance_footer`(시작 잔액 캐시 → 종료 시
+  소요 비용·토큰 표시), `fetch_balance`/`amounts_krw`(API가 준 화폐별 잔액 + 원화
+  환산, 가정 환율 `CURRENCY_KRW_RATE` = `KRW_PER_CNY`/`KRW_PER_USD`)/
+  `ordered_currencies`/`format_amounts`/`format_krw`/`print_balance_block`,
   `StepPanel`/`PANEL`(도구 결과
   제자리 갱신), `render_markdown`(glow), `print_title`/`print_info`/`print_ok`/
   `print_warn`/`print_error`, `rule`(구분선, 한글 폭 고려)

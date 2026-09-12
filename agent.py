@@ -81,8 +81,15 @@ MOVE_CANDIDATE_LIMIT = 5
 MOVE_SIMILARITY_MIN = 0.3  # 부모 경로만 같아도(+0.3) 후보로 올린다.
 
 # 잔액 환산에 쓰는 가정 환율(API 가 환율을 주지 않아 고정값으로 계산한다).
+# 계정 잔액은 화폐별로 존재할 수 있고(예: CNY, USD), 환산해 보여주는 화폐는
+# 원화(KRW) 하나다. 즉 아래 표는 "1 단위 화폐 = 몇 원"인지다.
 KRW_PER_CNY = 220.0
 KRW_PER_USD = 1350.0
+CURRENCY_KRW_RATE = {"CNY": KRW_PER_CNY, "USD": KRW_PER_USD}
+CURRENCY_LABELS = {"CNY": "위안화", "USD": "미국달러"}
+# 환산해 함께 보여줄 표시 화폐(원화)의 이름/코드.
+DISPLAY_CURRENCY_LABEL = "원화"
+DISPLAY_CURRENCY = "KRW"
 IGNORE_DIRS = {
     ".git",
     "node_modules",
@@ -3268,8 +3275,9 @@ USAGE_KEYS = (
     "prompt_cache_hit_tokens",
     "prompt_cache_miss_tokens",
 )
-# 에이전트 시작 시점에 조회한 잔액 (CNY, KRW, USD). 종료 시 소요 비용 계산에 쓴다.
-START_BALANCE: tuple[str, str, str] | None = None
+# 에이전트 시작 시점에 조회한 잔액 (화폐별 잔액, 원화 환산 합계).
+# 종료 시 소요 비용(시작 - 종료)을 계산하는 데 쓴다.
+START_BALANCE: tuple[dict[str, str], float | None] | None = None
 
 
 def reset_usage() -> None:
@@ -3287,58 +3295,90 @@ def record_usage(usage: Any) -> None:
     USAGE_TOTAL["calls"] = USAGE_TOTAL.get("calls", 0) + 1
 
 
-def cny_to_krw(cny: float) -> float:
-    """CNY 금액을 원화로 환산한다(가정 환율 `KRW_PER_CNY`)."""
-    return cny * KRW_PER_CNY
+def ordered_currencies(amounts: dict[str, str]) -> list[str]:
+    """화폐 표시 순서: 아는 화폐(CNY·USD…) 먼저, 나머지는 이름순."""
+    known = [cur for cur in CURRENCY_LABELS if cur in amounts]
+    extra = sorted(cur for cur in amounts if cur not in CURRENCY_LABELS)
+    return known + extra
 
 
-def krw_to_usd(krw: float) -> float:
-    """원화 금액을 미국달러로 환산한다(가정 환율 `KRW_PER_USD`)."""
-    return krw / KRW_PER_USD
+def amounts_krw(amounts: dict[str, str]) -> float | None:
+    """화폐별 잔액을 원화로 환산한 합계. 환율을 모르거나 숫자가 아니면 None."""
+    total = 0.0
+    for cur, value in amounts.items():
+        rate = CURRENCY_KRW_RATE.get(cur)
+        if rate is None:
+            return None
+        try:
+            total += float(value) * rate
+        except (TypeError, ValueError):
+            return None
+    return total
 
 
-def fetch_balance() -> tuple[str, str, str]:
-    """(CNY 잔액, KRW 환산, USD 환산) 문자열을 돌려준다.
+def format_krw(krw: float | None) -> str:
+    """원화 금액을 `1,197.10` 처럼 표기(모르면 `?`)."""
+    return "?" if krw is None else f"{krw:,.2f}"
 
-    DeepSeek API 는 환율을 주지 않으므로 가정 환율(`KRW_PER_CNY`,
-    `KRW_PER_USD`)로 환산한다. 잔액이 숫자가 아니면 환산값은 `?`.
+
+def format_amounts(amounts: dict[str, str]) -> str:
+    """화폐별 잔액을 `2.95 CNY · 0.41 USD` 처럼 잇는다(없으면 `?`)."""
+    order = ordered_currencies(amounts)
+    return " · ".join(f"{amounts[cur]} {cur}" for cur in order) or "?"
+
+
+def fetch_balance() -> tuple[dict[str, str], float | None]:
+    """API 가 주는 **화폐별** 계정 잔액과, 그 원화 환산 합계를 돌려준다.
+
+    DeepSeek 계정 잔액은 화폐별로 존재할 수 있다(예: CNY, USD). API 가 준
+    화폐별 금액을 그대로 담고(지어내지 않는다), 표시용으로 원화 환산 합계만
+    가정 환율(`CURRENCY_KRW_RATE`)로 계산한다. 잔액 정보가 없으면 `({}, None)`.
     """
     data = http_json(BALANCE_URL)
-    infos = data.get("balance_infos") or []
-    cny = "0.00"
-    for info in infos:
-        if info.get("currency") == "CNY":
-            cny = str(info.get("total_balance") or "0.00")
-            break
-    try:
-        krw = cny_to_krw(float(cny))
-        krw_s = f"{krw:,.2f}"
-        usd_s = f"{krw_to_usd(krw):,.2f}"
-    except ValueError:
-        krw_s = usd_s = "?"
-    return cny, krw_s, usd_s
+    amounts: dict[str, str] = {}
+    for info in data.get("balance_infos") or []:
+        cur = str(info.get("currency") or "").strip().upper()
+        if not cur:
+            continue
+        amounts[cur] = str(info.get("total_balance") or "0.00")
+    if not amounts:
+        return {}, None
+    return amounts, amounts_krw(amounts)
 
 
 def print_balance_block(
-    cny: str, krw_s: str, usd_s: str, extras: list[str] | None = None
+    amounts: dict[str, str], krw: float | None, extras: list[str] | None = None
 ) -> None:
     print_title("💵 DeepSeek 잔액 정보")
-    print(f"  {C.dim}위안화   (CNY){C.reset}  {C.bold}{cny}{C.reset} CNY")
-    print(f"  {C.dim}원화     (KRW){C.reset}  {C.bold}{krw_s}{C.reset} 원")
-    print(f"  {C.dim}미국달러 (USD){C.reset}  {C.bold}{usd_s}{C.reset} USD")
-    print(f"{C.dim}{rule()}{C.reset}")
+    order = ordered_currencies(amounts)
+    if not order:
+        print(f"  {C.dim}(API 가 잔액 정보를 주지 않았습니다){C.reset}")
+    for cur in order:
+        label = CURRENCY_LABELS.get(cur)
+        name = f"{C.dim}{pad(label, 4)}{C.reset} " if label else ""
+        note = "" if cur in CURRENCY_KRW_RATE else f"  {C.dim}(환율 미지정){C.reset}"
+        print(
+            f"  {name}{C.dim}({cur}){C.reset}"
+            f"  {C.bold}{amounts[cur]}{C.reset} {cur}{note}"
+        )
     print(
-        f"  {C.dim}적용 환율(가정): 1 CNY = {KRW_PER_CNY:,.0f} KRW"
-        f" · 1 USD = {KRW_PER_USD:,.0f} KRW{C.reset}"
+        f"  {C.dim}{pad(DISPLAY_CURRENCY_LABEL, 4)}{C.reset} {C.dim}({DISPLAY_CURRENCY}){C.reset}"
+        f"  {C.bold}{format_krw(krw)}{C.reset} 원  {C.dim}(환산){C.reset}"
     )
+    print(f"{C.dim}{rule()}{C.reset}")
+    rates = " · ".join(
+        f"1 {cur} = {CURRENCY_KRW_RATE[cur]:,.0f} KRW" for cur in order if cur in CURRENCY_KRW_RATE
+    )
+    if rates:
+        print(f"  {C.dim}적용 환율(가정): {rates}{C.reset}")
     for line in extras or []:
         print(f"  {line}")
 
 
 def cmd_balance() -> int:
     print_info("DeepSeek 계정 잔액을 조회합니다...")
-    cny, krw_s, usd_s = fetch_balance()
-    print_balance_block(cny, krw_s, usd_s)
+    amounts, krw = fetch_balance()
+    print_balance_block(amounts, krw)
     return 0
 
 
@@ -3353,37 +3393,81 @@ def prefetch_balance() -> None:
     if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
         return
     try:
-        cny, krw_s, usd_s = fetch_balance()
+        amounts, krw = fetch_balance()
     except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
         print_warn(f"시작 잔액을 조회하지 못했습니다: {exc}", stream=True)
         return
-    START_BALANCE = (cny, krw_s, usd_s)
+    START_BALANCE = (amounts, krw)
     print_info(
-        f"시작 잔액: {C.bold}{cny}{C.reset} CNY ({krw_s} 원 · {usd_s} USD)"
+        f"시작 잔액: {C.bold}{format_amounts(amounts)}{C.reset}"
+        f" ({C.bold}{format_krw(krw)}{C.reset} 원)"
     )
 
 
-def balance_cost(end_cny: str) -> float | None:
-    """시작 잔액 대비 소모액(CNY, 양수면 소모). 계산할 수 없으면 None."""
+def balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:
+    """시작 대비 **화폐별** 소모액(양수면 소모). 계산할 수 없으면 None."""
     if START_BALANCE is None:
         return None
-    try:
-        return float(START_BALANCE[0]) - float(end_cny)
-    except (TypeError, ValueError):
-        return None
+    start_amounts = START_BALANCE[0]
+    costs: dict[str, float] = {}
+    for cur in ordered_currencies({**start_amounts, **end_amounts}):
+        try:
+            start_v = float(start_amounts.get(cur, "0") or "0")
+            end_v = float(end_amounts.get(cur, "0") or "0")
+        except (TypeError, ValueError):
+            return None
+        costs[cur] = start_v - end_v
+    return costs
 
 
-def cost_text(cost: float) -> str:
-    """비용(CNY)을 `X.XX CNY (Y 원 · Z USD)` 로 표기한다.
+def cost_krw(costs: dict[str, float]) -> float | None:
+    """화폐별 소모액을 원화로 환산한 합계. 환율을 모르는 화폐가 있으면 None."""
+    total = 0.0
+    for cur, value in costs.items():
+        rate = CURRENCY_KRW_RATE.get(cur)
+        if rate is None:
+            return None
+        total += value * rate
+    return total
 
-    잔액은 소수 2자리로만 오므로 0.01 미만 소모는 구분할 수 없다. 그때는
-    금액을 지어내지 않고 `0.01 미만`이라고만 표시한다.
+
+def cost_negligible(costs: dict[str, float]) -> bool:
+    """소모액이 화폐 최소 단위(0.01) 미만이라 구분할 수 없는지.
+
+    잔액은 화폐마다 소수 2자리로만 오므로, 반올림 단위(0.01)의 절반에
+    환산한 값보다 작으면 실제 소모인지 알 수 없다.
     """
-    amount = abs(cost)
-    if amount < 0.005:
+    steps = [0.005 * rate for cur, rate in CURRENCY_KRW_RATE.items() if cur in costs]
+    if not steps:
+        return True
+    krw = cost_krw(costs)
+    if krw is None:
+        return False
+    return abs(krw) < min(steps)
+
+
+def cost_text(costs: dict[str, float]) -> str:
+    """화폐별 소모액을 원화 기준으로 표기한다(예: `0.05 CNY (11.00 원)`).
+
+    환산해 보여주는 화폐는 **원화**다. 계정에 화폐가 여러 개면 화폐별 내역도
+    괄호에 함께 보여준다. 구분할 수 없을 만큼 작으면 금액을 지어내지 않고
+    `0.01 미만`이라고만 표시한다.
+    """
+    krw = cost_krw(costs)
+    detail = " · ".join(f"{abs(v):.2f} {cur}" for cur, v in costs.items())
+    if cost_negligible(costs):
         return "0.01 미만"
-    krw = cny_to_krw(amount)
-    return f"{amount:.2f} CNY ({krw:,.2f} 원 · {krw_to_usd(krw):,.2f} USD)"
+    if krw is None:
+        return f"{detail} (원화 환산 불가)"
+    items = [
+        (cur, value)
+        for cur, value in costs.items()
+        if cur in CURRENCY_KRW_RATE and abs(value) >= 0.005
+    ]
+    if len(items) == 1:
+        cur, value = items[0]
+        return f"{abs(value):.2f} {cur} ({format_krw(abs(krw))} 원)"
+    return f"{format_krw(abs(krw))} 원" + (f" ({detail})" if detail else "")
 
 
 def usage_lines() -> list[str]:
@@ -3410,28 +3494,30 @@ def show_balance_footer() -> None:
         print_warn("API 키가 없어 잔액 표시를 건너뜁니다.", stream=True)
         return
     try:
-        cny, krw_s, usd_s = fetch_balance()
+        end_amounts, end_krw = fetch_balance()
     except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
         print_warn(f"잔액을 조회하지 못했습니다: {exc}", stream=True)
         return
 
     extras: list[str] = []
-    cost = balance_cost(cny)
-    if cost is not None:
-        start_cny = START_BALANCE[0] if START_BALANCE else "?"
-        label = "소요 비용" if cost >= 0 else "잔액 증가"
+    costs = balance_cost(end_amounts)
+    if costs is not None:
+        krw_signed = cost_krw(costs)
+        signed = krw_signed if krw_signed is not None else sum(costs.values())
+        label = "소요 비용" if signed >= 0 else "잔액 증가"
         extras.append(
-            f"{label}: {cost_text(cost)}"
-            f"   {C.dim}(시작 {start_cny} → 종료 {cny}){C.reset}"
+            f"{label}: {cost_text(costs)}"
+            f"   {C.dim}(시작 {format_amounts(START_BALANCE[0])}"
+            f" → 종료 {format_amounts(end_amounts)}){C.reset}"
         )
-        if abs(cost) < 0.005:
+        if cost_negligible(costs):
             extras.append(
-                f"{C.dim}잔액이 소수 2자리로 반올림되어 정확한 비용은 알 수 없습니다{C.reset}"
+                f"{C.dim}잔액이 화폐 최소 단위(0.01)로 반올림되어 정확한 비용은 알 수 없습니다{C.reset}"
             )
     extras += usage_lines()
 
     print()
-    print_balance_block(cny, krw_s, usd_s, extras=extras)
+    print_balance_block(end_amounts, end_krw, extras=extras)
 
 
 def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:
@@ -3624,7 +3710,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ("llm --delete", "현재 세션 파일 삭제"),
         ("llm --allow-list", "셸 자동 허용 목록 보기"),
         ("llm --allow-clear", "셸 자동 허용 목록 비우기"),
-        ("llm --balance", "API 잔액 조회 (CNY·KRW·USD 환산)"),
+        ("llm --balance", "API 잔액 조회 (화폐별 + 원화 환산)"),
         ("llm --no-balance", "에이전트 종료 후 잔액 표시 생략"),
     ]
     width = max(display_width(cmd) for cmd, _ in usage)
