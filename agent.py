@@ -53,18 +53,28 @@ SUMMARY_STAMP_RE = re.compile(r"<!--\s*llm-summary-at:(\d+)\s*-->")
 REF_MARKER = "[참고: 다른 세션의 맥락]"
 REF_MAX_CHARS = 24_000
 
-# 에이전트 작업 계획(todo): 표시 이름과 항목 수 상한.
+# 에이전트 작업 계획(todo): 표시 이름과 화면에 그리는 항목 수 상한(초과분은 접는다).
 TODO_LABEL = "📋 작업 계획"
-TODO_MAX_ITEMS = 40
+TODO_MAX_ITEMS = 50
+# 계획 상단에 보여줄 목표/조치 요약 길이와, 요약문에서 복원할 때의 안전 상한.
+TODO_GOAL_MAX_CHARS = 200
+TODO_RESTORE_MAX_ITEMS = 200
 TODO_STATUSES = ("pending", "in_progress", "done")
 # 최초 턴에 계획을 세우지 않을 때 1회 주입하는 상기 메시지.
 TODO_REMINDER = (
-    "작업을 시작하기 전에 먼저 `todo` 도구로 전체 작업 계획(짧은 항목 목록)을 "
-    "세워 사용자에게 보여주세요. 이후 진행에 따라 status(pending/in_progress/done)를 "
-    "갱신하며 작업하세요."
+    "작업을 시작하기 전에 먼저 `todo` 도구로 `goal`(이번 작업의 목표·결정한 조치를 "
+    "한두 문장으로 요약)과 전체 작업 계획(짧은 항목 목록)을 세워 사용자에게 보여주세요. "
+    "이후에는 계획을 새로 만들지 말고 **같은 계획**을 이어서 "
+    "status(pending/in_progress/done)만 갱신하세요. 대화가 요약(압축)된 뒤에도 요약에 "
+    "남은 기존 계획을 그대로 이어가고, 항목이 많아 일부가 접혀 보여도 하나의 작업으로 "
+    "계속 진행하세요."
 )
-# 현재 실행 중인 에이전트의 작업 계획(런마다 초기화). 종료 요약에 쓴다.
+# 작업 계획의 목표/조치 요약(계획 상단에 표시). 요약(압축)을 넘어 유지된다.
+CURRENT_TODO_GOAL = ""
+# 현재 실행 중인 에이전트의 작업 계획(런마다 초기화). 요약 시 스냅샷으로 보존한다.
 CURRENT_TODO: list[dict[str, str]] = []
+# 요약문에 실어 보내는 작업 계획 스냅샷(압축·다음 실행에서 같은 계획을 이어가기 위함).
+TODO_STAMP_RE = re.compile(r"<!--\s*llm-todo:(.*?)\s*-->", re.S)
 
 # 폴더 이동(mv) 감지: 사라진 폴더의 세션 중 이어받을 후보를 고를 때의 상한/기준.
 MOVE_CANDIDATE_LIMIT = 5
@@ -1360,12 +1370,19 @@ def apply_summary(
         SUMMARY_MAX_CHARS,
     )
 
+    # 진행 중인 작업 계획(목표 + 항목)을 요약과 함께 남겨, 압축 후에도
+    # 계획을 새로 시작하지 않고 같은 흐름(하나의 작업)으로 이어가게 한다.
+    plan = todo_plan_text()
+    stamp = todo_stamp()
+
     head = {
         "role": "user",
         "content": (
             f"{SUMMARY_MARKER} 아래는 이전 대화의 요약입니다. "
             f"이후 대화의 맥락으로 사용하세요.\n\n"
             f"{summary_clipped}"
+            + (f"\n\n{plan}" if plan else "")
+            + (f"\n{stamp}" if stamp else "")
         ),
     }
 
@@ -1439,6 +1456,8 @@ def maybe_summarize(
         f"요약·백업 완료: {entry['summary_file']} "
         f"(최근 {len(reduced) - 1}개 메시지 유지)"
     )
+    if todo_plan_text():
+        print_info("진행 중인 작업 계획을 요약에 함께 실어 이어갑니다.")
     print_info(f"백업 위치: {summaries_dir(session)}")
     return reduced
 
@@ -1749,7 +1768,12 @@ def build_system_prompt(root: Path, session: str) -> str:
         "Edit with str_replace when changing existing files; use write_file for new files.\n"
         "Keep changes minimal and correct. After edits, sanity-check with read or tests if appropriate.\n"
         "Work with a todo list: ALWAYS call the `todo` tool first to lay out a concise\n"
-        "plan, then update each item's status (pending/in_progress/done) as you progress.\n"
+        "plan with its `goal` (one or two sentences summarizing your intended approach),\n"
+        "then update each item's status (pending/in_progress/done) as you progress.\n"
+        "Keep ONE plan for the whole job: if a plan (or a goal) already exists in the\n"
+        "context — including a previous summary — continue that SAME plan, just update\n"
+        "its statuses; never restart a new plan. If the list is folded in the terminal\n"
+        "(over the display limit), keep going with the same single job.\n"
         "Do not exfiltrate secrets. Never print API keys or .env contents.\n"
         "Reply in Korean unless the user writes in another language.\n"
         f"Session name: {session}\n"
@@ -1808,9 +1832,18 @@ def tool_schemas() -> list[dict[str, Any]]:
         fn(
             "todo",
             "작업 계획(todo)을 설정하거나 갱신한다. 에이전트는 작업을 시작할 때 "
-            "반드시 이것을 먼저 호출해 할 일 목록을 사용자에게 보여주고, 진행에 따라 "
-            "각 항목의 status 를 갱신한다. 호출할 때마다 전체 목록을 다시 보낸다.",
+            "반드시 이것을 먼저 호출해 goal(목표·조치 요약)과 할 일 목록을 사용자에게 "
+            "보여주고, 진행에 따라 각 항목의 status 를 갱신한다. 호출할 때마다 전체 "
+            "목록을 다시 보낸다. 이미 계획이 있으면(요약을 넘어 유지됨) 새로 만들지 "
+            "말고 같은 계획을 이어서 갱신한다. goal 을 생략하면 이전 목표가 유지된다.",
             {
+                "goal": {
+                    "type": "string",
+                    "description": (
+                        "이번 작업의 목표 또는 결정한 조치를 한두 문장으로 요약. "
+                        "목록 상단에 표시되며, 생략하면 이전 목표를 유지한다."
+                    ),
+                },
                 "items": {
                     "type": "array",
                     "description": "전체 할 일 목록(현재 상태 포함).",
@@ -1826,7 +1859,7 @@ def tool_schemas() -> list[dict[str, Any]]:
                         },
                         "required": ["content"],
                     },
-                }
+                },
             },
             ["items"],
         ),
@@ -2003,15 +2036,43 @@ def todo_marker(status: str) -> str:
 
 def reset_todo() -> None:
     """새 에이전트 실행을 시작할 때 작업 계획을 비운다."""
-    global CURRENT_TODO
+    global CURRENT_TODO, CURRENT_TODO_GOAL
     CURRENT_TODO = []
+    CURRENT_TODO_GOAL = ""
 
 
-def render_todo(items: list[dict[str, str]]) -> None:
-    """에이전트의 작업 계획을 요약해 터미널에 보여준다."""
+def todo_rows(items: list[dict[str, str]]) -> tuple[list[dict[str, str]], int]:
+    """화면에 그릴 항목만 고른다(상한 초과 시 완료된 항목부터 접는다).
+
+    반환: (그릴 항목, 접힌 개수). 순서는 유지하고 이미 끝난 일부터 접어서
+    **진행 중인 흐름**이 계속 보이게 한다(하나의 작업으로 이어가기 위함).
+    """
+    rows = [dict(it) for it in items]
+    folded = 0
+    i = 0
+    while len(rows) > TODO_MAX_ITEMS and i < len(rows):
+        if rows[i].get("status") == "done":
+            rows.pop(i)
+            folded += 1
+        else:
+            i += 1
+    if len(rows) > TODO_MAX_ITEMS:  # 미완료만으로도 넘치면 뒤에서 자른다
+        folded += len(rows) - TODO_MAX_ITEMS
+        rows = rows[:TODO_MAX_ITEMS]
+    return rows, folded
+
+
+def render_todo(items: list[dict[str, str]], goal: str = "") -> None:
+    """에이전트의 작업 계획(목표/조치 요약 + 항목)을 터미널에 보여준다."""
     done = sum(1 for it in items if it.get("status") == "done")
-    print_section(f"{TODO_LABEL}  ({done}/{len(items)} 완료)")
-    for it in items:
+    rows, folded = todo_rows(items)
+    suspend_panel()
+    print()
+    if goal:
+        print(f"{C.cyan}🎯 {goal}{C.reset}")
+    print(f"{C.bold}{TODO_LABEL}  ({done}/{len(items)} 완료){C.reset}")
+    print(f"{C.dim}{rule()}{C.reset}")
+    for it in rows:
         status = str(it.get("status") or "pending")
         content = str(it.get("content") or "")
         mark = todo_marker(status)
@@ -2021,6 +2082,64 @@ def render_todo(items: list[dict[str, str]]) -> None:
             print(f"   {C.yellow}{mark}{C.reset} {C.bold}{content}{C.reset}")
         else:
             print(f"   {C.dim}{mark} {content}{C.reset}")
+    if folded:
+        print(f"   {C.dim}… 완료 {folded}개 접음 (전체 {len(items)}개 항목, 계속 이어감){C.reset}")
+
+
+def todo_plan_text() -> str:
+    """요약문에 실어 보낼 사람이 읽는 작업 계획 블록(계획이 없으면 "")."""
+    if not CURRENT_TODO and not CURRENT_TODO_GOAL:
+        return ""
+    lines = ["[진행 중인 작업 계획 — 새로 만들지 말고 이 계획을 이어서 갱신하세요]"]
+    if CURRENT_TODO_GOAL:
+        lines.append(f"🎯 {CURRENT_TODO_GOAL}")
+    for it in CURRENT_TODO:
+        lines.append(f"   {todo_marker(str(it.get('status') or 'pending'))} {it.get('content')}")
+    if len(CURRENT_TODO) > TODO_MAX_ITEMS:
+        lines.append(f"   … 전체 {len(CURRENT_TODO)}개 항목을 하나의 작업으로 계속 진행")
+    return "\n".join(lines)
+
+
+def todo_stamp() -> str:
+    """요약문에 심는 기계용 작업 계획 스냅샷(다음 실행에서 복원). 없으면 ""."""
+    if not CURRENT_TODO and not CURRENT_TODO_GOAL:
+        return ""
+    state = {"goal": CURRENT_TODO_GOAL, "items": CURRENT_TODO}
+    return f"<!-- llm-todo:{json.dumps(state, ensure_ascii=False)} -->"
+
+
+def restore_todo(messages: list[dict[str, Any]]) -> bool:
+    """앞선 요약문에 남은 작업 계획 스냅샷을 복원한다. 복원했으면 True.
+
+    요약(압축)이나 새 실행에서 계획이 '새로 시작'되는 것을 막는다.
+    """
+    global CURRENT_TODO, CURRENT_TODO_GOAL
+    stamp = ""
+    for msg in messages:
+        content = msg.get("content")
+        if isinstance(content, str):
+            found = TODO_STAMP_RE.findall(content)
+            if found:
+                stamp = found[-1]
+    if not stamp:
+        return False
+    try:
+        state = json.loads(stamp)
+    except (json.JSONDecodeError, TypeError):
+        return False
+    if not isinstance(state, dict):
+        return False
+    items = state.get("items")
+    if isinstance(items, list):
+        CURRENT_TODO = [
+            {"content": str(it.get("content")), "status": str(it.get("status") or "pending")}
+            for it in items[:TODO_RESTORE_MAX_ITEMS]
+            if isinstance(it, dict) and it.get("content")
+        ]
+    goal = state.get("goal")
+    if isinstance(goal, str) and goal:
+        CURRENT_TODO_GOAL = goal
+    return bool(CURRENT_TODO or CURRENT_TODO_GOAL)
 
 
 def tool_todo(args: dict[str, Any]) -> str:
@@ -2028,7 +2147,8 @@ def tool_todo(args: dict[str, Any]) -> str:
     if not isinstance(raw_items, list) or not raw_items:
         return "ERROR: items 는 비어있지 않은 배열이어야 합니다."
     items: list[dict[str, str]] = []
-    for entry in raw_items[:TODO_MAX_ITEMS]:
+    # 상한을 두지 않고 모두 담는다(화면에서만 완료 항목부터 접어 보여준다).
+    for entry in raw_items:
         if isinstance(entry, str):
             items.append({"content": entry.strip(), "status": "pending"})
             continue
@@ -2044,13 +2164,27 @@ def tool_todo(args: dict[str, Any]) -> str:
     items = [it for it in items if it["content"]]
     if not items:
         return "ERROR: 유효한 항목이 없습니다."
-    global CURRENT_TODO
+    goal = str(args.get("goal") or "").strip()
+    global CURRENT_TODO, CURRENT_TODO_GOAL
+    if goal:
+        CURRENT_TODO_GOAL = (
+            goal if len(goal) <= TODO_GOAL_MAX_CHARS else goal[:TODO_GOAL_MAX_CHARS] + "…"
+        )
     CURRENT_TODO = items
-    render_todo(items)
+    render_todo(items, CURRENT_TODO_GOAL)
     done = sum(1 for it in items if it["status"] == "done")
     active = next((it["content"] for it in items if it["status"] == "in_progress"), "")
-    tail = f" · 진행 중: {active}" if active else ""
-    return f"{TODO_LABEL} 갱신: 총 {len(items)}개, 완료 {done}개{tail}"
+    bits = [f"총 {len(items)}개, 완료 {done}개"]
+    if active:
+        bits.append(f"진행 중: {active}")
+    if CURRENT_TODO_GOAL:
+        bits.append(f"목표 유지: {CURRENT_TODO_GOAL}")
+    if len(items) > TODO_MAX_ITEMS:
+        bits.append(
+            f"화면에는 {TODO_MAX_ITEMS}개만 표시(완료 항목부터 접음), 전체 {len(items)}개를 "
+            "하나의 작업으로 계속 진행"
+        )
+    return f"{TODO_LABEL} 갱신: " + " · ".join(bits)
 
 
 def tool_list_dir(root: Path, args: dict[str, Any]) -> str:
@@ -3498,9 +3632,13 @@ def cmd_agent(
     progress = make_stream_progress(show_thinking) if stream else None
     approval = ShellApproval(session) if (not chat_only and not yes) else None
 
+    # 앞선 요약(압축)에 남은 작업 계획이 있으면 새로 세우지 않고 그대로 이어간다.
+    todo_seen = bool(not chat_only and restore_todo(messages))
     # 최초 도구 턴에 계획(todo)을 세우지 않으면 딱 한 번 상기시킨다.
-    todo_seen = False
     todo_reminded = False
+    if todo_seen:
+        done = sum(1 for it in CURRENT_TODO if it.get("status") == "done")
+        print_info(f"이어가는 작업 계획: 전체 {len(CURRENT_TODO)}개 (완료 {done}개)")
 
     step = 0
     step_limit = max_steps
