@@ -176,13 +176,14 @@ llm "이 폴더 요약해줘"   # 도구까지 확인
 
 ### 새 PC에서 달라지는 점
 
-- **기록 폴더는 자동 생성**: `~/.local/share/llm/`와 세션 파일이 첫 실행 때
-  만들어집니다. 따로 만들 필요가 없습니다.
+- **홈의 보조 파일은 자동 생성**: `~/.local/share/llm/`(폴더 매핑·셸 허용
+  목록·환율 캐시)는 첫 실행 때 만들어집니다. 따로 만들 필요가 없습니다.
 - **대화 기록은 저장소와 함께 옵니다**: 기록이 `<작업폴더>/.llm/`에 있어
   `git pull`(또는 clone)만 하면 이전 PC의 대화가 그대로 이어집니다.
   다른 PC에서 마친 작업은 이쪽에서 `llm --sync-history`로 올려 두세요.
-- **세션은 이 PC의 경로 기준으로 새로 시작**합니다. 이름을 직접 정하려면
-  `llm -s <이름>`.
+- **저장소 폴더 이름을 같게 유지**하세요(README의 설치 경로 그대로면 자동).
+  세션 이름이 폴더 이름에서 만들어지므로, 이름이 다르면 `llm -s <이름>`으로
+  지정하거나 `llm --view`가 알려주는 `-s` 안내를 따르면 됩니다.
 - **`bindings.json`은 복사하지 마세요.** 예전 PC의 절대 경로가 들어 있어
   "다른 폴더에 바인딩됨" 경고가 납니다. `mv`로 폴더를 옮긴 경우에는 실행 시
   이어받을 후보를 물어봅니다.
@@ -364,6 +365,10 @@ llm --sync-history        # 이 세션 기록·요약만 커밋 → git pull --r
   옮겨집니다**(양쪽에 있으면 더 긴 쪽 채택, 홈 원본은 `*.migrated`로 개명).
   `LLM_HISTORY=home`으로 되돌리면 그 `*.migrated`를 다시 꺼내 옵니다
   (백업은 그대로 남음).
+- 새 PC에서 clone한 폴더에 아직 매핑이 없어도, `.llm/`에 기록이 있으면
+  `llm --view` 등이 `llm -s <이름>`으로 이어가라고 알려줍니다. 폴더 이름을
+  README의 설치 경로(`~/.local/share/llm`)와 같게 두면 세션 이름이 폴더
+  이름으로 자동 생성되어 별도 지정 없이 이어집니다.
 - 요약 백업(`.llm/summaries/`)도 함께 동기화됩니다. 기록이 요약으로 압축된
   뒤에도 원본 대화가 다른 PC에 남습니다(용량이 커지면 `git rm -r --cached
   .llm/summaries` 로 직접 정리해도 됩니다).
@@ -1067,7 +1072,8 @@ llm (bash)  →  agent.py (python)
   `migrate_legacy_session`(홈 → `.llm` 1회 이전, 더 긴 쪽 채택, 홈 원본은
   `*.migrated`), `history_sync_paths`/`git_run`/`cmd_sync_history`
   (`--sync-history`: 기록만 커밋 → `pull --rebase --autostash` → `push`),
-  `print_history_sync_hint`
+  `print_history_sync_hint`, `repo_history_sessions`/`hint_repo_history`
+  (매핑 없이 `.llm/`에 기록만 있으면 `llm -s <이름>` 안내)
 - **작업 계획(todo)**: `tool_todo`/`render_todo`(목표 + 번호 매긴 항목 + 항목별
   하위 작업 로그를 화면에 그리기), `todo_block_lines`/`refresh_todo_block`
   (블록 구성·다시 그리기), `todo_log_open`/`todo_log_close`/`tool_line_open`/
@@ -1160,7 +1166,11 @@ llm (bash)  →  agent.py (python)
 - `LLM_HISTORY=home`으로 실행하면 기록이 홈에 남아 동기화되지 않습니다.
   변수를 지우고 실행하면 `.llm/`으로 한 번 옮겨집니다.
 - 세션 이름이 다르면 다른 대화가 열립니다. `llm`(인자 없음)의 세션 목록에서
-  이름을 확인하거나 `llm -s <이름>`으로 지정하세요.
+  이름을 확인하거나 `llm -s <이름>`으로 지정하세요. 폴더에 기록이 있는데 매핑이
+  없으면 `llm --view` 등이 `-s`로 이어가라고 안내합니다.
+- `~/.local/share/llm/`(README의 설치 경로)에 **같은 이름**으로 clone하면 첫
+  대화 때 세션 이름이 폴더 이름(`llm`)으로 자동 생성되어 기록이 그대로
+  이어집니다. 폴더 이름이 다르면 `llm -s llm`을 쓰세요.
 
 ### 기록 병합 충돌(`.llm/history_*.json`)
 
