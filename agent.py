@@ -11,6 +11,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -164,34 +165,77 @@ SHELL_ASK_PATTERNS = (
 )
 # 작업 폴더 밖을 지우는 명령도 기본 모드에서 확인한다(홈/시스템 실수 방지)
 SHELL_ASK_DELETE_HEADS = {"rm", "rmdir", "shred", "truncate", "dd"}
+# 셸 확인 범위(모드)와 배너에 보여줄 이름
+SHELL_ASK_LABELS = {
+    "all": "all (모든 명령)",
+    "risky": "risky (위험 명령만)",
+    "outside": "outside (폴더 밖 포함)",
+    "none": "none (확인 없음)",
+}
+# 모드가 CLI 옵션이 아니라 환경변수에서 온 경우의 안내 문구
+SHELL_ASK_SOURCES = {
+    "LLM_AUTO_WORKSPACE": (
+        "환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다"
+        " (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다."
+    ),
+    "LLM_ALLOW_ALL": (
+        "환경변수 LLM_ALLOW_ALL=1 로 'risky' 모드입니다"
+        " (권한 상승·설치·폴더 밖 삭제만 확인)."
+    ),
+}
+# heredoc 본문을 코드로 실행하는 셸/실행기: 본문도 명령으로 보고 확인을 받는다
+SHELL_HEREDOC_EXEC_HEADS = {"bash", "sh", "zsh", "dash", "ksh", "fish", "source", "eval", "sudo"}
 
 
 def _deletes_outside_workspace(segment: str, root: Path) -> bool:
     """`rm ~/x`, `rm -rf /etc/...`, `rm -rf ../x`처럼 폴더 밖을 지우는지."""
-    tokens = segment.split()
+    tokens = shell_words(segment)
     _, tokens = strip_env_assignments(tokens)
     if not tokens or Path(tokens[0]).name not in SHELL_ASK_DELETE_HEADS:
         return False
     for tok in tokens[1:]:
-        if tok.startswith("-"):
+        if tok.startswith("-") or any(ch.isspace() for ch in tok):
             continue
         cleaned = tok.strip().strip("'\"")
-        if not cleaned:
+        if not cleaned or cleaned.startswith("$"):
             continue
         if cleaned.startswith(("/", "~")) or ".." in cleaned:
             return True
     return False
 
 
+def heredoc_shell_exec(command: str) -> bool:
+    """heredoc 본문을 `bash`/`sh` 같은 셸에 코드로 넘기는 명령인지.
+
+    본문은 보통 데이터라 `install` 같은 단어가 있어도 무시하지만, 셸
+    인터프리터에 넘길 때는 그대로 실행되는 코드이므로 확인을 받는다.
+    """
+    for line in (command or "").splitlines():
+        if not heredoc_marker(line):
+            continue
+        tokens = shell_words(line)
+        for tok in tokens:
+            if tok in SHELL_HEREDOC_EXEC_HEADS:
+                return True
+    return False
+
+
 def needs_confirm_always(command: str, root: Path | None = None) -> bool:
-    """기본 모드에서도 확인을 받아야 하는 명령인지(권한 상승·설치·폴더 밖 삭제)."""
-    text = (command or "").strip()
+    """기본 모드에서도 확인을 받아야 하는 명령인지(권한 상승·설치·폴더 밖 삭제).
+
+    heredoc 본문(예: `python3 - <<EOF ... EOF`의 코드)은 실행할 명령이 아니라
+    데이터이므로 `install` 같은 단어가 들어 있어도 설치로 오해하지 않는다.
+    단 `bash <<EOF`처럼 본문이 그대로 실행되는 경우는 확인을 받는다.
+    """
+    raw = (command or "").strip()
+    text = scan_text(raw)
     if not text:
         return True
-    segments = [c for _, c in split_shell_commands(text)] or [text]
+    if heredoc_shell_exec(raw):
+        return True
+    segments = chain_segments(text) or [text]
     for segment in segments:
-        tokens = segment.split()
-        _, bare = strip_env_assignments(tokens)
+        _, bare = strip_env_assignments(shell_words(segment))
         if bare and Path(bare[0]).name in SHELL_ASK_HEADS:
             return True
         if any(rx.search(segment) for rx in SHELL_ASK_PATTERNS):
@@ -311,14 +355,24 @@ def env_assignments_unsafe(envs: list[str]) -> bool:
     """환경변수 지정이 동작·코드 로딩을 바꿀 수 있는 이름인지 판단한다."""
     return any(env.split("=", 1)[0] in SHELL_ENV_UNSAFE_NAMES for env in envs)
 
+
+def shell_words(text: str) -> list[str]:
+    """셸 토큰으로 나눈다(인용부호 해석).
+
+    단순 `split()`은 `echo "== /etc/x =="`를 `["==`, `/etc/x`, `=="]`로 쪼개
+    메시지 속 경로를 실제 경로로 오해한다(불필요한 확인 요청의 큰 원인).
+    인용부호가 닫히지 않아 해석할 수 없으면 공백 분리로 대체한다.
+    """
+    try:
+        return shlex.split(text, comments=False, posix=True)
+    except ValueError:
+        return text.split()
+
 # 계열(접두) 자동 허용을 만들 때는 인자에 따라 동작이 바뀌는 명령을 막는다.
 # 접두로 묶인 뒤 다른 인자가 붙어 부작용이 생기는 것을 예방한다.
 SHELL_WRITE_ARG_PATTERN = re.compile(
     r"-(?:exec|execdir|delete|fprint0?)\b|--in-place|--output\b|\bsudo\b|\bxargs\b"
 )
-
-# `&&`, `||`, `|`, `;`로 이어진 명령을 조각 단위로 나눈다(자동 실행 판정용)
-SHELL_CHAIN_SPLIT = re.compile(r"&&|\|\||\||;|&")
 
 # 셸 메타문자(파이프/연결/리다이렉션/치환) — 있으면 접두 자동 허용을 만들지 않는다
 SHELL_META_PATTERN = re.compile(r"[;&|<>`\n]|\$\(")
@@ -342,6 +396,20 @@ SHELL_FLAG_SENSITIVE_HEADS = {
     "black", "prettier", "ruff", "eslint", "gofmt", "biome", "checkov",
     "standard", "stylelint",
 }
+
+# --- 폴더 단위 자동 허용: `rm build/x`를 허용하면 `rm build/y`는 다시 묻지 않는다 ---
+# 대상 경로가 한 폴더 안에 모이는 프로그램만 대상(인자에 따라 위험도가 달라지지 않는 것).
+SHELL_SCOPE_HEADS = {
+    "rm", "rmdir", "shred", "truncate", "mv", "cp", "ln", "chmod", "chown",
+    "chgrp", "touch", "mkdir", "tee", "unzip", "tar",
+}
+# 폴더 통째로 자동 허용하면 위험한 상위 경로(시스템·홈·임시 루트)
+SHELL_SCOPE_BLOCK_DIRS = {
+    "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/opt",
+    "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var",
+}
+# 이보다 얕은 경로는 범위로 삼지 않는다(`/tmp/sub` 같은 넓은 폴더 방지)
+SHELL_SCOPE_MIN_PARTS = 3
 
 # --- `--auto-workspace`: 작업 폴더 안에서 끝나는 부작용만 확인 없이 실행 ---
 # 권한·시스템·원격·설치·컨테이너·임의 코드 실행: workspace 경계를 넘을 수 있어 제외
@@ -379,6 +447,12 @@ SHELL_WORKSPACE_PROTECTED_TARGETS = {".", "..", "/", "~", "*", "./*", ".git", ".
 SHELL_WORKSPACE_PROTECTED_HEADS = {"rm", "rmdir", "mv", "chmod", "chown", "shred"}
 SHELL_WORKSPACE_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".fish", ".command", ".ps1")
 SHELL_WORKSPACE_SPECIAL_PATHS = {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
+# 대상 경로를 정적으로 알 수 없으면(=변수/치환) 확인을 받아야 하는 명령.
+# 삭제·이동·권한 변경처럼 되돌리기 어려운 것만 해당한다(읽기용은 `$t`를 무시).
+SHELL_PATH_STRICT_HEADS = (
+    SHELL_WORKSPACE_PROTECTED_HEADS | SHELL_ASK_DELETE_HEADS
+    | {"cp", "ln", "tee", "install", "sed", "tar", "unzip", "find"}
+)
 
 
 def is_safe_command(command: str) -> bool:
@@ -388,10 +462,10 @@ def is_safe_command(command: str) -> bool:
     자동 실행한다. 위험 요소는 연결 전체를 대상으로 먼저 검사하므로,
     `ls && rm -rf x` 같은 조합은 여기서 걸러진다.
     """
-    text = SHELL_HARMLESS_REDIRECT.sub(" ", (command or "").strip())
+    text = scan_text(command)
     if not text or SHELL_UNSAFE_PATTERN.search(text):
         return False
-    parts = [part.strip() for part in SHELL_CHAIN_SPLIT.split(text) if part.strip()]
+    parts = chain_segments(text)
     if not parts:
         return False
     return all(_is_safe_simple_command(part) for part in parts)
@@ -399,7 +473,7 @@ def is_safe_command(command: str) -> bool:
 
 def _is_safe_simple_command(part: str) -> bool:
     """연결 없는 단일 명령이 자동 실행 대상인지 판단한다."""
-    tokens = part.split()
+    tokens = shell_words(part)
     if not tokens:
         return False
     # `FOO=1 cmd`의 앞머리 지정은 떼고 프로그램으로 판단한다.
@@ -476,9 +550,21 @@ def _safe_python(rest: list[str]) -> bool:
     return script.endswith(".py")
 
 
-def _workspace_path_ok(root: Path, token: str) -> bool:
-    """토큰이 가리키는 경로가 workspace 안(또는 무해한 특수 경로)인지."""
-    raw = token.strip().strip("'\"")
+def _workspace_path_ok(root: Path, token: str, strict: bool = False) -> bool:
+    """토큰이 가리키는 경로가 workspace 안(또는 무해한 특수 경로)인지.
+
+    `strict`는 삭제·이동처럼 대상 경로를 정적으로 알 수 없으면 위험한 명령에
+    쓴다. 그 외에는 인용된 산문(공백 포함)과 변수(`$t`)를 경로로 보지 않아
+    `echo "== /etc/x 여부 =="` 같은 읽기용 메시지로 확인을 요구하지 않는다.
+    """
+    raw = token.strip()
+    if not raw:
+        return True
+    if any(ch.isspace() for ch in raw):
+        return True  # 인용된 문장은 경로가 아니라 화면에 찍는 글이다
+    raw = raw.strip("'\"")
+    if not raw:
+        return True
     if raw.startswith("-"):
         if "=" not in raw:
             return True  # 플래그 자체는 경로가 아니다
@@ -488,7 +574,7 @@ def _workspace_path_ok(root: Path, token: str) -> bool:
     if raw in SHELL_WORKSPACE_SPECIAL_PATHS or raw.startswith("/dev/fd/"):
         return True
     if any(ch in raw for ch in "$`"):
-        return False  # 변수·명령 치환은 대상 경로를 정적으로 알 수 없다
+        return not strict  # 대상 경로를 정적으로 알 수 없다(삭제류는 확인)
     if raw.startswith("~"):
         return False  # 홈 디렉터리는 workspace 밖
     if "/" not in raw and raw not in {".", ".."}:
@@ -504,11 +590,14 @@ def _workspace_path_ok(root: Path, token: str) -> bool:
 
 def _workspace_fragment_safe(fragment: str, root: Path) -> bool:
     """연결 명령의 한 조각이 workspace 안에서 끝나고 되돌릴 수 있는지."""
-    tokens = fragment.split()
+    tokens = shell_words(fragment)
     if not tokens:
         return False
+    envs, bare = strip_env_assignments(tokens)
+    head = Path(bare[0]).name if bare else ""
+    strict = head in SHELL_PATH_STRICT_HEADS
     # 경로가 workspace를 벗어나면 무엇이든 확인 대상
-    if not all(_workspace_path_ok(root, tok) for tok in tokens):
+    if not all(_workspace_path_ok(root, tok, strict) for tok in tokens):
         return False
     # 읽기 전용/검증 명령이면 조각 단독으로도 그대로 허용(`npm test`, `tail -5`)
     if is_safe_command(fragment):
@@ -517,29 +606,28 @@ def _workspace_fragment_safe(fragment: str, root: Path) -> bool:
     body = re.sub(r"\d*>>?\s*\S+", " ", fragment).strip()
     if body and body != fragment and is_safe_command(body):
         return True
-    # `FOO=1 cmd`의 앞머리 지정은 떼고 프로그램으로 판단한다.
-    envs, tokens = strip_env_assignments(tokens)
     if env_assignments_unsafe(envs):
         return False  # PATH/LD_PRELOAD 등은 실행 대상이 달라질 수 있다
-    head = Path(tokens[0]).name
     if head in SHELL_WORKSPACE_BLOCK_HEADS:
         return False
-    if tokens[0].startswith("./") or head.endswith(SHELL_WORKSPACE_SCRIPT_SUFFIXES):
-        return False  # 스크립트 파일 실행은 내용을 검증할 수 없다
     if head in SHELL_WORKSPACE_INTERPRETERS:
-        if any(tok in SHELL_WORKSPACE_CODE_FLAGS for tok in tokens):
+        if any(tok in SHELL_WORKSPACE_CODE_FLAGS for tok in bare):
             return False  # `python3 -c ...` 같은 임의 코드 실행
-        if not [tok for tok in tokens[1:] if not tok.startswith("-")]:
+        if not [tok for tok in bare[1:] if not tok.startswith("-")]:
             return False  # 인터프리터 단독 실행(REPL/stdin)
-    if head == "find" and any(tok in SHELL_WORKSPACE_FIND_WRITE_ARGS for tok in tokens):
+    elif bare[0].startswith("./") or head.endswith(SHELL_WORKSPACE_SCRIPT_SUFFIXES):
+        # 스크립트 파일 실행은 내용을 검증할 수 없다. 인터프리터는 경로로 지정해도
+        # (`./.venv/bin/python - <<EOF`) 위 인터프리터 규칙으로 판단한다.
+        return False
+    if head == "find" and any(tok in SHELL_WORKSPACE_FIND_WRITE_ARGS for tok in bare):
         return False
     if head == "git":
-        if any(tok in SHELL_WORKSPACE_BLOCK_GIT for tok in tokens[1:]):
+        if any(tok in SHELL_WORKSPACE_BLOCK_GIT for tok in bare[1:]):
             return False
-        if any(tok in SHELL_WORKSPACE_BLOCK_GIT_FLAGS for tok in tokens[1:]):
+        if any(tok in SHELL_WORKSPACE_BLOCK_GIT_FLAGS for tok in bare[1:]):
             return False
     if head in SHELL_WORKSPACE_PROTECTED_HEADS:
-        for tok in tokens[1:]:
+        for tok in bare[1:]:
             cleaned = tok.strip().strip("'\"")
             if cleaned in SHELL_WORKSPACE_PROTECTED_TARGETS or cleaned.startswith(".git"):
                 return False
@@ -552,13 +640,12 @@ def is_workspace_command(command: str, root: Path) -> bool:
     경로가 workspace를 벗어나거나(`~/x`, `/etc/x`, `../x`), 설치·네트워크·권한
     명령, 임의 코드 실행, git 이력 파괴로 이어지면 False를 돌려 확인을 받는다.
     """
-    text = (command or "").strip()
+    text = scan_text(command)
     if not text:
         return False
     if any(rx.search(text) for rx in SHELL_DENY):
         return False
-    cleaned = SHELL_HARMLESS_REDIRECT.sub(" ", text)
-    fragments = [frag.strip() for frag in SHELL_CHAIN_SPLIT.split(cleaned) if frag.strip()]
+    fragments = chain_segments(text)
     if not fragments:
         return False
     return all(_workspace_fragment_safe(frag, root) for frag in fragments)
@@ -2726,7 +2813,8 @@ SHELL_SPLIT_RE = re.compile(r"\s*(;|&&|\|\||\||\n)\s*")
 def split_shell_commands(command: str) -> list[tuple[str, str]]:
     """셸 명령을 (앞 연산자, 명령) 목록으로 분해한다.
 
-    인용부호 안의 연산자는 무시한다. 첫 항목의 연산자는 빈 문자열이다.
+    인용부호 안의 연산자와 이스케이프된 연산자(`\\|`, `\\;`)는 무시한다.
+    첫 항목의 연산자는 빈 문자열이다.
     """
     parts: list[tuple[str, str]] = []
     buf: list[str] = []
@@ -2742,6 +2830,10 @@ def split_shell_commands(command: str) -> list[tuple[str, str]]:
                 quote = None
             i += 1
             continue
+        if ch == "\\" and i + 1 < len(text):
+            buf.append(text[i : i + 2])  # 이스케이프된 문자는 연산자가 아니다
+            i += 2
+            continue
         if ch in ("'", '"'):
             quote = ch
             buf.append(ch)
@@ -2754,7 +2846,7 @@ def split_shell_commands(command: str) -> list[tuple[str, str]]:
             buf = []
             i += 2
             continue
-        if ch in {";", "|", "\n"}:
+        if ch in {";", "|", "&", "\n"}:
             parts.append((op, "".join(buf).strip()))
             op = ch
             buf = []
@@ -2764,6 +2856,11 @@ def split_shell_commands(command: str) -> list[tuple[str, str]]:
         i += 1
     parts.append((op, "".join(buf).strip()))
     return [(o, c) for o, c in parts if c]
+
+
+def chain_segments(command: str) -> list[str]:
+    """`&&`/`||`/`|`/`&`/`;`로 이어진 명령의 조각 목록(인용부호 무시)."""
+    return [c for _, c in split_shell_commands(command)]
 
 
 # 셸 명령을 "무엇을 하려는지"로 요약할 때 쓰는 프로그램별 의도 문구.
@@ -2867,9 +2964,10 @@ SHELL_INTENT_HEREDOC = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?"
 
 
 def strip_heredoc_bodies(command: str) -> str:
-    """heredoc 본문을 제거해 명령 뼈대만 남긴다(의도 요약용).
+    """heredoc 본문을 제거해 명령 뼈대만 남긴다.
 
-    본문(`print(1)` 같은 코드 줄)이 별개 명령처럼 해석되는 것을 막는다.
+    본문(`print(1)` 같은 코드·데이터 줄)이 별개 명령처럼 해석되는 것을 막는다.
+    의도 요약과 보안 판정(설치·권한 상승 오탐 방지)에 함께 쓴다.
     """
     lines = command.splitlines()
     kept: list[str] = []
@@ -2878,14 +2976,45 @@ def strip_heredoc_bodies(command: str) -> str:
         line = lines[i]
         kept.append(line)
         i += 1
-        match = SHELL_INTENT_HEREDOC.search(line)
+        match = heredoc_marker(line)
         if not match:
             continue
-        end = match.group(1)
-        while i < len(lines) and lines[i].strip() != end:
+        while i < len(lines) and lines[i].strip() != match:
             i += 1
         i += 1  # 종료 토큰 줄 건너뛰기
     return "\n".join(kept)
+
+
+def heredoc_marker(line: str) -> str | None:
+    """줄에서 heredoc 시작 토큰(`<<EOF`)을 찾는다(인용부호 밖의 `<<`만).
+
+    `echo "<<EOF"`처럼 인용부호 안에 든 `<<`를 진짜 heredoc으로 오해하면
+    뒤따르는 명령까지 본문으로 지워버리므로, 따옴표·이스케이프를 존중한다.
+    """
+    i = 0
+    while i < len(line):
+        ch = line[i]
+        if ch == "\\":
+            i += 2
+            continue
+        if ch in ("'", '"'):
+            quote = ch
+            i += 1
+            while i < len(line) and line[i] != quote:
+                i += 2 if line[i] == "\\" and quote == '"' else 1
+            i += 1
+            continue
+        if line[i : i + 2] == "<<":
+            match = SHELL_INTENT_HEREDOC.match(line, i)
+            if match:
+                return match.group(1)
+        i += 1
+    return None
+
+
+def scan_text(command: str) -> str:
+    """보안 판정용으로 데이터(heredoc 본문)와 무해한 리다이렉션을 뺀 명령."""
+    return SHELL_HARMLESS_REDIRECT.sub(" ", strip_heredoc_bodies((command or "").strip()))
 
 
 def intent_for_step(command: str) -> str | None:
@@ -3036,11 +3165,83 @@ def has_write_args(command: str) -> bool:
     return bool(SHELL_WRITE_ARG_PATTERN.search(command or ""))
 
 
+def scope_targets(command: str, root: Path) -> tuple[str, list[Path]] | None:
+    """폴더 단위 자동 허용 후보인지 보고 (프로그램, 대상 경로들)을 돌려준다.
+
+    `rm -rf build/a`를 허용하면 같은 폴더(`build/`) 안의 다른 파일은 다시 묻지
+    않도록 범위를 만들기 위한 것. 조합 명령이나 대상 경로를 알 수 없는 경우
+    (`$VAR`, 백틱, 공백 포함)에는 None을 돌려 정확 일치만 인정한다.
+    """
+    text = scan_text(command)
+    if not text or SHELL_META_PATTERN.search(text):
+        return None
+    envs, bare = strip_env_assignments(shell_words(text))
+    if env_assignments_unsafe(envs) or not bare:
+        return None
+    head = Path(bare[0]).name
+    if head not in SHELL_SCOPE_HEADS:
+        return None
+    paths: list[Path] = []
+    for arg in bare[1:]:
+        if arg.startswith("-"):
+            continue
+        if any(ch.isspace() for ch in arg) or arg.startswith("$") or "`" in arg:
+            return None  # 대상을 정적으로 알 수 없다
+        if arg in {"~", "~/*", "*", "/*", "/"} or arg.startswith("~"):
+            return None  # 셸이 홈으로 바꾸는 경로는 여기서 판단하지 않는다
+        candidate = Path(arg)
+        if not candidate.is_absolute():
+            candidate = root / arg
+        try:
+            paths.append(candidate.resolve())
+        except OSError:
+            return None
+    if not paths:
+        return None
+    return head, paths
+
+
+def scope_dir(path: Path) -> Path:
+    """대상 경로가 속한 폴더(확장자 없는 없는 경로는 그 자체를 폴더로 본다)."""
+    if not path.exists() and not path.suffix:
+        return path
+    return path if path.is_dir() else path.parent
+
+
+def scope_key(head: str, directory: Path) -> tuple[str, str]:
+    return head, str(directory)
+
+
+def scope_usable(directory: Path, root: Path) -> bool:
+    """그 폴더를 '여기는 다시 묻지 않기' 범위로 저장해도 되는지 판단한다."""
+    text = str(directory)
+    if text in SHELL_SCOPE_BLOCK_DIRS or len(directory.parts) < SHELL_SCOPE_MIN_PARTS:
+        return False
+    try:
+        anchors = (Path.home().resolve(), root.resolve())
+    except OSError:
+        return False
+    for anchor in anchors:
+        # 홈/작업 폴더 자체나 그 상위 폴더를 통째로 허용하면 너무 넓다
+        if directory == anchor or anchor.is_relative_to(directory):
+            return False
+    return True
+
+
+def scope_label(directory: Path, root: Path) -> str:
+    """사용자에게 보여줄 범위 이름(작업 폴더 기준 상대 경로)."""
+    try:
+        relative = directory.relative_to(root.resolve())
+        return f"{relative}/" if str(relative) != "." else "./"
+    except (OSError, ValueError):
+        return f"{directory}/"
+
+
 class ShellApproval:
     """세션별 셸 명령 자동 허용 목록(프롬프트에서 a 선택 시 누적).
 
-    매번 같은 명령을 묻지 않도록 정확 일치(`exact`)와 계열 접두(`prefix`)를
-    세션 파일에 저장한다.
+    매번 같은 명령을 묻지 않도록 정확 일치(`exact`)와 계열 접두(`prefix`),
+    폴더 범위(`scopes`)를 세션 파일에 저장한다.
     """
 
     def __init__(self, session: str) -> None:
@@ -3048,6 +3249,8 @@ class ShellApproval:
         self.path = allow_file(session)
         self.exact: set[str] = set()
         self.prefixes: set[str] = set()
+        self.scopes: set[tuple[str, str]] = set()
+        self.auto_all = False  # 이번 실행 동안 확인 생략(저장하지 않음)
         self.load()
 
     def load(self) -> None:
@@ -3061,13 +3264,28 @@ class ShellApproval:
             return
         self.exact = {str(c) for c in data.get("exact") or [] if str(c).strip()}
         self.prefixes = {str(p) for p in data.get("prefix") or [] if str(p).strip()}
+        scopes = set()
+        for item in data.get("scopes") or []:
+            if not isinstance(item, dict):
+                continue
+            head, directory = str(item.get("head") or ""), str(item.get("dir") or "")
+            if head and directory.startswith("/"):
+                scopes.add((head, directory))
+        self.scopes = scopes
 
     def save(self) -> None:
         try:
             self.path.parent.mkdir(parents=True, exist_ok=True)
             self.path.write_text(
                 json.dumps(
-                    {"exact": sorted(self.exact), "prefix": sorted(self.prefixes)},
+                    {
+                        "exact": sorted(self.exact),
+                        "prefix": sorted(self.prefixes),
+                        "scopes": [
+                            {"head": head, "dir": directory}
+                            for head, directory in sorted(self.scopes)
+                        ],
+                    },
                     ensure_ascii=False,
                     indent=2,
                 )
@@ -3079,45 +3297,87 @@ class ShellApproval:
 
     def is_allowed(self, command: str) -> bool:
         """명령(조합이면 **모든 조각**)이 자동 허용 상태인지 판단한다."""
+        if self.auto_all:
+            return True
         if command_key(command) in self.exact:
             return True
         segments = [c for _, c in split_shell_commands(command)] or [command_key(command)]
         return all(self.segment_allowed(segment) for segment in segments)
 
-    def segment_allowed(self, segment: str) -> bool:
+    def range_allowed(self, segment: str, root: Path | None) -> bool:
+        """폴더 단위 허용에 포함되는 조각인지(`rm build/b` ⊆ `rm build/`)."""
+        if not self.scopes or root is None:
+            return False
+        found = scope_targets(segment, root)
+        if not found:
+            return False
+        head, paths = found
+        for scope_head, directory in self.scopes:
+            if scope_head != head:
+                continue
+            base = Path(directory)
+            if all(path == base or base in path.parents for path in paths):
+                return True
+        return False
+
+    def segment_allowed(self, segment: str, root: Path | None = None) -> bool:
         """조각 하나가 자동 허용 상태인지 판단한다."""
-        if command_key(segment) in self.exact:
+        if self.auto_all or command_key(segment) in self.exact:
             return True
         # 계열 접두는 인자에 따라 부작용이 켜지는 명령(`find -exec`, `-i` 등)에는
         # 적용하지 않는다. 그런 명령은 매번 확인을 받는다.
         if has_write_args(segment):
             return False
+        if self.range_allowed(segment, root):
+            return True
         prefix = command_prefix(segment)
         return bool(prefix) and prefix in self.prefixes
 
-    def remember(self, command: str) -> str:
+    def remember(self, command: str, root: Path | None = None) -> str:
+        """이번에 실행을 허용한 조각을 기억하고, 무엇을 기억했는지 알려준다."""
         self.exact.add(command_key(command))
+        labels: list[str] = []
         prefix = command_prefix(command)
         if prefix:
             self.prefixes.add(prefix)
+            labels.append(prefix)
+        if root is not None:
+            found = scope_targets(command, root)
+            if found:
+                head, paths = found
+                dirs = {scope_dir(path) for path in paths}
+                if len(dirs) == 1:
+                    directory = dirs.pop()
+                    if scope_usable(directory, root):
+                        key = scope_key(head, directory)
+                        if key not in self.scopes:
+                            self.scopes.add(key)
+                        labels.append(f"{head} ({scope_label(directory, root)} 이하)")
         self.save()
-        return prefix or command_key(command)
+        return ", ".join(labels) or command_key(command)
 
-    def snapshot(self) -> tuple[set[str], set[str]]:
-        """되돌리기용 현재 상태 복사본."""
-        return set(self.exact), set(self.prefixes)
+    def snapshot(self) -> tuple[set[str], set[str], set[tuple[str, str]], bool]:
+        """되돌리기용 현재 상태 복사본(`all`의 임시 플래그 포함)."""
+        return set(self.exact), set(self.prefixes), set(self.scopes), self.auto_all
 
-    def restore(self, snap: tuple[set[str], set[str]]) -> None:
+    def restore(self, snap: tuple[set[str], set[str], set[tuple[str, str]], bool]) -> None:
         """스냅샷 상태로 되돌린다(중단 시 이번에 추가한 항목 취소)."""
-        exact, prefixes = snap
-        if self.exact == exact and self.prefixes == prefixes:
+        exact, prefixes, scopes, auto_all = snap
+        if (self.exact, self.prefixes, self.scopes, self.auto_all) == (
+            exact,
+            prefixes,
+            scopes,
+            auto_all,
+        ):
             return
-        self.exact, self.prefixes = exact, prefixes
+        self.exact, self.prefixes, self.scopes = exact, prefixes, scopes
+        self.auto_all = auto_all
         self.save()
 
     def clear(self) -> None:
         self.exact.clear()
         self.prefixes.clear()
+        self.scopes.clear()
         try:
             self.path.unlink()
         except FileNotFoundError:
@@ -3126,28 +3386,46 @@ class ShellApproval:
             print_warn(f"자동 허용 목록 삭제 실패: {exc}", stream=True)
 
 
-def shell_allow_hint(approval: "ShellApproval | None", target: str) -> str:
-    """`a` 선택 시 무엇이 자동 허용으로 저장되는지 안내한다."""
+def shell_allow_hint(
+    approval: "ShellApproval | None", target: str, root: Path | None
+) -> str:
+    """`a` 선택 시 무엇이 자동 허용으로 저장되는지, `all`이 무슨 뜻인지 안내한다."""
     if approval is None:
         return ""
-    prefix = command_prefix(target)
-    if prefix:
-        return f"   {C.dim}a = 이 명령/{prefix} 계열 자동 허용 (다시 묻지 않음){C.reset}\n"
-    return f"   {C.dim}a = 이 명령만 자동 허용 (다시 묻지 않음){C.reset}\n"
+    lines: list[str] = []
+    scope = None
+    if root is not None:
+        found = scope_targets(target, root)
+        if found:
+            head, paths = found
+            dirs = {scope_dir(path) for path in paths}
+            if len(dirs) == 1:
+                directory = dirs.pop()
+                if scope_usable(directory, root):
+                    scope = scope_label(directory, root)
+                    lines.append(f"a = 이 명령 + {head} ({scope} 이하) 자동 허용")
+    if scope is None:
+        prefix = command_prefix(target)
+        if prefix:
+            lines.append(f"a = 이 명령/{prefix} 계열 자동 허용 (다시 묻지 않음)")
+        else:
+            lines.append("a = 이 명령만 자동 허용 (다시 묻지 않음)")
+    lines.append("all = 이번 실행 동안 확인 생략 (저장하지 않음)")
+    return "".join(f"   {C.dim}{line}{C.reset}\n" for line in lines)
 
 
 def ask_shell_segment(
     label: str,
     target: str,
     approval: "ShellApproval | None",
-    allow_all: bool = False,
+    root: Path | None = None,
 ) -> str:
     """조각 하나에 대한 동의를 묻는다. 반환: `y`(이번만) / `a` / `all` / `n`(거부)."""
-    keys = "[y/N/all/a]" if allow_all else "[y/N/a]"
+    keys = "[y/N/a/all]" if approval is not None else "[y/N]"
     try:
         answer = input(
             f"{label}{C.dim}실행할 명령{C.reset}: {C.bold}{target}{C.reset}\n"
-            f"{shell_allow_hint(approval, target)}"
+            f"{shell_allow_hint(approval, target, root)}"
             f"   {C.bold}{keys}{C.reset}: "
         ).strip().lower()
     except EOFError:
@@ -3156,7 +3434,7 @@ def ask_shell_segment(
         return "y"
     if approval is None:
         return "n"
-    if allow_all and answer in {"all", "always", "모두"}:
+    if answer in {"all", "always", "모두"}:
         return "all"
     if answer in {"a", "ㅁ"}:
         return "a"
@@ -3179,6 +3457,9 @@ def confirm_shell(
 
     `only_risky`(기본 모드)이면 권한 상승·설치·폴더 밖 삭제 조각만 묻고
     나머지 조각은 확인 없이 통과시킨다.
+
+    `a`는 이 명령(과 같은 폴더·계열)을 앞으로 묻지 않도록 세션에 저장하고,
+    `all`은 저장하지 않고 **이번 실행 동안만** 확인을 생략한다.
     """
     if yes:
         return True
@@ -3195,7 +3476,7 @@ def confirm_shell(
     pending = [
         s
         for s in segments
-        if risky(s) and (approval is None or not approval.segment_allowed(s))
+        if risky(s) and (approval is None or not approval.segment_allowed(s, root))
     ]
     if not pending:
         return True
@@ -3213,27 +3494,25 @@ def confirm_shell(
 
     added: list[str] = []
     snap = approval.snapshot() if approval is not None else None
-    auto_rest = False
     for idx, segment in enumerate(segments, 1):
         if not risky(segment):
             continue  # 기본 모드: 위험하지 않은 조각은 확인 없이 실행
-        if not auto_rest and approval is not None and approval.segment_allowed(segment):
-            if compound:
+        if approval is not None and approval.segment_allowed(segment, root):
+            if compound and not approval.auto_all:
                 print(f"   {C.dim}{idx}) {segment} (이미 자동 허용){C.reset}")
             continue
-        if auto_rest:
-            if approval is not None and not approval.segment_allowed(segment):
-                added.append(approval.remember(segment))
-            continue
         label = f"   {C.dim}{idx}) {C.reset}" if compound else "   "
-        answer = ask_shell_segment(label, segment, approval, allow_all=compound)
+        answer = ask_shell_segment(label, segment, approval, root=root)
         if answer == "y":
             continue
         if answer in {"a", "all"}:
             if approval is not None:
-                added.append(approval.remember(segment))
-            if answer == "all":
-                auto_rest = True
+                if answer == "a":
+                    added.append(approval.remember(segment, root))
+                else:
+                    # all 은 저장하지 않는다: 이번 실행 동안만 확인을 생략한다.
+                    approval.auto_all = True
+                    print_ok("이번 실행 동안 셸 확인을 묻지 않습니다. (llm 재시작 시 해제)")
             continue
         print_warn("셸 실행을 취소했습니다.", stream=True)
         if approval is not None and snap is not None:
@@ -3635,17 +3914,50 @@ def complete(
     return content, tool_calls, choice.get("finish_reason"), reasoning
 
 
-def print_banner(session: str, root: Path, chat_only: bool) -> None:
+def print_banner(
+    session: str,
+    root: Path,
+    chat_only: bool,
+    ask_mode: str = "risky",
+    ask_source: str = "",
+) -> None:
     mode = "채팅" if chat_only else "에이전트"
     mode_color = C.magenta if chat_only else C.cyan
     has_rules = bool(load_session_rules(root))
     rules = f"{C.green}on{C.reset}" if has_rules else f"{C.dim}off{C.reset}"
+    confirm = ""
+    if not chat_only:
+        label = SHELL_ASK_LABELS.get(ask_mode, ask_mode)
+        confirm = f"  {C.dim}확인={C.reset}{label}"
     print(
         f"{C.dim}──{C.reset} {mode_color}{C.bold}{mode}{C.reset}"
         f"  {C.dim}session={C.reset}{session}"
         f"  {C.dim}root={C.reset}{root}"
-        f"  {C.dim}rules={C.reset}{rules}"
+        f"  {C.dim}rules={C.reset}{rules}{confirm}"
     )
+    if ask_source:
+        print_info(SHELL_ASK_SOURCES[ask_source])
+
+
+def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
+    """셸 확인 범위를 정한다. 반환: (auto_workspace, allow_all, 모드, 출처).
+
+    명시한 CLI 옵션이 환경변수보다 우선한다. 그래야 `.env`에 남은 설정 때문에
+    의도와 다른 모드로 조용히 동작하는 일이 없다.
+    """
+    if args.confirm_all:
+        return False, False, "all", "--confirm-all"
+    if args.allow_all:
+        return False, True, "risky", "--allow-all"
+    if args.auto_workspace:
+        return True, False, "outside", "--auto-workspace"
+    if args.yes:
+        return False, True, "none", "--yes"
+    if env_flag("LLM_ALLOW_ALL"):
+        return False, True, "risky", "LLM_ALLOW_ALL"
+    if env_flag("LLM_AUTO_WORKSPACE"):
+        return True, False, "outside", "LLM_AUTO_WORKSPACE"
+    return False, True, "risky", ""
 
 
 # 이번 실행에서 누적한 API 토큰 사용량(usage). 종료 요약에 쓴다.
@@ -4076,11 +4388,12 @@ def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def cmd_allow(session: str, clear: bool) -> int:
+def cmd_allow(session: str, clear: bool, root: Path | None = None) -> int:
     """세션의 셸 자동 허용 목록을 보거나 비운다."""
     approval = ShellApproval(session)
+    empty = not approval.exact and not approval.prefixes and not approval.scopes
     if clear:
-        if not approval.exact and not approval.prefixes:
+        if empty:
             print_info(f"[{session}] 자동 허용 목록이 이미 비어 있습니다.")
             return 0
         approval.clear()
@@ -4088,11 +4401,14 @@ def cmd_allow(session: str, clear: bool) -> int:
         return 0
 
     print_title(f"셸 자동 허용 목록  [{session}]")
-    if not approval.exact and not approval.prefixes:
+    if empty:
         print_info("등록된 항목이 없습니다. 확인 프롬프트에서 a 를 선택하면 추가됩니다.")
         return 0
     for prefix in sorted(approval.prefixes):
         print(f"   {C.green}계열{C.reset}  {prefix} {C.dim}(...){C.reset}")
+    for head, directory in sorted(approval.scopes):
+        label = scope_label(Path(directory), root) if root is not None else f"{directory}/"
+        print(f"   {C.yellow}폴더{C.reset}  {head} {C.dim}({label} 이하){C.reset}")
     for command in sorted(approval.exact):
         if command_prefix(command) not in approval.prefixes:
             print(f"   {C.cyan}정확{C.reset}  {command}")
@@ -4307,9 +4623,11 @@ def cmd_agent(
     auto_safe: bool = True,
     auto_workspace: bool = False,
     allow_all: bool = False,
+    ask_mode: str = "risky",
+    ask_source: str = "",
     no_balance: bool = False,
 ) -> int:
-    print_banner(session, root, chat_only)
+    print_banner(session, root, chat_only, ask_mode=ask_mode, ask_source=ask_source)
 
     stripped = prompt.strip().lower()
     if stripped in {"/summary", "/summarize", "/요약"}:
@@ -4702,7 +5020,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.summarize:
         return cmd_summarize(session, history_file, args.model, force=True)
     if args.allow_list or args.allow_clear:
-        return cmd_allow(session, clear=args.allow_clear)
+        return cmd_allow(session, clear=args.allow_clear, root=root)
     if args.delete:
         existed = history_file.is_file()
         if existed:
@@ -4735,16 +5053,8 @@ def main(argv: list[str] | None = None) -> int:
         list_sessions(session, folders, root)
         return 0
 
-    # 셸 자동 실행 범위: --confirm-all > --allow-all/LLM_ALLOW_ALL >
-    # --auto-workspace/LLM_AUTO_WORKSPACE > 기본(허용: sudo·설치만 확인)
-    if args.confirm_all:
-        auto_workspace, allow_all = False, False
-    elif args.allow_all or env_flag("LLM_ALLOW_ALL"):
-        auto_workspace, allow_all = False, True
-    elif args.auto_workspace or env_flag("LLM_AUTO_WORKSPACE"):
-        auto_workspace, allow_all = True, False
-    else:
-        auto_workspace, allow_all = False, True
+    # 셸 확인 범위: 명시 옵션이 환경변수보다 우선한다.
+    auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
 
     return cmd_agent(
         prompt=prompt,
@@ -4761,6 +5071,8 @@ def main(argv: list[str] | None = None) -> int:
         auto_safe=not args.confirm_all,
         auto_workspace=auto_workspace,
         allow_all=allow_all,
+        ask_mode=ask_mode,
+        ask_source=ask_source,
         no_balance=args.no_balance,
     )
 

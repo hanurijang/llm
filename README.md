@@ -164,8 +164,8 @@ llm --allow-clear
 | `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |
-| `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일) |
-| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령만 확인 없이 실행 (기본보다 엄격, `LLM_AUTO_WORKSPACE=1`이면 기본 활성) |
+| `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일, 명시 시 환경변수보다 우선) |
+| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령만 확인 없이 실행 (기본보다 엄격, `LLM_AUTO_WORKSPACE=1`이면 기본 활성, 명시 시 환경변수보다 우선) |
 | `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 50). 한도에 도달하면 종료하지 않고 **이어서 N회 더 진행할지 `[y/N]`으로 확인** |
 | `--no-stream` | 스트리밍 비활성화 |
@@ -173,7 +173,7 @@ llm --allow-clear
 | `--no-rates` | 실시간 환율 조회를 끄고 가정 환율로 환산 (`LLM_RATES=0`과 동일) |
 | `--no-thinking` | 사고(thinking) 비활성화 (더 빠른 응답, `--chat`에서 유용) |
 | `--show-thinking` | 사고 과정 원문을 회색으로 실시간 출력 (기본은 글자 수만 표시) |
-| `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (모든 셸 명령 확인, 다른 모드보다 우선) |
+| `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (모든 셸 명령 확인, 다른 모드·환경변수보다 우선) |
 | `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 |
 | `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 |
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
@@ -185,8 +185,17 @@ llm --allow-clear
 | `--delete` | 현재 세션 파일 삭제 및 폴더 매핑 해제 |
 | `--balance` | DeepSeek API 잔액 조회 (화폐별 잔액 + 원화 환산) |
 
-셸 실행 범위 우선순위: `--confirm-all` > `--allow-all`/`LLM_ALLOW_ALL` >
-`--auto-workspace`/`LLM_AUTO_WORKSPACE` > 기본(허용 모드).
+셸 실행 범위 우선순위: `--confirm-all` > `--allow-all` > `--auto-workspace` >
+`LLM_ALLOW_ALL` > `LLM_AUTO_WORKSPACE` > 기본(허용 모드). **직접 준 CLI 옵션이
+환경변수를 이깁니다.** 그래서 `/etc/env/.env`에 `LLM_AUTO_WORKSPACE=1`이 남아
+있어도 `--allow-all`로 실행하면 이번 실행은 기본(허용) 모드입니다. 현재 어떤
+모드로 도는지는 시작 배너의 `확인=...`에 표시되고, 모드가 환경변수에서 온
+경우에는 그 사실과 해제 방법을 함께 안내합니다.
+
+```text
+── 에이전트  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
+ℹ️  환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다 (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다.
+```
 
 ### 사용 예
 
@@ -622,7 +631,8 @@ llm --rules
    `🔧 shell <의도 요약>` 줄에 이미 표시됩니다).
    - `&&`, `||`, `|`, `;`로 이어진 조합 명령은 한 덩어리로 묻지 않고 **조각
      단위로 하나씩** 묻습니다(`1)`, `2)` …). 각 조각에 `y`(이번만) / `a`(그
-     조각 자동 허용) / `n`(전체 중단), 남은 조각을 한꺼번에 허용하려면 `all`.
+     조각 자동 허용) / `n`(전체 중단). 같은 프롬프트에서 남은 조각을 한꺼번에
+     넘기려면 `all`(저장하지 않음, 아래 5번 참고).
      `n`으로 중단하면 **그 프롬프트에서 `a`로 추가한 항목은 되돌립니다**(전에
      허용해 둔 항목은 유지).
 5. **자동 허용 목록(`a`)** — 확인 프롬프트에서 `a`를 고르면 같은 명령을
@@ -632,6 +642,15 @@ llm --rules
      저장해 `npm install -g x`, `npm install --save y`를 함께 허용하고, 정확히
      한 단어뿐이거나 서브커맨드가 없는 명령(`pytest`, `make` 등)은 정확
      일치로 저장합니다.
+   - **폴더 범위**: 대상 경로가 분명한 위험 명령(`rm`, `rmdir`, `mv`, `cp`,
+     `mkdir`, `touch`, `shred`, `truncate`, `sed`, `tee` …)은 **그 폴더 이하를
+     한꺼번에** 허용합니다. 예를 들어 `rm -rf build/a.txt`를 `a`로 허용하면
+     `build/` 안의 `rm`은 인자가 달라도 다시 묻지 않습니다(프롬프트에
+     `a = 이 명령 + rm (build/ 이하) 자동 허용`으로 표시).
+     홈·작업 폴더·`/`·`/tmp` 같은 루트, 경로가 여러 폴더로 갈리거나 `$VAR`로
+     숨겨진 경우에는 폴더 범위를 만들지 않습니다(정확 일치만).
+   - `all`은 `a`와 달리 **저장하지 않고 이번 실행 동안만** 확인을 생략합니다
+     (`llm`을 끝내면 해제). 급할 때 한 번 쓰기 좋습니다.
    - **조각별 저장**: 조합 명령은 조각마다 따로 기억합니다. `npm run build &&
      docker build -t app .`의 두 조각을 각각 `a`로 허용하면, 순서를 바꾸거나
      인자가 달라져도(`docker build -t app:v2 . && npm run build`) 다시 묻지
@@ -666,7 +685,20 @@ llm --rules
    전체: git status && pip install requests && ls
    2) 실행할 명령: pip install requests
    a = 이 명령/pip install 계열 자동 허용 (다시 묻지 않음)
+   all = 이번 실행 동안 확인 생략 (저장하지 않음)
    [y/N/all/a]: y
+```
+
+폴더 밖 파일 삭제처럼 대상 경로가 분명한 명령은 `a`가 **그 폴더 전체**를 기억해
+같은 폴더 안의 반복 작업을 묶어 줍니다(묶을 수 없으면 `a = 이 명령만 자동 허용`).
+
+```
+❓ 확인이 필요합니다
+   실행할 명령: rm -rf /srv/app/build/a.txt
+   a = 이 명령 + rm (/srv/app/build/ 이하) 자동 허용
+   all = 이번 실행 동안 확인 생략 (저장하지 않음)
+   [y/N/all/a]: a
+✅ 자동 허용에 추가했습니다: rm (/srv/app/build/ 이하) (해제: llm --allow-clear)
 ```
 
 `--auto-workspace`나 `--confirm-all`을 쓰면 아래 예시처럼 위험 조각까지 묻습니다.
@@ -692,10 +724,27 @@ llm --rules
 단일 명령이면 이전처럼 한 번만 묻습니다(`[y/N/a]`, `all` 없음). 조각마다 `a`를
 고르면 조각별로 저장되므로 **조합 순서나 인자가 바뀌어도** 이미 허용한 조각은
 다시 묻지 않습니다(예: `docker build -t app:v2 . && npm run build`는 바로 자동
-통과). 위험 프로그램(`rm`, `curl` 등)과 리다이렉션·명령 치환이 섞인 조각은
-정확히 같은 명령일 때만 자동 통과합니다. 그래서 `cd ... && cat > f <<'PY'`
-처럼 내용이 매번 달라지는 조합은 `a`로 허용해도 다음에는 다시 묻습니다. 이런
-반복 작업이 많으면 `--auto-workspace`(또는 `LLM_AUTO_WORKSPACE=1`)를 쓰세요.
+통과). 위험 프로그램(`rm`, `mv` 등)은 `a`로 **폴더 범위**를 잡거나 정확히 같은
+명령일 때만, 리다이렉션·명령 치환이 섞인 조각은 정확히 같은 명령일 때만 자동
+통과합니다. 파일을 만드는 heredoc(`cat > f <<'PY'`)은 본문이 실행 코드가 아니라
+데이터이므로 기본 모드에서 묻지 않습니다(아래 「heredoc·인라인 스크립트 처리」).
+확인이 자주 뜨는 반복 작업이 많으면 `--auto-workspace`(또는
+`LLM_AUTO_WORKSPACE=1`)를 쓰세요.
+
+### heredoc·인라인 스크립트 처리
+
+`cat > f.txt <<'EOF' … EOF`, `python3 - <<'EOF' … EOF`처럼 heredoc으로 넘기는
+**본문은 데이터로 보고** 설치·삭제 패턴을 스캔하지 않습니다(본문에 `pip install`
+문구가 있어도 설치로 오해해 묻지 않습니다). 그래도 아래는 확인 대상입니다.
+
+- `bash <<'EOF'`, `sh`, `zsh`, `source`, `eval`, `sudo` 등 **본문이 그대로 코드로
+  실행되는 경우**
+- `python3 -c '...'`, `node -e`, 인터프리터 단독 실행(`python3 -`, 파이프 입력)
+- `./run.sh`, `sh run.sh`처럼 **스크립트 파일 직접 실행**(내용을 검증할 수 없음)
+
+`--auto-workspace`(outside) 모드에서는 경로를 붙인 인터프리터
+(`./.venv/bin/python - <<'EOF'` 등)를 `python3 - <<'EOF'`와 **같은 기준**으로
+판단합니다(스크립트 실행과 동급). `-c`/`-e`로 코드를 넘기면 확인 대상입니다.
 
 ### 작업 폴더 안 자동 실행 (`--auto-workspace`)
 
@@ -718,7 +767,9 @@ llm --rules
   - **`.git`/`.`/`*` 삭제·이동**: `rm -rf .git`, `rm -rf .`, `rm -rf *`,
     `mv .git x`
   - **임의 코드 실행**: `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`,
-    `node -e`, 인터프리터 단독 실행, 스크립트 파일 직접 실행
+    `node -e`, 인터프리터 단독 실행, 스크립트 파일 직접 실행.
+    heredoc 본문이라도 그대로 실행되는 경우(`bash <<'EOF'`)는 포함됩니다
+    (자세한 기준은 위 「heredoc·인라인 스크립트 처리」).
   - **쓰기 옵션을 켠 `find`**: `find . -exec rm {} +`, `find . -delete`,
     `find . -ok ...`
   - **실행 대상을 바꾸는 환경변수 접두**: `PATH=/evil npm test`,
@@ -741,7 +792,7 @@ llm --rules
 | 삭제·덮어쓰기·권한 | `rm`, `rmdir`, `mv`, `cp`, `truncate`, `dd`, `shred`, `chmod`, `chown`, `tee` | 되돌리기 어렵거나 데이터 손실 |
 | 다운로드·설치·전송 | `curl`, `wget`, `pip install`, `npm install`, `npm ci`, `uv pip install`, `poetry install`, `apt install` | 외부 통신, 환경 변경 |
 | 원격·이력 변경 | `git commit`, `git push`, `git pull`, `git fetch`, `git checkout`, `git switch`, `git reset`, `git clean`, `git stash` | 이력/원격 상태 변경 |
-| 임의 코드 실행 | `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`, `eval`, `sed -i`, `awk`, `xargs` | 무엇이든 실행될 수 있음 |
+| 임의 코드 실행 | `bash run.sh`, `sh -c`, `bash <<'EOF'`(본문 실행), `./run.sh`, `python3 -c`, `node -e`, `eval`, `sed -i`, `awk`, `xargs` | 무엇이든 실행될 수 있음 |
 | 서비스·컨테이너 변경 | `docker run/build`, `kubectl apply/delete`, `systemctl restart`, `kill`, `pkill` | 실행 중인 환경에 영향 |
 | 파일을 고치는 검사 | `ruff check --fix`, `eslint --fix`, `black .`, `cargo fmt` | 검사 도구지만 파일 수정 |
 | 위험 조각이 섞인 연결 | `ls && rm -rf x`, `pytest -q && npm install`, `ls; cat f`(`;`) | 한 조각이라도 위험하면 그 조각은 확인 |
@@ -750,6 +801,22 @@ llm --rules
 확인 대상이며, 조각마다 `y`(이번만) / `a`(그 조각 자동 허용) / `n`(전체 거부)
 중에서 고릅니다(조합 명령이면 `all`로 남은 조각을 한꺼번에 허용).
 `llm --yes`는 모든 확인을 건너뜁니다.
+
+`--allow-list`는 저장된 범위를 세 종류로 나눠 보여 줍니다.
+
+```text
+셸 자동 허용 목록  [llm]
+   계열  npm install (...)
+   폴더  mkdir (/srv/app/build/ 이하)
+   폴더  rm (build/ 이하)
+   정확  git push origin main
+파일: ~/.local/share/llm/shell_allow_llm.json
+해제: llm --allow-clear
+```
+
+계열 접두에 포함되는 정확 항목은 목록에서 숨깁니다(`--allow-clear`로 한 번에
+비웁니다). 폴더 범위는 작업 폴더 기준 상대 경로(`build/`)로, 밖이면 절대
+경로로 표시합니다.
 
 ---
 
@@ -760,13 +827,18 @@ llm --rules
 | `DEEPSEEK_API_KEY` | (없음) | **필수**. API 키 |
 | `LLM_MODEL` | `deepseek-flash` | 기본 모델 |
 | `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(glow)을 끄고 원문 출력, 도구 결과 제자리 갱신도 끔(로그로 출력) |
-| `LLM_ALLOW_ALL` | (미설정) | `1`/`true`/`yes`/`on` 이면 `--allow-all`(기본값과 동일) |
-| `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐 |
+| `LLM_ALLOW_ALL` | (미설정) | `1`/`true`/`yes`/`on` 이면 `--allow-all`(기본값과 동일). 직접 준 CLI 옵션이 우선 |
+| `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐. 직접 준 CLI 옵션이 우선. 두 변수가 모두 있으면 `LLM_ALLOW_ALL`이 우선 |
 | `LLM_RATES` | (미설정) | `0`/`false`/`no`/`off` 이면 실시간 환율 조회를 끄고 가정 환율로 환산 (`--no-rates`와 동일) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
 `/etc/env/.env` 파일이 있으면 시작 시 로드됩니다(이미 설정된 환경변수는
 덮어쓰지 않음).
+
+`LLM_AUTO_WORKSPACE=1`이 남아 있어 확인(`y/N`)이 자주 뜬다면 `/etc/env/.env`에서
+그 줄을 지우거나 `0`으로 바꾸세요. 이번 실행만 바꾸려면 `llm --allow-all`(기본
+허용 모드)이나 `llm --confirm-all`처럼 **CLI 옵션을 직접 주면 환경변수를 이깁니다**.
+현재 모드는 시작 배너의 `확인=...`에서 바로 확인할 수 있습니다.
 
 ---
 
@@ -806,10 +878,13 @@ llm (bash)  →  agent.py (python)
 - **도구 계층**: `tool_*` 함수 + `run_tool` 디스패처 + `tool_schemas`
 - **안전/검증**: `resolve_in_workspace`, `is_secret_path`, `SHELL_DENY`,
   `is_safe_command`(읽기 전용 자동 실행), `needs_confirm_always`/`_deletes_outside_workspace`
-  (기본 허용 모드에서 `sudo`·설치·폴더 밖 삭제만 확인), `intent_summary`(명령 의도 요약),
+  (기본 허용 모드에서 `sudo`·설치·폴더 밖 삭제만 확인), `scan_text`/`heredoc_shell_exec`
+  (heredoc 본문은 데이터로, 셸에 넘길 때만 코드로 판정), `intent_summary`(명령 의도 요약),
   `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`, 중단 시 롤백),
+  `resolve_ask_mode`/`SHELL_ASK_LABELS`/`SHELL_ASK_SOURCES`(확인 모드 결정·배너 표시),
+  `scope_targets`/`scope_dir`/`scope_usable`/`scope_label`(폴더 단위 자동 허용 범위),
   `command_prefix` / `strip_env_assignments`(자동 허용 접두, 환경변수 지정 인식),
-  `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)
+  `ShellApproval`(세션별 자동 허용 목록: 정확·계열·폴더 범위, `--allow-list`/`--allow-clear`)
 - **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`
   (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),
   `load_session_rules`, `ref_digest`/`build_ref_context`/`inject_ref_context`(다른 세션
@@ -895,6 +970,11 @@ llm (bash)  →  agent.py (python)
 - TTY가 아닌 환경이면 `--yes`가 필요합니다.
 - 기본(허용) 모드에서도 `sudo`·설치·폴더 밖 삭제는 확인을 받습니다.
   자동화에서는 `--yes`를 쓰거나 해당 항목을 `a`로 한 번 허용하세요.
+- 예상보다 자주 묻는다면 배너의 `확인=` 값을 보세요. `outside`로 떠 있으면
+  `/etc/env/.env`의 `LLM_AUTO_WORKSPACE=1`이 원인일 수 있습니다(위 「설정과
+  환경변수」). `llm --allow-all`로 이번 실행만 기본 모드로 돌릴 수 있습니다.
+- 같은 폴더에서 반복 작업이 많으면 확인 프롬프트에서 `a`를 골라 그 폴더를
+  기억시키거나, `llm --allow-list`로 지금까지 허용된 범위를 확인하세요.
 
 ---
 
