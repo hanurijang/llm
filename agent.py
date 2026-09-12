@@ -118,6 +118,8 @@ TODO_LOGS: list[list[str]] = []
 AGENT_STEP = 0
 # 요약문에 실어 보내는 작업 계획 스냅샷(압축·다음 실행에서 같은 계획을 이어가기 위함).
 TODO_STAMP_RE = re.compile(r"<!--\s*llm-todo:(.*?)\s*-->", re.S)
+# 요약문에서 사람이 읽는 계획 블록의 머리말(이 줄 뒤로 목표·항목이 이어진다).
+TODO_PLAN_HEADER = "[진행 중인 작업 계획 — 새로 만들지 말고 이 계획을 이어서 갱신하세요]"
 
 # 폴더 이동(mv) 감지: 사라진 폴더의 세션 중 이어받을 후보를 고를 때의 상한/기준.
 MOVE_CANDIDATE_LIMIT = 5
@@ -2069,6 +2071,7 @@ def strip_reasoning(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 def save_history(path: Path, messages: list[dict[str, Any]]) -> None:
+    refresh_todo_snapshot(messages)  # 요약 헤드의 계획 스냅샷을 최신으로 맞춘다.
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text(json.dumps(strip_reasoning(messages), ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
@@ -2804,11 +2807,22 @@ def tool_line_done(slot: tuple[str, Any], text: str) -> None:
         PANEL.tool_done(handle, text)
 
 
+def todo_active() -> bool:
+    """지금 이어갈(진행 중인) 계획이 있는가.
+
+    항목이 하나라도 미완료면 활성, **모든 항목이 완료(done)면 끝난 작업**이라
+    활성이 아니다(목표만 있고 항목이 없으면 활성).
+    """
+    if any(str(it.get("status") or "") != "done" for it in CURRENT_TODO):
+        return True
+    return not CURRENT_TODO and bool(CURRENT_TODO_GOAL)
+
+
 def todo_plan_text() -> str:
-    """요약문에 실어 보낼 사람이 읽는 작업 계획 블록(계획이 없으면 "")."""
-    if not CURRENT_TODO and not CURRENT_TODO_GOAL:
+    """요약문에 실어 보낼 사람이 읽는 작업 계획 블록(이어갈 계획이 없으면 "")."""
+    if not todo_active():
         return ""
-    lines = ["[진행 중인 작업 계획 — 새로 만들지 말고 이 계획을 이어서 갱신하세요]"]
+    lines = [TODO_PLAN_HEADER]
     if CURRENT_TODO_GOAL:
         lines.append(f"🎯 {CURRENT_TODO_GOAL}")
     for it in CURRENT_TODO:
@@ -2820,41 +2834,78 @@ def todo_plan_text() -> str:
 
 def todo_stamp() -> str:
     """요약문에 심는 기계용 작업 계획 스냅샷(다음 실행에서 복원). 없으면 ""."""
-    if not CURRENT_TODO and not CURRENT_TODO_GOAL:
+    if not todo_active():
         return ""
     state = {"goal": CURRENT_TODO_GOAL, "items": CURRENT_TODO}
     return f"<!-- llm-todo:{json.dumps(state, ensure_ascii=False)} -->"
+
+
+def refresh_todo_snapshot(messages: list[dict[str, Any]]) -> None:
+    """요약 헤드에 심어 둔 작업 계획 스냅샷을 **지금 계획으로 최신화**한다.
+
+    스냅샷을 요약(압축) 때만 심으면 그 뒤 진행 상황이 반영되지 않아, 요약 헤드에
+    남은 옛 목표("새로 만들지 말고 이 계획을 이어서 갱신하세요")가 계속 모델에게
+    보이고 다음 실행에서도 되살아난다. 저장할 때마다 최신 계획으로 바꾸고,
+    **계획이 끝났으면(모든 항목 완료) 헤드에서 계획 블록·스냅샷을 걷어낸다**.
+    (이 프로세스가 계획을 전혀 모르면 — 예: `--view` — 아무것도 건드리지 않는다.)
+    """
+    if not CURRENT_TODO and not CURRENT_TODO_GOAL:
+        return
+    plan = todo_plan_text()
+    stamp = todo_stamp()
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, str) or SUMMARY_MARKER not in content:
+            continue
+        head = content.split(TODO_PLAN_HEADER)[0].rstrip()
+        if TODO_STAMP_RE.search(head):
+            # 헤드 앞쪽(요약문 자체)에 남은 옛 스냅샷도 지운다.
+            head = TODO_STAMP_RE.sub("", head).rstrip()
+        extra = f"{plan}\n{stamp}".strip()
+        msg["content"] = f"{head}\n\n{extra}" if extra else head
+        return
 
 
 def restore_todo(messages: list[dict[str, Any]]) -> bool:
     """앞선 요약문에 남은 작업 계획 스냅샷을 복원한다. 복원했으면 True.
 
     요약(압축)이나 새 실행에서 계획이 '새로 시작'되는 것을 막는다.
+
+    - 스냅샷은 **가장 마지막에 파싱되는 것**을 쓴다. 도구 출력 등에 우연히 섞인
+      스탬프 모양의 문자열(파싱 불가) 때문에 멀쩡한 계획을 잃지 않는다.
+    - **이미 전부 완료(done)된 계획은 복원하지 않는다.** 끝난 작업의 목표가 다음
+      실행에서 '진행 중'으로 되살아나 새 작업의 목표처럼 보이는 것을 막는다.
     """
     global CURRENT_TODO, CURRENT_TODO_GOAL
     stamp = ""
     for msg in messages:
         content = msg.get("content")
-        if isinstance(content, str):
-            found = TODO_STAMP_RE.findall(content)
-            if found:
-                stamp = found[-1]
+        if not isinstance(content, str):
+            continue
+        found = TODO_STAMP_RE.findall(content)
+        if not found:
+            continue
+        try:
+            candidate = json.loads(found[-1])
+        except (json.JSONDecodeError, TypeError):
+            continue  # 파싱 안 되는 스탬프 모양 문자열은 건너뛴다.
+        if isinstance(candidate, dict):
+            stamp = found[-1]
     if not stamp:
         return False
-    try:
-        state = json.loads(stamp)
-    except (json.JSONDecodeError, TypeError):
-        return False
-    if not isinstance(state, dict):
-        return False
+    state = json.loads(stamp)
     items = state.get("items")
+    restored: list[dict[str, str]] = []
     if isinstance(items, list):
-        CURRENT_TODO = [
+        restored = [
             {"content": str(it.get("content")), "status": str(it.get("status") or "pending")}
             for it in items[:TODO_RESTORE_MAX_ITEMS]
             if isinstance(it, dict) and it.get("content")
         ]
     goal = state.get("goal")
+    if restored and all(it["status"] == "done" for it in restored):
+        return False  # 끝난 작업: 계획도 목표도 이어가지 않는다.
+    CURRENT_TODO = restored
     if isinstance(goal, str) and goal:
         CURRENT_TODO_GOAL = goal
     return bool(CURRENT_TODO or CURRENT_TODO_GOAL)
@@ -2888,6 +2939,10 @@ def tool_todo(args: dict[str, Any]) -> str:
         CURRENT_TODO_GOAL = (
             goal if len(goal) <= TODO_GOAL_MAX_CHARS else goal[:TODO_GOAL_MAX_CHARS] + "…"
         )
+    elif not any(str(it.get("status") or "") != "done" for it in CURRENT_TODO):
+        # 이전 계획이 없거나 이미 전부 완료됐으면 옛 목표를 새 계획에 물려주지 않는다.
+        # (끝난 작업의 목표가 다음 작업의 목표처럼 보이는 것을 막는다.)
+        CURRENT_TODO_GOAL = ""
     TODO_LOGS = todo_remap_logs(CURRENT_TODO, TODO_LOGS, items)  # 같은 항목의 로그는 이어감
     CURRENT_TODO = items
     PANEL.begin()  # 계획을 그리기 전에 단계 패널 자리를 정리한다

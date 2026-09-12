@@ -32,12 +32,18 @@
 - **대화 요약(압축)을 넘어서도 이어진다.** 요약 시 진행 중인 계획이 요약문에
   함께 실리므로(`todo_plan_text`/`todo_stamp`), 요약 이후·다음 실행에서도 요약에
   남은 계획을 그대로 이어간다(`restore_todo`). 요약 뒤에 todo를 새로 시작하지 않는다.
+- **끝난 계획은 되살리지 않는다.** 모든 항목이 완료(done)된 계획은 복원·이어가기
+  대상이 아니며(`todo_active`), 저장할 때마다 요약 헤드의 스냅샷을 최신 계획으로
+  갱신하고 계획이 끝났으면 계획 블록·스냅샷을 헤드에서 걷어낸다
+  (`refresh_todo_snapshot`). 옛 목표(`🎯 …`)가 새 작업의 목표처럼 자동 설정되는
+  것을 막기 위함이다.
 - **상한 초과도 계속 하나의 job으로 처리한다.** 항목이 `TODO_MAX_ITEMS`(50)개를
   넘으면 화면에는 **완료 항목부터 접어** 보여주고(`… 완료 N개 접음 (전체 M개 항목,
   계속 이어감)`), 진행률·에이전트가 보는 목록은 전체 개수를 유지한다. 접혔다고
   작업을 쪼개거나 새 계획으로 넘어가지 않는다.
 - 이 동작을 바꿀 때는 `agent.py`의 `TODO_*` 상수·`render_todo`/`tool_todo`/
-  `todo_plan_text`/`todo_stamp`/`restore_todo`와 README 「작업 계획(todo) 표시」
+  `todo_active`/`todo_plan_text`/`todo_stamp`/`restore_todo`/
+  `refresh_todo_snapshot`와 README 「작업 계획(todo) 표시」
   섹션을 함께 갱신한다.
 
 ## 대화 기록 위치와 동기화 (필수)
