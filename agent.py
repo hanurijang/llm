@@ -4715,6 +4715,35 @@ def history_sync_paths(root: Path, session: str) -> list[str]:
     return paths
 
 
+def repo_history_sessions(root: Path) -> list[str]:
+    """이 폴더(`.llm/`)에 들어 있는 대화 기록의 세션 이름 목록(git clone 직후 안내용)."""
+    base = root / REPO_HISTORY_DIR_NAME
+    try:
+        files = sorted(base.glob("history_*.json"))
+    except OSError:
+        return []
+    names: list[str] = []
+    for path in files:
+        name = path.name[len("history_") : -len(".json")]
+        if not name or name.endswith(".migrated") or name in names:
+            continue
+        names.append(name)
+    return names
+
+
+def hint_repo_history(root: Path) -> None:
+    """저장소 폴더에 기록이 있으면 `-s` 로 이어가라고 알려준다(조용히 넘어감)."""
+    if not history_scope_is_repo():
+        return
+    names = repo_history_sessions(root)
+    if not names:
+        return
+    if len(names) == 1:
+        print_info(f"이 폴더(.llm/)에 대화 기록이 있습니다: llm -s {names[0]} --view")
+    else:
+        print_info("이 폴더(.llm/)에 대화 기록이 있습니다: " + ", ".join(names))
+
+
 def print_history_sync_hint(root: Path, history_file: Path) -> None:
     """기록이 아직 커밋되지 않았으면 동기화 방법을 알려준다(조용히 넘어감)."""
     if not history_scope_is_repo() or not history_file.is_file():
@@ -5338,6 +5367,7 @@ def main(argv: list[str] | None = None) -> int:
                         hint_move_candidates(root)  # 자동화/파이프: 안내만
                     print_error("이 폴더에 매핑된 세션이 없습니다.")
                     print_info("대화를 시작하거나  llm -s <이름>  으로 지정하세요.")
+                    hint_repo_history(root)
                     return 1
             else:
                 list_sessions(None, folders, root)
