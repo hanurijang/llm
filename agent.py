@@ -47,6 +47,10 @@ SUMMARY_DIR_NAME = "summaries"
 SUMMARY_MARKER = "[이전 대화 요약]"
 # 요약 시점의 메시지 수를 요약본 본문에 흔적 없이 남겨 쿨다운 판단에 쓴다.
 SUMMARY_STAMP_RE = re.compile(r"<!--\s*llm-summary-at:(\d+)\s*-->")
+
+# 다른 세션 참조(--ref): 이번 세션 대화에 1회 주입할 맥락의 상한.
+REF_MARKER = "[참고: 다른 세션의 맥락]"
+REF_MAX_CHARS = 24_000
 IGNORE_DIRS = {
     ".git",
     "node_modules",
@@ -2825,6 +2829,62 @@ def cmd_allow(session: str, clear: bool) -> int:
     return 0
 
 
+def ref_digest(messages: list[dict[str, Any]]) -> str:
+    """다른 세션 기록에서 참고용 텍스트(사용자/에이전트 발화)만 추출한다."""
+    lines: list[str] = []
+    for msg in messages:
+        role = msg.get("role")
+        content = (msg.get("content") or "").strip()
+        if role == "user" and content:
+            lines.append(f"[사용자] {content}")
+        elif role == "assistant" and content:
+            lines.append(f"[에이전트] {content}")
+    return "\n".join(lines)
+
+
+def build_ref_context(sessions: list[str], model: str) -> str | None:
+    """--ref 세션들의 맥락을 하나의 텍스트로 만든다. 참조 대상은 수정하지 않는다.
+
+    길면 요약을 시도하고, 실패하면 앞부분만 잘라 쓴다.
+    """
+    blocks: list[str] = []
+    for raw in sessions:
+        name = (raw or "").strip()
+        if not name:
+            continue
+        messages = load_history(history_file_for(name))
+        if not messages:
+            print_warn(f"참고 세션 '{name}'에 대화 기록이 없어 건너뜁니다.")
+            continue
+        digest = ref_digest(messages)
+        if not digest:
+            print_warn(f"참고 세션 '{name}'에 참고할 발화가 없어 건너뜁니다.")
+            continue
+        if len(digest) > REF_MAX_CHARS:
+            print_info(f"참고 세션 '{name}'이 길어 요약합니다…")
+            try:
+                summary = summarize_messages(messages, model)
+            except RuntimeError as exc:
+                print_warn(f"요약 실패({exc}); 앞부분만 사용합니다.")
+                summary = None
+            digest = summary if summary else digest[:REF_MAX_CHARS] + "\n…(이하 생략)"
+        blocks.append(f"### 세션 '{name}'\n{digest}")
+    if not blocks:
+        return None
+    return REF_MARKER + "\n" + "\n\n".join(blocks)
+
+
+def inject_ref_context(history_file: Path, sessions: list[str], model: str) -> str | None:
+    """참고 맥락을 이번 세션 대화에 사용자 메시지로 1회 주입·저장한다."""
+    context = build_ref_context(sessions, model)
+    if context is None:
+        return None
+    messages = load_history(history_file)
+    messages.append({"role": "user", "content": context})
+    save_history(history_file, messages)
+    return context
+
+
 def cmd_view(session: str, history_file: Path) -> int:
     if not history_file.is_file():
         print_error(f"[{session}] 세션에 저장된 대화가 없습니다.")
@@ -2902,6 +2962,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ('llm --show-thinking "질문"', "사고 과정 원문까지 표시"),
         ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
         ("llm -s <이름> --rebind", "다른 폴더의 세션을 이 폴더로 재지정"),
+        ("llm --ref <이름>", "다른 세션 맥락을 이번 세션에 1회 주입"),
         ("llm --unbind", "이 폴더의 세션 매핑 해제 (기록은 유지)"),
         ("llm --init-rules", ".llm/rules.md 생성"),
         ("llm --rules", "세션 규칙 보기"),
@@ -3152,6 +3213,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑)")
     parser.add_argument("--rebind", action="store_true", help="다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)")
     parser.add_argument("--unbind", action="store_true", help="이 폴더의 세션 매핑만 해제 (기록은 유지)")
+    parser.add_argument(
+        "--ref",
+        action="append",
+        metavar="세션",
+        help="다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용)",
+    )
     parser.add_argument("--chat", action="store_true", help="도구 없이 순수 채팅")
     parser.add_argument("-y", "--yes", action="store_true", help="셸 명령 확인 생략")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"모델 (기본: {DEFAULT_MODEL})")
@@ -3328,6 +3395,16 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         print_error(f"[{session}] 세션 파일이 존재하지 않습니다.")
         return 1
+
+    if args.ref:
+        context = inject_ref_context(history_file, args.ref, args.model)
+        if context is None:
+            print_error("참고(--ref)할 세션이 없습니다. 기록이 있는 세션 이름을 지정하세요.")
+            return 1
+        names = ", ".join(n.strip() for n in args.ref if n.strip())
+        print_ok(f"[{session}]에 참고 맥락을 주입했습니다: {names}")
+        if not prompt:
+            return 0
 
     if not prompt:
         list_sessions(session, folders, root)

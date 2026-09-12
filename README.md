@@ -133,6 +133,9 @@ llm --show-thinking "이 코드의 버그 원인을 추적해줘"
 # 읽기 전용 명령도 매번 확인 (자동 실행 비활성)
 llm --confirm-all "이 폴더 상태를 점검해줘"
 
+# 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업
+llm --ref design-notes "이 맥락 참고해서 인증 모듈 리팩터링 이어줘"
+
 # 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기
 llm --allow-list
 llm --allow-clear
@@ -160,6 +163,7 @@ llm --allow-clear
 | `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |
 | `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |
 | `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |
+| `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |
 | `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일) |
@@ -232,6 +236,7 @@ llm --delete
 | 대화·이어가기 / `--clear` / `--delete` / `--summarize` / `--run` / `--allow-clear` | 가능 | **거부** |
 | `-s <이름>` 으로 매핑(설정) | 가능 | **거부** |
 | `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |
+| `--ref <이름>` (다른 세션 맥락 주입) | 가능 | **가능 (참조 대상은 읽기 전용)** |
 
 - 다른 폴더가 소유한 세션 이름을 `-s`로 지정하면 거부하고 소유 폴더만
   안내합니다. 매핑 파일은 바뀌지 않습니다.
@@ -240,6 +245,22 @@ llm --delete
 - 세션을 옮기려면 `llm -s <이름> --rebind`로 **명시적으로** 지정해야 합니다.
   이전 소유 폴더는 매핑이 해제됩니다.
 - `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.
+
+### 다른 세션 맥락 참조 (`--ref`)
+
+진행 중인 세션(A)을 유지한 채 **다른 세션(B)의 맥락을 참고**하고 싶을 때 씁니다.
+
+- `llm --ref <이름> "질문"` 은 B의 맥락을 **이번 세션(A)에 1회 주입**한 뒤 대화를
+  진행합니다. A는 그대로 유지되고, B는 **읽기 전용**으로만 읽어 소유권·기록이
+  바뀌지 않습니다(`--view`와 같은 권한 규칙).
+- 주입 내용은 B의 사용자/에이전트 발화를 뽑아 `[참고: 다른 세션의 맥락]` 표시가
+  붙은 **사용자 메시지로 A 기록에 저장**됩니다(이후 턴에서도 A의 맥락으로 남음).
+- 여러 세션을 동시에 참조할 수 있습니다: `llm --ref A --ref B "질문"`.
+- 프롬프트 없이 `llm --ref B` 로 실행하면 **주입만 하고 종료**합니다
+  (A 세션이 이미 있어야 함).
+- B의 발췌가 `REF_MAX_CHARS`(24,000자)를 넘으면 요약을 시도하고, 실패하면 앞부분만
+  잘라 씁니다. 기록이 없는 세션 이름은 경고 후 건너뜁니다.
+- **소유권 이동이 필요하면 `--rebind`**, **맥락 참고만 하려면 `--ref`** 입니다.
 
 ---
 
@@ -613,7 +634,8 @@ llm (bash)  →  agent.py (python)
   `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)
 - **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`
   (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),
-  `load_session_rules`
+  `load_session_rules`, `ref_digest`/`build_ref_context`/`inject_ref_context`(다른 세션
+  맥락 1회 주입, `--ref`)
 - **요약/백업**: `should_summarize`, `summarize_messages`, `backup_conversation`,
   `apply_summary`, `maybe_summarize`, `cmd_summarize`
 - **UI**: `render_markdown`(glow), `print_title`/`print_info`/`print_ok`/
