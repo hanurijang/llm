@@ -857,23 +857,24 @@ def auto_session_name(root: Path, folders: dict[str, str]) -> str:
 
 
 def ensure_binding(
-    folders: dict[str, str], root: Path, session: str, *, reassign: bool = False
+    folders: dict[str, str], root: Path, session: str
 ) -> tuple[dict[str, str], str | None, str | None]:
     """이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.
+
+    이미 다른 폴더가 소유한 세션은 이 폴더로 끌어오지 않는다(남의 소유를 존중).
+    소유권을 옮기려면 소유 폴더에서 `llm --unbind` 후 이 폴더에서 다시 지정한다.
 
     반환: (folders, error, detail)
       - error="folder_already_bound" → detail=이 폴더에 이미 묶인 세션 이름
       - error="session_bound_elsewhere" → detail=세션을 소유한 폴더 경로
-    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.
     """
     folder_s = canonical_folder(root)
     owner = folder_for_session(folders, session)  # 세션을 소유한 폴더
     existing = folders.get(folder_s)  # 이 폴더에 묶인 세션
-    if not reassign:
-        if existing is not None and existing != session:
-            return folders, "folder_already_bound", existing
-        if owner is not None and owner != folder_s:
-            return folders, "session_bound_elsewhere", owner
+    if existing is not None and existing != session:
+        return folders, "folder_already_bound", existing
+    if owner is not None and owner != folder_s:
+        return folders, "session_bound_elsewhere", owner
     folders = {p: s for p, s in folders.items() if s != session and p != folder_s}
     folders[folder_s] = session
     save_bindings(folders)
@@ -2961,7 +2962,6 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ('llm --auto-workspace "질문"', "폴더 안 명령은 자동 실행"),
         ('llm --show-thinking "질문"', "사고 과정 원문까지 표시"),
         ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
-        ("llm -s <이름> --rebind", "다른 폴더의 세션을 이 폴더로 재지정"),
         ("llm --ref <이름>", "다른 세션 맥락을 이번 세션에 1회 주입"),
         ("llm --unbind", "이 폴더의 세션 매핑 해제 (기록은 유지)"),
         ("llm --init-rules", ".llm/rules.md 생성"),
@@ -3211,7 +3211,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         description="DeepSeek CLI 에이전트",
     )
     parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑)")
-    parser.add_argument("--rebind", action="store_true", help="다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)")
     parser.add_argument("--unbind", action="store_true", help="이 폴더의 세션 매핑만 해제 (기록은 유지)")
     parser.add_argument(
         "--ref",
@@ -3309,10 +3308,6 @@ def main(argv: list[str] | None = None) -> int:
         print_info(f"대화 기록은 남아 있습니다: {history_file_for(owned)}")
         return 0
 
-    if args.rebind and not args.session:
-        print_error("--rebind 는 -s <이름> 과 함께 사용하세요.")
-        return 1
-
     if args.session:
         session = args.session.strip()
         if not session:
@@ -3320,23 +3315,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         owner = folder_for_session(folders, session)  # 세션을 소유한 폴더
 
-        if args.rebind:
-            # 명시적 재지정: 이 폴더로 옮긴다(기존 소유 폴더는 해제됨).
-            folders, err, _ = ensure_binding(folders, root, session, reassign=True)
-            if err:
-                print_error(f"세션을 이 폴더로 옮기지 못했습니다: {err}")
-                return 1
-            if owner is not None and owner != folder_key:
-                print_info(f"세션 '{session}' 폴더 매핑: {owner} → {root}")
-            if owned is not None and owned != session:
-                print_info(f"이 폴더의 이전 세션 '{owned}' 매핑을 해제했습니다.")
-        elif owner is not None and owner != folder_key:
+        if owner is not None and owner != folder_key:
             # 남의 세션: 설정·수정·삭제는 거부, 조회(--view/--allow-list)만 허용.
             if not (inspect_only and read_only):
                 print_error(f"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:")
                 print_info(f"  {owner}")
                 print_info("이 폴더에서는 조회(--view)만 가능합니다.")
-                print_info(f"옮기려면  llm -s {session} --rebind")
+                print_info(f"맥락이 필요하면  llm --ref {session} \"질문\"")
+                print_info(f"소유권을 옮기려면 {owner} 에서  llm --unbind  후 여기서 다시 지정하세요.")
                 return 1
         elif owner is None and inspect_only and read_only:
             pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.
@@ -3345,7 +3331,7 @@ def main(argv: list[str] | None = None) -> int:
             folders, err, detail = ensure_binding(folders, root, session)
             if err == "folder_already_bound":
                 print_error(f"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.")
-                print_info("세션을 바꾸려면  llm -s <이름> --rebind")
+                print_info("바꾸려면  llm --unbind  후  llm -s <이름>")
                 return 1
             if err == "session_bound_elsewhere":
                 print_error(f"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:")
