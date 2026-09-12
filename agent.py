@@ -25,6 +25,9 @@ API_URL = "https://api.deepseek.com/chat/completions"
 BALANCE_URL = "https://api.deepseek.com/user/balance"
 HISTORY_DIR = Path.home() / ".local/share/llm"
 DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-flash")
+# 에이전트 루프 기본 최대 단계. 한도에 도달하면 이어서 진행할지 묻고,
+# y면 같은 값만큼 한도를 늘려 계속한다.
+DEFAULT_MAX_STEPS = 50
 MAX_READ_BYTES = 200_000
 MAX_TOOL_CHARS = 80_000
 MAX_GREP_HITS = 80
@@ -2898,6 +2901,26 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
     print(f"{C.dim}{rule()}{C.reset}")
 
 
+def ask_continue_steps(limit: int, extra: int) -> bool:
+    """최대 단계 도달 시 이어서 진행할지 묻는다. `y`면 True.
+
+    대화를 끊지 않고 사용자에게 결정을 넘긴다. TTY가 아니면(자동화/파이프)
+    물어볼 수 없으므로 중단한다.
+    """
+    if not sys.stdin.isatty():
+        print_info("TTY가 아니어서 자동으로 중단합니다. --max-steps 로 한도를 늘릴 수 있습니다.")
+        return False
+    try:
+        answer = input(
+            f"{C.yellow}⚠️  최대 단계({limit})에 도달했습니다.{C.reset} "
+            f"이어서 {extra}회 더 진행할까요? {C.bold}[y/N]{C.reset}: "
+        ).strip().lower()
+    except (EOFError, KeyboardInterrupt):
+        eprint()
+        return False
+    return answer in {"y", "yes", "ㅛ"}
+
+
 def cmd_agent(
     prompt: str,
     session: str,
@@ -2934,7 +2957,21 @@ def cmd_agent(
     progress = make_stream_progress(show_thinking) if stream else None
     approval = ShellApproval(session) if (not chat_only and not yes) else None
 
-    for _step in range(1, max_steps + 1):
+    step = 0
+    step_limit = max_steps
+    while True:
+        step += 1
+        if step > step_limit:
+            # 한도 도달: 바로 끝내지 않고 이어서 진행할지 묻는다.
+            if not ask_continue_steps(step_limit, max_steps):
+                print_warn(
+                    f"최대 단계({step_limit})에서 멈췄습니다. "
+                    "--max-steps 로 한도를 늘리거나 이어서 요청을 보내세요.",
+                    stream=True,
+                )
+                return 1
+            step_limit += max_steps
+
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
 
         messages = maybe_summarize(
@@ -3070,12 +3107,6 @@ def cmd_agent(
         print_warn(f"빈 응답 (finish={finish})", stream=True)
         return 1
 
-    print_warn(
-        f"최대 단계({max_steps})에 도달했습니다. --max-steps 로 늘리세요.",
-        stream=True,
-    )
-    return 1
-
 
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
@@ -3088,7 +3119,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("-y", "--yes", action="store_true", help="셸 명령 확인 생략")
     parser.add_argument("--root", help="작업 디렉터리 (기본: 현재 디렉터리)")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"모델 (기본: {DEFAULT_MODEL})")
-    parser.add_argument("--max-steps", type=int, default=40, help="에이전트 루프 최대 횟수")
+    parser.add_argument(
+        "--max-steps",
+        type=int,
+        default=DEFAULT_MAX_STEPS,
+        help=f"에이전트 루프 최대 횟수 (기본: {DEFAULT_MAX_STEPS}, 도달 시 이어서 진행할지 확인)",
+    )
     parser.add_argument("--no-stream", action="store_true", help="스트리밍 비활성화")
     parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
     parser.add_argument(
