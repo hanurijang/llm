@@ -662,5 +662,89 @@
     "tool_call_id": "call_00_eJ4v1B4sJyij1CAK7HXj1713",
     "name": "shell",
     "content": "exit 0\n--- stdout ---\npy_compile OK\n M .llm/history_llm.json\n M .llm/rules.md\n M .llm/summaries/llm/index.json\n M README.md\n M agent.py\n?? .llm/summaries/llm/2026-09-12T17-09-43.json\n?? .llm/summaries/llm/2026-09-12T17-09-43.md\nAlready up to date.\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_ik6mQACMn1tLeicVIgvX6961",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\ngit diff --stat\\ngit add -A && git commit -q -m \\\"fix(todo): 끝난 계획이 새 실행의 목표로 되살아나지 않게 (헤드 스냅샷 최신화·완료 계획 제거)\\\" && git log --oneline -1\\ngit push 2>&1 | tail -3\", \"timeout\": 120}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_ik6mQACMn1tLeicVIgvX6961",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n .llm/history_llm.json         | 526 ++++++++++++------------------------------\n .llm/rules.md                 |   8 +-\n .llm/summaries/llm/index.json |   9 +\n README.md                     |  11 +-\n agent.py                      |  85 +++++--\n 5 files changed, 239 insertions(+), 400 deletions(-)\naeff65e fix(todo): 끝난 계획이 새 실행의 목표로 되살아나지 않게 (헤드 스냅샷 최신화·완료 계획 제거)\nTo github.com:hanurijang/llm.git\n   d70a359..aeff65e  main -> main\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_vfWmG0SbnWK1SnB6mAWO4585",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\ngrep -rl \\\"sk-test\\\" .llm/ 2>/dev/null | head; echo \\\"---\\\"; python3 -c \\\"\\nimport json;p='.llm/summaries/llm/2026-09-12T17-09-43.md';print(open(p).read()[:300])\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_vfWmG0SbnWK1SnB6mAWO4585",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n.llm/summaries/llm/index.json\n.llm/summaries/llm/2026-09-12T17-09-43.json\n.llm/summaries/llm/2026-09-12T17-03-19.json\n.llm/summaries/llm/2026-09-12T17-09-43.md\n.llm/history_llm.json\n---\n# 대화 요약 — llm\n\n- 생성 시각: 2026-09-12 17:09:43\n- 메시지 수: 171\n- 문자 수: 149,989\n- 모델: deepseek-flash\n\n## 요약\n\n# 대화 요약\n\n## 사용자 목표/요청\n- **버그 지적**: \"왜 자꾸 `.env`를 검증하는 것이 목표(goal)로 자동설정되는거야? 코드에 오류가 있는 것 같아.\" → 세션마다 todo 목표가 옛 `.env 검증` 작업으로 되살아나는 원인을 코드에서 찾아 고칠 것.\n\n## 배경 (이전 흐름)\n- `.env` 로드 우선순위(`LLM_ENV_FILE \n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_jYLJOoFT7cOAKmfHz1eQ6932",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"rm -rf /tmp/todoe2e /tmp/todoe2e2 /tmp/todoe2e3 /tmp/todoe2e4 /tmp/todobug /tmp/todobug2 && echo \\\"테스트 임시 폴더 정리 완료\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_jYLJOoFT7cOAKmfHz1eQ6932",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n테스트 임시 폴더 정리 완료\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_8jA3znx2we4nRcOZZ8a88718",
+        "type": "function",
+        "function": {
+          "name": "todo",
+          "arguments": "{\"items\": [{\"content\": \"restore_todo/todo_stamp/todo_plan_text 구현 확인\", \"status\": \"done\"}, {\"content\": \"요약 여러 개일 때 goal 선택 로직 점검(오래된 값 재사용 여부)\", \"status\": \"done\"}, {\"content\": \"원인 수정 + 검증 + 커밋\", \"status\": \"done\"}]}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_8jA3znx2we4nRcOZZ8a88718",
+    "name": "todo",
+    "content": "📋 작업 계획 갱신: 총 3개, 완료 3개 · 목표 유지: todo 목표(goal)가 매 세션마다 \".env 검증\"으로 되살아나는 원인을 코드에서 찾아 고친다."
+  },
+  {
+    "role": "assistant",
+    "content": "원인을 찾아 고치고 검증·커밋·push까지 마쳤습니다(`aeff65e`).\n\n## 원인\n- 요약 헤드(대화 0번 메시지)에 심은 **옛 계획 스냅샷/계획 블록이 그대로 남아** 있었습니다. 스냅샷은 압축 시점에만 심겨서, 그 뒤 계획이 끝나도 헤드에는 `🎯 저장소 .env …`가 계속 남았고, 그 블록이 \"새로 만들지 말고 이 계획을 이어서 갱신하세요\"라고 지시하니 매 실행의 목표처럼 되살아났습니다.\n- 부수적으로 ① 전부 완료된 계획까지 `restore_todo`가 복원했고, ② 도구 출력에 섞인 파싱 불가 스탬프 모양 문자열이 더 뒤에 있으면 멀쩡한 계획을 잃었으며, ③ 이전 계획이 끝난 뒤 `goal` 없이 새 항목을 보내면 옛 목표를 물려받았습니다.\n\n## 변경 (agent.py)\n- `todo_active()` 신설: 미완료 항목이 없으면(모두 done) **끝난 계획**으로 간주 → `todo_plan_text()`/`todo_stamp()`가 빈 문자열.\n- `refresh_todo_snapshot()`: 저장할 때마다 요약 헤드 스냅샷을 최신 계획으로 교체하고, **계획이 끝났으면 헤드에서 계획 블록·스냅샷을 제거**(옛 스냅샷이 요약문 본문에 남아 있으면 함께 정리). 계획을 모르는 `--view` 등은 헤드를 건드리지 않습니다.\n- `restore_todo`: 가장 마지막에 **파싱되는** 스탬프만 채택하고, 전부 done이면 복원하지 않음.\n- `tool_todo`: 이전 계획이 없거나 전부 완료면 `goal` 생략 시 옛 목표를 물려주지 않음.\n- README 「작업 계획(todo) 표시」·`.llm/rules.md`에 위 규칙 반영.\n\n## 검증\n- `python3 -m py_compile agent.py` 통과, 단위 재현 10종(완료 계획 미복원·진행 계획 복원/유지·파싱 불가 스탬프 무시·헤드 최신화/제거·`--view` 불변) 전부 OK.\n- 실제 세션 기록 사본 + 가짜 모델 e2e: `.env` 계획을 완료 처리한 뒤 새 실행에서 **옛 `.env` 목표가 등장하지 않았고**, 진행 중인 계획은 다음 실행에서 정상적으로 이어졌습니다.\n\n## 남은 일\n- `raspApi/.env`의 `SLIDES_LLM_API_KEY` 미설정(슬라이드 LLM 꺼짐) — 이전부터 남은 과제."
   }
 ]
