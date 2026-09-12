@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import fnmatch
 import hashlib
 import http.client
@@ -64,6 +65,10 @@ TODO_REMINDER = (
 )
 # 현재 실행 중인 에이전트의 작업 계획(런마다 초기화). 종료 요약에 쓴다.
 CURRENT_TODO: list[dict[str, str]] = []
+
+# 폴더 이동(mv) 감지: 사라진 폴더의 세션 중 이어받을 후보를 고를 때의 상한/기준.
+MOVE_CANDIDATE_LIMIT = 5
+MOVE_SIMILARITY_MIN = 0.3  # 부모 경로만 같아도(+0.3) 후보로 올린다.
 IGNORE_DIRS = {
     ".git",
     "node_modules",
@@ -817,6 +822,18 @@ def bindings_file() -> Path:
 
 
 def load_bindings() -> dict[str, str]:
+    # 폴더가 사라진(고아) 바인딩은 제외한다. 예: 프로젝트 폴더를 mv/rm 한 뒤.
+    # mv 로 옮긴 경우에는 orphan_bindings() 로 후보를 찾아 이어받을 수 있고,
+    # 매핑을 저장할 때 파일에서도 함께 정리된다.
+    return {
+        path: session
+        for path, session in read_bindings_raw().items()
+        if os.path.isdir(path)
+    }
+
+
+def read_bindings_raw() -> dict[str, str]:
+    """bindings.json 의 폴더→세션 매핑(존재 여부 필터 없음, 경로 정규화만)."""
     path = bindings_file()
     if not path.is_file():
         return {}
@@ -827,18 +844,21 @@ def load_bindings() -> dict[str, str]:
     folders = data.get("folders")
     if not isinstance(folders, dict):
         return {}
-    # 키는 로드 시 정규화한다(예전에 저장된 raw 경로도 같은 폴더로 인식).
-    normalized: dict[str, str] = {}
+    raw: dict[str, str] = {}
     for path_str, session in folders.items():
         if not path_str or not session:
             continue
-        key = canonical_folder(str(path_str))
-        # 폴더가 사라진(고아) 바인딩은 무시한다. 예: 프로젝트 폴더를 mv/rm 한 뒤.
-        # 파일은 그대로 두므로, 경로가 다시 생기면(마운트 복구 등) 매핑도 되살아난다.
-        if not os.path.isdir(key):
-            continue
-        normalized[key] = str(session)
-    return normalized
+        raw[canonical_folder(str(path_str))] = str(session)
+    return raw
+
+
+def orphan_bindings() -> dict[str, str]:
+    """폴더가 사라진(고아) 매핑. mv 로 옮긴 폴더의 세션 후보를 찾는 데 쓴다."""
+    return {
+        path: session
+        for path, session in read_bindings_raw().items()
+        if not os.path.isdir(path)
+    }
 
 
 def save_bindings(folders: dict[str, str]) -> None:
@@ -904,6 +924,76 @@ def unbind_session(folders: dict[str, str], session: str) -> dict[str, str]:
 
 def folder_for_session(folders: dict[str, str], session: str) -> str | None:
     return next((path for path, sess in folders.items() if sess == session), None)
+
+
+def move_candidate_score(root: Path, old_path: str) -> float:
+    """'이 폴더가 old_path 에서 mv 로 왔을 가능성' 점수(0~1 이상).
+
+    폴더 이름 유사도가 기본이고, 이름/부모 경로가 같으면 가산한다.
+    """
+    root_s = canonical_folder(root)
+    root_base = os.path.basename(root_s)
+    old_base = os.path.basename(old_path)
+    score = difflib.SequenceMatcher(None, root_base, old_base).ratio()
+    if root_base and root_base == old_base:
+        score += 0.5
+    if os.path.dirname(root_s) == os.path.dirname(old_path):
+        score += 0.3
+    return score
+
+
+def find_move_candidates(root: Path) -> list[tuple[str, str]]:
+    """mv 로 옮겨온 것으로 보이는 (세션, 이전 경로) 후보를 점수순으로 돌려준다."""
+    scored: list[tuple[float, str, str]] = []
+    for old_path, session in orphan_bindings().items():
+        score = move_candidate_score(root, old_path)
+        if score >= MOVE_SIMILARITY_MIN:
+            scored.append((score, session, old_path))
+    scored.sort(key=lambda t: (-t[0], t[2]))
+    seen: set[str] = set()
+    out: list[tuple[str, str]] = []
+    for _, session, old_path in scored:
+        if session in seen:
+            continue
+        seen.add(session)
+        out.append((session, old_path))
+    return out[:MOVE_CANDIDATE_LIMIT]
+
+
+def prompt_move_binding(root: Path, new_session: str) -> str | None:
+    """폴더 이동(mv)으로 보이는 세션 후보를 보여주고 이어받을지 확인한다.
+
+    반환: 이어받을 세션 이름, 또는 None(새 세션 그대로).
+    TTY 가 아니면(자동화/파이프) 묻지 않고 None.
+    """
+    candidates = find_move_candidates(root)
+    if not candidates or not sys.stdin.isatty():
+        return None
+
+    root_base = os.path.basename(canonical_folder(root))
+    print()
+    print_info("이 폴더는 아직 세션에 연결되어 있지 않습니다.")
+    print_info("사라진 폴더에 남은 세션 후보입니다 (폴더를 옮기셨나요?):")
+    for idx, (session, old_path) in enumerate(candidates, 1):
+        hint = f" {C.dim}(이름 일치){C.reset}" if os.path.basename(old_path) == root_base else ""
+        print(f"   {C.bold}{idx}){C.reset} {C.cyan}{session}{C.reset}  {C.dim}← {old_path}{C.reset}{hint}")
+
+    prompt_txt = (
+        f"{C.yellow}❓ 이어받을 번호{C.reset} "
+        f"{C.bold}[1-{len(candidates)}]{C.reset} / "
+        f"{C.dim}Enter=새 세션 '{new_session}'{C.reset}: "
+    )
+    while True:
+        try:
+            answer = input(prompt_txt).strip()
+        except (EOFError, KeyboardInterrupt):
+            eprint()
+            return None
+        if not answer:
+            return None
+        if answer.isdigit() and 1 <= int(answer) <= len(candidates):
+            return candidates[int(answer) - 1][0]
+        print_warn(f"1~{len(candidates)} 사이 번호를 입력하거나 Enter 로 새 세션을 만드세요.")
 
 
 def summaries_dir(session: str) -> Path:
@@ -3497,6 +3587,12 @@ def main(argv: list[str] | None = None) -> int:
         if session is None:
             if prompt:
                 session = auto_session_name(root, folders)
+                # 폴더를 옮겨 온 흔적(고아 바인딩)이 있으면, 새 세션을 만들기 전에
+                # 이전 세션을 이어받을지 확인한다(사용자 확인 후 적용).
+                picked = prompt_move_binding(root, session)
+                if picked:
+                    session = picked
+                    print_ok(f"이전 세션 '{session}'을(를) 이어받았습니다.")
                 folders, err, _ = ensure_binding(folders, root, session)
                 if err:
                     print_error(f"세션을 만들지 못했습니다: {err}")
