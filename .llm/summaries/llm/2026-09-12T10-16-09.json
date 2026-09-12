@@ -1,0 +1,1242 @@
+{
+  "session": "llm",
+  "created_at": "2026-09-12T10:16:09",
+  "message_count": 122,
+  "chars": 147015,
+  "model": "deepseek-flash",
+  "summary": "# 대화 요약\n\n## 사용자 목표/요청\n- **프로젝트 구조 파악**: `llm`(DeepSeek CLI 코딩 에이전트, `agent.py` 3,370줄 + `README.md`) 구조 확인.\n- **핵심 요구**: `llm -s <이름> --rebind`의 목적을 재정의 — 소유권 이동이 아니라 **진행 중인 현재 세션(A)을 유지한 채 다른 세션(B)의 맥락을 참고해 A에 반영**하는 기능(방안 A: 1회성 참조 주입)을 원함.\n- **후속 지적**: (1) 사용법/README에 위험한 `--rebind`가 남아 있음, (2) `--unbind`도 불필요한 것 아닌지 / `mv` 시나리오에서 필요한지 검증 요청.\n\n## 결정된 사항과 이유\n- **방안 A 채택**: A는 그대로, B는 읽기 전용으로만 읽어 맥락을 1회 주입 (소유권·기록 불변).\n- **`--rebind` 완전 제거**: 남의 세션을 끌어오는 위험 명령. 대체 경로는 소유 폴더에서 `--unbind` → 옮길 폴더에서 `-s` 재지정.\n- **`--ref` 옵션 신설**: `llm --ref <세션>` (여러 번 지정 가능, 프롬프트 없으면 주입만 하고 종료).\n- `--rebind` 제거 이유: 세션-폴더 1:1 바인딩 보호, 오타·사고로 소유권 변경 방지.\n\n## 생성/수정된 파일과 핵심 변경\n- **`agent.py`**\n  - 추가: 상수 `REF_MARKER`(`[참고: 다른 세션의 맥락]`), `REF_MAX_CHARS=24_000`; 함수 `ref_digest`/`build_ref_context`/`inject_ref_context`; `--ref`(append) 옵션; `main` 주입 처리; 사용법 안내에 `--ref` 추가.\n  - 삭제/수정: `--rebind` 옵션·`main` 분기 제거, `ensure_binding`에서 `reassign` 파라미터 및 소유권 탈취 로직 제거, 거부 메시지를 안전 경로(`--ref` 안내 / `--unbind` 후 재지정)로 교체.\n  - 주입 동작: B 발췌 24,000자 초과 시 `summarize_messages` 요약 시도, 실패 시 앞부분 절단. 기록 없으면 경고 후 건너뜀, 전부 없으면 exit 1.\n- **`README.md`**\n  - 옵션 표·빠른 시작 예시·세션 권한 표·아키텍처 항목에 `--ref` 반영.\n  - `--rebind` 관련 행/문장/예시 전부 삭제, \"다른 세션 맥락 참조(`--ref`)\" 하위 섹션 신설.\n\n## 검증 결과\n- `python3 -m py_compile agent.py` OK.\n- `--ref`: 단일/다중/누락 세션 주입, 참조 대상 파일 해시 불변(읽기 전용), 인자 파싱(`-s`+`--`, `--view` 조합) 정상. selftest 잔여물(`ztest*`) 정리 완료.\n- 소유권 흐름: 매핑 → 재지정 거부 → 남의 세션 거부 → `--unbind` 후 재바인딩 성공.\n- `grep rebind` → 잔여 참조 없음. `llm --rebind` → unrecognized arguments 거부.\n\n## 커밋\n- `6fd2203 feat: --ref 로 다른 세션 맥락을 현재 세션에 1회 주입 (README 갱신)`\n- `27eda81 refactor: 위험한 --rebind 제거, 세션 이전은 --unbind 후 재지정으로 안내 (README 갱신)`\n\n## 미해결 과제 (TODO)\n- **`mv`/폴더 이동 시 고아 바인딩 문제**: `load_bindings`가 사라진 폴더 경로를 정리하지 않음. 재현 결과 —\n  - `mv proj proj2` 후 새 경로에서 `-s zmvproj` → `session_bound_elsewhere`로 거부(힌트는 삭제된 옛 경로 `proj`를 안내).\n  - 새 경로에서 `--unbind` → \"매핑된 세션 없음\"(exit 0)으로 아무것도 못 함.\n  - 옛 경로는 폴더가 없어 `unbind` 불가 → **세션에 접근할 방법이 막히는 교착 상태**.\n- 사용자의 마지막 질문(\"unbind도 필요없는거 아니야? mv 사용시 필요한거야?\")에 대한 결론/해결책(고아 바인딩 자동 정리 또는 mv 감지 로직 등) 미확정.",
+  "messages": [
+    {
+      "role": "user",
+      "content": "현재프로젝트구조를 파악해."
+    },
+    {
+      "role": "assistant",
+      "content": "프로젝트 구조를 파악하겠습니다. 먼저 전체 파일 목록과 주요 파일들을 살펴보겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_3btNjgwuezkbLQbtMBP39082",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"find . -type f -not -path './.git/*' -not -path './__pycache__/*' | head -50 && echo \\\"---SIZES---\\\" && wc -l $(find . -type f -name '*.py' -o -name '*.md' -not -path './.git/*' | grep -v __pycache__) 2>/dev/null\"}"
+          }
+        },
+        {
+          "id": "call_01_dexSBofuoIi0bUYmez0F2722",
+          "type": "function",
+          "function": {
+            "name": "list_dir",
+            "arguments": "{}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_3btNjgwuezkbLQbtMBP39082",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n./agent.py\n./.gitignore\n./.llm/rules.md\n./README.md\n./llm\n---SIZES---\n  3370 ./agent.py\n    68 ./.llm/rules.md\n   692 ./README.md\n  4130 total\n"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_dexSBofuoIi0bUYmez0F2722",
+      "name": "list_dir",
+      "content": ".\ndir  .llm/\nfile .gitignore (30 B)\nfile agent.py (126348 B)\nfile llm (403 B)\nfile README.md (34186 B)"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_OTWwP7aKcoVaKf2shPUn1077",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"llm\"}"
+          }
+        },
+        {
+          "id": "call_01_uYV6sTaaLnoBZ1ftTunZ3975",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_OTWwP7aKcoVaKf2shPUn1077",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/llm (17 lines)\n     1|#!/bin/bash\n     2|# DeepSeek CLI agent 진입점. 실제 로직은 agent.py.\n     3|\n     4|if [ -f /etc/env/.env ]; then\n     5|    set -a\n     6|    # shellcheck disable=SC1091\n     7|    . /etc/env/.env\n     8|    set +a\n     9|fi\n    10|\n    11|SOURCE=\"${BASH_SOURCE[0]}\"\n    12|if command -v readlink >/dev/null 2>&1; then\n    13|    SOURCE=\"$(readlink -f \"$SOURCE\" 2>/dev/null || echo \"$SOURCE\")\"\n    14|fi\n    15|DIR=\"$(cd \"$(dirname \"$SOURCE\")\" && pwd)\"\n    16|\n    17|exec python3 -u \"$DIR/agent.py\" \"$@\""
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_uYV6sTaaLnoBZ1ftTunZ3975",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/README.md (692 lines)\n     1|# llm — DeepSeek CLI 에이전트\n     2|\n     3|터미널에서 DeepSeek API를 사용해 파일 읽기/편집, 검색, 셸 실행을 수행하는\n     4|경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의\n     5|패키지 설치가 필요 없습니다.\n     6|\n     7|- **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수\n     8|- **채팅 모드**: 도구 없이 순수 대화\n     9|- **세션**: 폴더별로 대화 기록을 자동 연결·보존\n    10|- **세션 규칙**: 프로젝트별 지침을 `.llm/rules.md`에 남겨 매 요청에 반영\n    11|- **진행 표시 위주 출력**: 도구 호출만 보여주고, 사고 과정 원문은 기본으로 감춥니다(`--show-thinking`으로 확인)\n    12|- **기본 허용 모드**: `sudo`·설치·폴더 밖 삭제만 확인하고 나머지 셸 명령은 바로 실행\n    13|- **읽기 전용 셸 자동 실행**: `ls`, `cat`, `git status` 등 안전한 명령은 확인 없이 실행\n    14|\n    15|---\n    16|\n    17|## 목차\n    18|\n    19|1. [요구 사항](#요구-사항)\n    20|2. [설치](#설치)\n    21|3. [빠른 시작](#빠른-시작)\n    22|4. [사용법 (CLI 옵션)](#사용법-cli-옵션)\n    23|5. [세션과 폴더 매핑](#세션과-폴더-매핑)\n    24|6. [대화 요약과 백업](#대화-요약과-백업)\n    25|7. [응답 표시와 사고 과정](#응답-표시와-사고-과정)\n    26|8. [세션 규칙](#세션-규칙)\n    27|9. [에이전트 도구](#에이전트-도구)\n    28|10. [셸 실행과 안전장치](#셸-실행과-안전장치)\n    29|11. [설정과 환경변수](#설정과-환경변수)\n    30|12. [파일/데이터 위치](#파일데이터-위치)\n    31|13. [아키텍처](#아키텍처)\n    32|14. [문제 해결](#문제-해결)\n    33|15. [개발 규칙](#개발-규칙)\n    34|16. [라이선스](#라이선스)\n    35|\n    36|---\n    37|\n    38|## 요구 사항\n    39|\n    40|| 항목 | 설명 |\n    41||------|------|\n    42|| Python | 3.10 이상 (`str \\| None` 등 최신 타입 문법 사용) |\n    43|| 셸 | bash (셸 도구는 `/bin/bash`로 실행) |\n    44|| API 키 | `DEEPSEEK_API_KEY` 필요 |\n    45|| glow(선택) | 설치되어 있으면 최종 답변을 Markdown으로 렌더링. 없으면 원문 출력 |\n    46|\n    47|의존 패키지는 없습니다. `urllib`, `json`, `subprocess` 등 표준 라이브러리만\n    48|사용합니다.\n    49|\n    50|---\n    51|\n    52|## 설치\n    53|\n    54|### 1. API 키 설정\n    55|\n    56|`agent.py`는 시작 시 `/etc/env/.env`를 자동으로 읽습니다. 아래 형식으로\n    57|키를 저장하세요.\n    58|\n    59|```dotenv\n    60|DEEPSEEK_API_KEY=sk-...\n    61|```\n    62|\n    63|`/etc/env/.env`가 없으면 일반 환경변수로 지정해도 됩니다.\n    64|\n    65|```bash\n    66|export DEEPSEEK_API_KEY=sk-...\n    67|```\n    68|\n    69|### 2. 실행 파일 배치\n    70|\n    71|`llm`(bash 래퍼)과 `agent.py`가 같은 폴더에 있어야 합니다.\n    72|`llm` 래퍼는 자기 위치를 기준으로 `agent.py`를 찾습니다.\n    73|\n    74|```bash\n    75|# 저장소 위치\n    76|/home/<user>/codespace/userscript/llm/\n    77|├── llm          # 실행 진입점 (bash)\n    78|└── agent.py     # 실제 로직 (python)\n    79|```\n    80|\n    81|### 3. 전역 명령으로 등록 (권장)\n    82|\n    83|`~/bin`은 사용자 전역 명령을 두는 관례적인 경로입니다. 여기에 심볼릭 링크를\n    84|걸고 PATH에 등록하면 어디서든 `llm`으로 실행할 수 있습니다.\n    85|\n    86|```bash\n    87|mkdir -p ~/bin\n    88|ln -sf /home/<user>/codespace/userscript/llm/llm ~/bin/llm\n    89|echo 'export PATH=\"$HOME/bin:$PATH\"' >> ~/.bashrc\n    90|source ~/.bashrc\n    91|```\n    92|\n    93|동작 확인:\n    94|\n    95|```bash\n    96|which llm          # → /home/<user>/bin/llm\n    97|readlink ~/bin/llm # → /home/<user>/codespace/userscript/llm/llm\n    98|llm                # 인자 없이 실행하면 상태/세션 목록 표시\n    99|```\n   100|\n   101|> `~/bin`이 PATH에 없으면 새 셸에서 `llm`을 찾지 못합니다. 위 `export PATH`\n   102|> 한 줄이 영구 등록의 핵심입니다.\n   103|\n   104|---\n   105|\n   106|## 빠른 시작\n   107|\n   108|```bash\n   109|# 이 폴더에서 에이전트에게 질문 (도구 자동 사용)\n   110|llm \"이 프로젝트 구조를 요약해줘\"\n   111|\n   112|# 파일 내용을 읽고 고치도록 요청\n   113|llm \"agent.py의 확인 프롬프트 문구를 더 친절하게 다듬어줘\"\n   114|\n   115|# 도구 없이 순수 채팅\n   116|llm --chat \"파이썬에서 리스트와 튜플의 차이는?\"\n   117|\n   118|# 셸 명령 확인 생략 (자동화/신뢰 환경)\n   119|llm --yes \"테스트 돌리고 실패하면 원인 요약해줘\"\n   120|\n   121|# 기본값: sudo·설치·폴더 밖 삭제만 확인하고 나머지는 바로 실행\n   122|llm \"테스트 돌리고 실패하면 원인 요약해줘\"\n   123|\n   124|# 더 엄격하게: 작업 폴더 안에서 끝나는 명령만 확인 없이 실행\n   125|llm --auto-workspace \"빌드 정리하고 린트·포맷까지 돌려줘\"\n   126|\n   127|# 사고 과정 없이 빠르게 답만 받기\n   128|llm --no-thinking --chat \"리스트와 튜플 차이는?\"\n   129|\n   130|# 모델의 사고 과정 원문까지 보고 싶을 때 (기본은 도구 진행만 표시)\n   131|llm --show-thinking \"이 코드의 버그 원인을 추적해줘\"\n   132|\n   133|# 읽기 전용 명령도 매번 확인 (자동 실행 비활성)\n   134|llm --confirm-all \"이 폴더 상태를 점검해줘\"\n   135|\n   136|# 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기\n   137|llm --allow-list\n   138|llm --allow-clear\n   139|```\n   140|\n   141|세션은 실행한 폴더에 자동으로 연결됩니다. 같은 폴더에서 다시 `llm`을\n   142|호출하면 이전 대화 맥락이 이어집니다.\n   143|\n   144|---\n   145|\n   146|## 사용법 (CLI 옵션)\n   147|\n   148|### 기본 실행\n   149|\n   150|| 명령 | 설명 |\n   151||------|------|\n   152|| `llm \"질문\"` | 현재 폴더 세션으로 에이전트 실행 |\n   153|| `llm --chat \"질문\"` | 도구 없이 순수 채팅 |\n   154|| `llm` | 상태/세션 목록/사용법 표시 |\n   155|\n   156|### 옵션\n   157|\n   158|| 옵션 | 설명 |\n   159||------|------|\n   160|| `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |\n   161|| `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |\n   162|| `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\n   163|| `--chat` | 도구 없이 순수 채팅 모드 |\n   164|| `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |\n   165|| `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일) |\n   166|| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령만 확인 없이 실행 (기본보다 엄격, `LLM_AUTO_WORKSPACE=1`이면 기본 활성) |\n   167|| `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |\n   168|| `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 50). 한도에 도달하면 종료하지 않고 **이어서 N회 더 진행할지 `[y/N]`으로 확인** |\n   169|| `--no-stream` | 스트리밍 비활성화 |\n   170|| `--no-thinking` | 사고(thinking) 비활성화 (더 빠른 응답, `--chat`에서 유용) |\n   171|| `--show-thinking` | 사고 과정 원문을 회색으로 실시간 출력 (기본은 글자 수만 표시) |\n   172|| `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (모든 셸 명령 확인, 다른 모드보다 우선) |\n   173|| `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 |\n   174|| `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 |\n   175|| `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |\n   176|| `--rules` | 이 폴더의 세션 규칙 보기 |\n   177|| `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |\n   178|| `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |\n   179|| `--view` | 세션 대화 내용 보기 (Markdown) |\n   180|| `--clear` | 현재 세션 내용만 비우기 |\n   181|| `--delete` | 현재 세션 파일 삭제 및 폴더 매핑 해제 |\n   182|| `--balance` | DeepSeek API 잔액 조회 (KRW 환산) |\n   183|\n   184|셸 실행 범위 우선순위: `--confirm-all` > `--allow-all`/`LLM_ALLOW_ALL` >\n   185|`--auto-workspace`/`LLM_AUTO_WORKSPACE` > 기본(허용 모드).\n   186|\n   187|### 사용 예\n   188|\n   189|```bash\n   190|# 세션 이름을 명시적으로 고정 (이 폴더에 바인딩)\n   191|llm -s mysession \"이 대화는 mysession으로 저장해줘\"\n   192|\n   193|# 다른 폴더의 세션을 이 폴더로 옮김 (명시적)\n   194|llm -s mysession --rebind\n   195|\n   196|# 이 폴더의 세션 매핑만 해제 (기록은 유지)\n   197|llm --unbind\n   198|\n   199|# 다른 폴더 세션의 대화 내용 보기 (읽기 전용)\n   200|llm -s other --view\n   201|\n   202|# 최근 답변의 스크립트를 추출해 실행\n   203|llm --run\n   204|\n   205|# 세션 초기화 / 삭제\n   206|llm --clear\n   207|llm --delete\n   208|```\n   209|\n   210|> 옵션과 프롬프트를 함께 쓸 때는 프롬프트를 `--`로 구분할 수 있습니다.\n   211|> 예: `llm -s mysession -- \"질문\"`\n   212|\n   213|---\n   214|\n   215|## 세션과 폴더 매핑\n   216|\n   217|- **작업 폴더는 항상 지금 있는 폴더(`cwd`)입니다.** 경로를 지정하는\n   218|  `--root`는 없습니다.\n   219|- 하나의 **세션 이름**은 하나의 **폴더**에만 연결됩니다. 대화 기록은\n   220|  `~/.local/share/llm/history_<세션>.json`에 저장됩니다.\n   221|- 폴더-세션 매핑은 `~/.local/share/llm/bindings.json`에 저장되며, 경로 키는\n   222|  로드·저장 시 **정규화**됩니다(심볼릭 링크 해소, 뒤쪽 구분자 제거,\n   223|  macOS/Windows 대소문자 통일). `a`, `a/`, `a/.`, 심볼릭 링크 경로는 모두\n   224|  같은 폴더로 취급됩니다.\n   225|- 매핑이 없는 폴더에서 대화를 시작하면 **폴더 이름 기반으로 세션이 자동\n   226|  생성**됩니다. (예: `~/work/api` → 세션 `api`; 이름 충돌 시 해시 접미사 추가)\n   227|\n   228|### 소유와 권한\n   229|\n   230|| 동작 | 이 폴더의 세션 | 다른 폴더의 세션 |\n   231||------|------|------|\n   232|| 대화·이어가기 / `--clear` / `--delete` / `--summarize` / `--run` / `--allow-clear` | 가능 | **거부** |\n   233|| `-s <이름>` 으로 매핑(설정) | 가능 | **거부** |\n   234|| `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |\n   235|\n   236|- 다른 폴더가 소유한 세션 이름을 `-s`로 지정하면 거부하고 소유 폴더만\n   237|  안내합니다. 매핑 파일은 바뀌지 않습니다.\n   238|- 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `--view`처럼 보기만 하는\n   239|  명령만 허용됩니다. 보고만 하는 명령은 바인딩을 만들지 않습니다.\n   240|- 세션을 옮기려면 `llm -s <이름> --rebind`로 **명시적으로** 지정해야 합니다.\n   241|  이전 소유 폴더는 매핑이 해제됩니다.\n   242|- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\n   243|\n   244|---\n   245|\n   246|## 대화 요약과 백업\n   247|\n   248|대화가 길어지면 컨텍스트를 줄이기 위해 **자동 요약**되고, 요약 시점의\n   249|원본도 함께 백업됩니다.\n   250|\n   251|- 트리거(하이브리드)는 **압축 대상**, 즉 최근 `SUMMARY_KEEP_RECENT`(24)개를\n   252|  제외한 앞부분만 보고 판단합니다. 그 앞부분이 문자 수\n   253|  `SUMMARY_TRIGGER_CHARS`(120,000) 초과 **또는** 메시지 수\n   254|  `SUMMARY_TRIGGER_MESSAGES`(160) 초과 시 자동 실행.\n   255|  - 최근 메시지는 어차피 유지되므로, 대용량 도구 출력 몇 개로 요약이 걸리지\n   256|    않습니다.\n   257|- **쿨다운**: 직전 요약 이후 새 메시지가 `SUMMARY_MIN_NEW_MESSAGES`(40)개\n   258|  미만이면 요약하지 않습니다. 요약 직후 재요약이 겹치는 것을 막습니다.\n   259|  - 쿨다운은 요약본에 남긴 \"요약 시점 메시지 수\" 표시(HTML 주석)로 판단하며\n   260|    화면 표시에는 영향이 없습니다.\n   261|- 요약 후 최근 `SUMMARY_KEEP_RECENT`(24)개 메시지만 남기고, 이전 내용은\n   262|  요약문으로 대체합니다.\n   263|- 요약문은 최대 `SUMMARY_MAX_CHARS`(4,000)자, 한국어로 생성됩니다.\n   264|- 수동 실행: `/summary`, `/summarize`, `/요약` 슬래시 명령 또는\n   265|  `llm --summarize`(강제).\n   266|- 백업(요약본 `.md` + 원본 스냅샷 `.json`)은\n   267|  `~/.local/share/llm/summaries/<세션>/`에 저장됩니다.\n   268|\n   269|---\n   270|\n   271|## 응답 표시와 사고 과정\n   272|\n   273|기본은 **진행 과정만 보여주는 출력**입니다. 화면에는 아래 두 가지만 남습니다.\n   274|\n   275|- **도구 호출 한 줄**: `🔧 shell 파일을 작성하거나 수정합니다` 처럼\n   276|  **무엇을 하려는지 의도**를 먼저 표시하고(파일 도구는 경로), 바로 아래 줄에\n   277|  `✓`/`✗`와 결과 첫 줄을 붙입니다. 명령 원문은 확인이 필요할 때만 프롬프트에\n   278|  나옵니다.\n   279|- **진행 상태 한 줄**: 모델이 응답을 만드는 동안 `🧠 사고 중… 1,234자`,\n   280|  `✍️ 작성 중… 567자`처럼 글자 수만 갱신합니다.\n   281|\n   282|- **사고 과정(thinking)**: 모델이 `reasoning_content`를 반환해도 **원문은 기본\n   283|  으로 출력하지 않습니다**(영어 사고 과정이 화면을 채우는 것을 막기 위함).\n   284|  원문을 보고 싶으면 `--show-thinking`을 쓰면 회색으로 실시간 출력합니다.\n   285|  아예 사고를 끄려면 `--no-thinking`.\n   286|- **최종 답변**: 완료 후 `glow`(있으면)로 Markdown 렌더링하고, TTY가\n   287|  아니거나 `LLM_RAW` 설정 시 원문으로 출력합니다. 스트리밍 중에는 글자 수만\n   288|  표시합니다.\n   289|- **비스트리밍/폴백**: `--no-stream`이거나 스트림이 실패하면 완료 후 결과를\n   290|  한 번에 출력합니다. 이때도 사고 과정 원문은 감추고 `사고 과정 N자 진행`\n   291|  안내만 보여줍니다(`--show-thinking`이면 원문 출력).\n   292|- 사고 과정은 API 프로토콜상 같은 턴에서만 유효하므로 디스크에 저장하지\n   293|  않습니다.\n   294|\n   295|---\n   296|\n   297|## 세션 규칙\n   298|\n   299|프로젝트별 지침을 대화 기록과 별개로 코드 저장소에 남길 수 있습니다.\n   300|규칙은 **매 API 요청의 시스템 프롬프트에 포함**되어 모델이 따릅니다.\n   301|\n   302|### 파일 위치\n   303|\n   304|```\n   305|<작업폴더>/.llm/rules.md        # 기본 규칙 파일\n   306|<작업폴더>/.llm/rules/*.md      # 추가 규칙 (파일명 사전순으로 병합)\n   307|```\n   308|\n   309|### 사용\n   310|\n   311|```bash\n   312|# 템플릿 생성\n   313|llm --init-rules\n   314|\n   315|# 현재 적용되는 규칙 확인\n   316|llm --rules\n   317|```\n   318|\n   319|- 두 위치의 규칙을 합쳐 최대 `MAX_RULES_CHARS`(24,000자)까지 적용합니다.\n   320|- 규칙이 없으면 모델은 규칙 없이 동작합니다.\n   321|- \"규칙을 수정해줘\"라고 요청하면 에이전트가 해당 파일을 직접 편집합니다.\n   322|\n   323|### 작성 예\n   324|\n   325|```markdown\n   326|# 세션 규칙\n   327|\n   328|## 프로젝트\n   329|- Python 3.10, 표준 라이브러리만 사용\n   330|- 패키지 구조는 src/ 아래 유지\n   331|\n   332|## 코딩 규칙\n   333|- 편집은 str_replace 사용, 최소 변경\n   334|- 한글 응답\n   335|\n   336|## 하지 말 것\n   337|- 의존성 추가 금지\n   338|- .env, 키 파일 출력 금지\n   339|\n   340|## README\n   341|- 기능/옵션 변경 시 README.md를 즉시 갱신\n   342|```\n   343|\n   344|> **이 저장소의 규칙**: `agent.py`의 기능, CLI 옵션, 동작이 바뀌면\n   345|> `README.md`를 **즉시** 갱신합니다. 자세한 내용은 `.llm/rules.md` 참고.\n   346|\n   347|---\n   348|\n   349|## 에이전트 도구\n   350|\n   351|에이전트 모드에서 모델이 사용할 수 있는 도구입니다. 모든 경로는 **작업\n   352|루트(workspace) 안으로 제한**됩니다.\n   353|\n   354|| 도구 | 설명 | 주요 인자 |\n   355||------|------|-----------|\n   356|| `read_file` | 텍스트 파일 읽기 (1-based 줄 번호 prefix) | `path`, `offset`, `limit` |\n   357|| `write_file` | 파일 생성/덮어쓰기 | `path`, `contents` |\n   358|| `str_replace` | 고유 문자열 치환 (기존 파일 편집) | `path`, `old_string`, `new_string`, `replace_all` |\n   359|| `delete_file` | 워크스페이스 내 파일 삭제 | `path` |\n   360|| `list_dir` | 디렉터리 목록 | `path` |\n   361|| `glob` | 패턴으로 파일 찾기 (예: `**/*.py`) | `pattern`, `path` |\n   362|| `grep` | 정규식으로 내용 검색 | `pattern`, `path`, `glob`, `case_insensitive` |\n   363|| `shell` | bash 명령 실행 | `command`, `timeout` |\n   364|\n   365|### 제약\n   366|\n   367|- 경로는 워크스페이스 밖으로 나갈 수 없습니다.\n   368|- `.env`, `credentials.json`, `id_rsa`, `*.pem`, `*.key`, `.ssh/*` 등\n   369|  비밀/자격 증명 파일은 도구로 접근할 수 없습니다.\n   370|- 읽기/도구 출력은 각각 `MAX_READ_BYTES`(200KB), `MAX_TOOL_CHARS`(80KB),\n   371|  grep은 `MAX_GREP_HITS`(80)로 제한됩니다. 큰 파일은 offset/limit을 사용합니다.\n   372|\n   373|---\n   374|\n   375|## 셸 실행과 안전장치\n   376|\n   377|`shell` 도구는 다음 안전장치를 가집니다.\n   378|\n   379|1. **자동 실행 범위(기본값 = 허용 모드)** — 기본은 **`sudo`·설치·폴더 밖 삭제만\n   380|   확인**하고 나머지는 확인 없이 실행합니다(`--allow-all`, `LLM_ALLOW_ALL=1`과\n   381|   동일). 더 엄격하게 쓰려면 `--auto-workspace`(작업 폴더 안 명령만 허용),\n   382|   전부 확인하려면 `--confirm-all`을 씁니다.\n   383|   - 확인 대상 1(권한 상승): `sudo`, `su`, `doas`, `pkexec`\n   384|   - 확인 대상 2(설치·패키지 관리): `apt`/`dnf`/`pacman`/`brew` … `install`,\n   385|     `pip install`, `python -m pip install`, `npm install`/`ci`, `yarn add`,\n   386|     `uv pip install`, `poetry add`, `cargo`/`gem`/`go` `install`, `npx`,\n   387|     `make install` 등\n   388|   - 확인 대상 3(폴더 밖 삭제): `rm -rf ~/x`, `rm -rf ../x`, `rm -rf /tmp/x`처럼\n   389|     작업 폴더 밖을 지우는 `rm`/`rmdir`/`shred`/`truncate`/`dd`\n   390|   - 위험 패턴(`rm -rf /`, `mkfs.*`, …)은 어느 모드에서도 실행 자체가 차단됩니다.\n   391|2. **위험 패턴 차단** — 실행 전 금지 패턴 검사\n   392|   (예: `rm -rf /`, `mkfs.*`, `dd of=/dev/*`, fork bomb, `shutdown/reboot` 등)\n   393|3. **읽기 전용/검증 명령 자동 실행** — 아래 화이트리스트에 해당하면 확인 없이\n   394|   바로 실행합니다(실행 전에 무엇을 하는지 한 줄로만 안내).\n   395|   - 조회 계열: `ls`, `cat`, `head`, `tail`, `wc`, `grep`, `find`, `stat`,\n   396|     `pwd`, `echo`, `env`, `which`, `file`, `du`, `df`, `date`, `cd`, `sleep` 등\n   397|   - 조회 계열 2단어 조합: `pip list`, `pip show`, `node -v`, `rustc --version`,\n   398|     `tsc --noEmit`, `java -version` 등 (`SHELL_SAFE_PAIRS`)\n   399|   - 서브커맨드 조회/검증: `npm ls`, `npm test`, `cargo test`, `cargo check`,\n   400|     `go build`, `docker ps`, `kubectl get`, `systemctl status` 등\n   401|     (`SHELL_SAFE_SUBCOMMANDS`)\n   402|   - 테스트/린트/타입 검사: `pytest`, `ruff check .`, `flake8`, `mypy`, `eslint`,\n   403|     `shellcheck`, `gofmt`, `black --check`, `prettier --check`\n   404|     (`--fix`/`--write`/`-w`처럼 파일을 고치는 플래그가 있으면 확인 필요,\n   405|     `SHELL_SAFE_CHECKERS`/`SHELL_CHECK_WRITE_FLAGS`)\n   406|   - 프로젝트 스크립트: `npm test`, `npm run <test|lint|build|typecheck|...>`,\n   407|     `make <test|build|check|lint|...>` (`SHELL_SAFE_RUN_SCRIPTS`/`SHELL_SAFE_MAKE_TARGETS`)\n   408|   - Git 조회·스테이징: `git status`, `git log`, `git diff`, `git show`,\n   409|     `git branch`, `git add` (index만 변경, `git reset`으로 되돌림)\n   410|     — `commit`/`push`/`pull`/`checkout`/`reset`/`clean`/`stash`는 확인 필요\n   411|   - Python 조회: `python3 -m py_compile`, `python3 -m json.tool`, `python3 -m unittest`,\n   412|     `python3 script.py`, `python3 --version` 등 (`-c`/`-i` 같은 임의 코드 실행은 확인 필요)\n   413|   - 버전/도움말: `git --version`, `cargo --version`, `docker --version` 등\n   414|     (경로 실행 `./run.sh --version`은 제외)\n   415|   - 연결 명령(`&&`, `|`): **모든 조각이 자동 실행 대상일 때만** 자동 실행합니다.\n   416|     예) `git add -A && pytest -q`, `ls -la | head -5`는 자동 실행,\n   417|     `ls && rm -rf x`, `pytest -q && npm install`은 확인 대상.\n   418|     `;`(순차 연결)은 항상 확인 대상입니다.\n   419|   - 리다이렉션은 위험 판정(`> out.txt` 등), `/dev/null`·`2>&1`은 무해 처리\n   420|   - 환경변수 접두: `FOO=1 npm test`처럼 앞에 지정이 붙어도 프로그램을 보고\n   421|     같은 기준으로 판단합니다(`PATH`/`LD_PRELOAD`/`PYTHONPATH` 등 실행 대상을\n   422|     바꾸는 이름이 붙으면 확인 대상)\n   423|   - `--confirm-all`로 자동 실행을 끌 수 있습니다.\n   424|4. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 `[y/N/a]` 확인을 받습니다.\n   425|   프롬프트에는 **실제로 실행될 명령**만 보여줍니다(무엇을 하려는지는 위의\n   426|   `🔧 shell <의도 요약>` 줄에 이미 표시됩니다).\n   427|   - `&&`, `||`, `|`, `;`로 이어진 조합 명령은 한 덩어리로 묻지 않고 **조각\n   428|     단위로 하나씩** 묻습니다(`1)`, `2)` …). 각 조각에 `y`(이번만) / `a`(그\n   429|     조각 자동 허용) / `n`(전체 중단), 남은 조각을 한꺼번에 허용하려면 `all`.\n   430|     `n`으로 중단하면 **그 프롬프트에서 `a`로 추가한 항목은 되돌립니다**(전에\n   431|     허용해 둔 항목은 유지).\n   432|5. **자동 허용 목록(`a`)** — 확인 프롬프트에서 `a`를 고르면 같은 명령을\n   433|   **다시 묻지 않고** 실행합니다. `--yes`와 달리 명령별로만 허용되며\n   434|   세션별 파일에 저장됩니다.\n   435|   - 저장 범위: 위험하지 않은 명령은 **\"계열\"**(`npm install` 등 앞 두 토큰)로\n   436|     저장해 `npm install -g x`, `npm install --save y`를 함께 허용하고, 정확히\n   437|     한 단어뿐이거나 서브커맨드가 없는 명령(`pytest`, `make` 등)은 정확\n   438|     일치로 저장합니다.\n   439|   - **조각별 저장**: 조합 명령은 조각마다 따로 기억합니다. `npm run build &&\n   440|     docker build -t app .`의 두 조각을 각각 `a`로 허용하면, 순서를 바꾸거나\n   441|     인자가 달라져도(`docker build -t app:v2 . && npm run build`) 다시 묻지\n   442|     않습니다.\n   443|   - **환경변수 접두**: `FOO=1 npm run build`처럼 앞에 환경변수 지정이 있으면\n   444|     프로그램(`npm run`) 기준으로 접두를 만들고, 같은 이름이 붙은 변형도 함께\n   445|     허용합니다. 다만 `PATH`, `LD_PRELOAD`, `PYTHONPATH`, `GIT_SSH_COMMAND`\n   446|     처럼 실행 대상·로딩을 바꾸는 이름이 붙으면 계열 허용하지 않습니다\n   447|     (정확 일치만). 같은 기준이 읽기 전용 자동 실행과 `--auto-workspace`\n   448|     판정에도 적용됩니다.\n   449|   - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램은 계열\n   450|     허용하지 않습니다(정확 일치만). 조각 안에 리다이렉션(`>`), 백그라운드\n   451|     (`&`), 명령 치환(`$()`, 백틱)이 남아 있으면 계열 허용하지 않습니다.\n   452|     프롬프트에는 계열 허용이면 `a = 이 명령/<접두> 계열 자동 허용`,\n   453|     정확 일치면 `a = 이 명령만 자동 허용`으로 표시됩니다.\n   454|   - 인자에 따라 쓰기로 바뀌는 명령도 계열 허용하지 않습니다. 검사 도구의\n   455|     `--fix`/`-w`/`--install-types`, `find -exec`/`-delete`, `--in-place`,\n   456|     `--output`처럼 부작용을 켜는 인자가 붙으면 매번 확인합니다\n   457|     (예: `ruff check .`을 허용해도 `ruff format .`은 확인 대상).\n   458|   - 목록 확인/해제: `llm --allow-list`, `llm --allow-clear`\n   459|6. **TTY가 아니면** `--yes` 없이 실행 불가\n   460|7. **타임아웃** — 기본 60초, 최대 180초\n   461|\n   462|### 프롬프트가 뜨는 기준 (기본 모드)\n   463|\n   464|기본(허용) 모드에서는 **`sudo`·설치·폴더 밖 삭제 조각만** 프롬프트가 뜹니다.\n   465|나머지 조각은 조용히 실행되므로, 조합 명령에서도 물어보는 횟수가 적습니다.\n   466|\n   467|```\n   468|🔧 shell 저장소를 살펴봅니다\n   469|❓ 확인이 필요합니다 (조각 3개 중 1개 확인)\n   470|   전체: git status && pip install requests && ls\n   471|   2) 실행할 명령: pip install requests\n   472|   a = 이 명령/pip install 계열 자동 허용 (다시 묻지 않음)\n   473|   [y/N/all/a]: y\n   474|```\n   475|\n   476|`--auto-workspace`나 `--confirm-all`을 쓰면 아래 예시처럼 위험 조각까지 묻습니다.\n   477|\n   478|### 확인 프롬프트 예시 (조합 명령)\n   479|\n   480|도구 호출 줄에서 무엇을 하려는지 먼저 요약해 보여주고, 확인이 필요한 경우에만\n   481|프롬프트가 뜹니다. 조합 명령은 조각 단위로 하나씩 묻습니다.\n   482|\n   483|```\n   484|🔧 shell 빌드를 실행합니다 → 컨테이너를 다룹니다\n   485|❓ 확인이 필요합니다 (조각 2개 중 2개 확인)\n   486|   전체: npm run build && docker build -t app .\n   487|   1) 실행할 명령: npm run build\n   488|   a = 이 명령/npm run 계열 자동 허용 (다시 묻지 않음)\n   489|   [y/N/all/a]: a\n   490|   2) 실행할 명령: docker build -t app .\n   491|   a = 이 명령/docker build 계열 자동 허용 (다시 묻지 않음)\n   492|   [y/N/all/a]: a\n   493|✅ 자동 허용에 추가했습니다: npm run, docker build (해제: llm --allow-clear)\n   494|```\n   495|\n   496|단일 명령이면 이전처럼 한 번만 묻습니다(`[y/N/a]`, `all` 없음). 조각마다 `a`를\n   497|고르면 조각별로 저장되므로 **조합 순서나 인자가 바뀌어도** 이미 허용한 조각은\n   498|다시 묻지 않습니다(예: `docker build -t app:v2 . && npm run build`는 바로 자동\n   499|통과). 위험 프로그램(`rm`, `curl` 등)과 리다이렉션·명령 치환이 섞인 조각은\n   500|정확히 같은 명령일 때만 자동 통과합니다. 그래서 `cd ... && cat > f <<'PY'`\n   501|처럼 내용이 매번 달라지는 조합은 `a`로 허용해도 다음에는 다시 묻습니다. 이런\n   502|반복 작업이 많으면 `--auto-workspace`(또는 `LLM_AUTO_WORKSPACE=1`)를 쓰세요.\n   503|\n   504|### 작업 폴더 안 자동 실행 (`--auto-workspace`)\n   505|\n   506|`--auto-workspace`를 켜면 **명령이 건드리는 경로가 전부 작업 폴더 안에서\n   507|끝나고, 되돌릴 수 있는 명령이면** 확인 없이 실행합니다. \"폴더 안이면 다\n   508|허용\"에 가깝지만 아래 조건으로 범위를 막습니다.\n   509|\n   510|- 자동 실행되는 예: `rm -rf build`, `mkdir -p src/new`, `mv a.py b.py`,\n   511|  `sed -i s/a/b/ main.py`, `echo hi > out.txt`, `ruff format .`, `black .`,\n   512|  `npm test > out.txt`, `git add -A`, `git commit -m wip`, `git tag v1`,\n   513|  `find . -name '*.py'`, `make test > log.txt`\n   514|- 그래도 확인하는 경우:\n   515|  - **작업 폴더 밖을 건드림**: `rm -rf ../x`, `cp a.py /tmp/x`, `> /etc/hosts`,\n   516|    `~/...`, `/opt`, 변수·명령 치환(`$VAR`, `` `...` ``)으로 경로를 숨긴 명령\n   517|  - **설치·네트워크·권한 상승**: `sudo`, `apt`/`pip install`/`npm install`,\n   518|    `curl`/`wget`/`git clone`, `docker`/`kubectl`/`systemctl`, `kill`/`pkill`\n   519|  - **되돌릴 수 없는 Git 작업**: `push`, `pull`, `fetch`, `checkout`, `switch`,\n   520|    `restore`, `reset`, `clean`, `stash`, `rm`, `filter-branch`, `--amend`,\n   521|    `--force`, `--hard`, `--global`\n   522|  - **`.git`/`.`/`*` 삭제·이동**: `rm -rf .git`, `rm -rf .`, `rm -rf *`,\n   523|    `mv .git x`\n   524|  - **임의 코드 실행**: `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`,\n   525|    `node -e`, 인터프리터 단독 실행, 스크립트 파일 직접 실행\n   526|  - **쓰기 옵션을 켠 `find`**: `find . -exec rm {} +`, `find . -delete`,\n   527|    `find . -ok ...`\n   528|  - **실행 대상을 바꾸는 환경변수 접두**: `PATH=/evil npm test`,\n   529|    `LD_PRELOAD=...`, `PYTHONPATH=...` (일반 지정 `FOO=1 cmd`는 프로그램 기준\n   530|    으로 판단)\n   531|- `--confirm-all`과 함께 쓰면 `--auto-workspace`는 무시됩니다(모두 확인).\n   532|- 매번 플래그를 치기 번거로우면 `/etc/env/.env`에 `LLM_AUTO_WORKSPACE=1`을\n   533|  넣어 기본으로 켜 둘 수 있습니다(`--confirm-all`이 항상 우선).\n   534|- `--yes`처럼 확인 자체를 없애지는 않으므로, 위험한 명령은 그대로\n   535|  `[y/N/a]` 프롬프트를 거칩니다.\n   536|\n   537|### 확인이 필요한 명령 (엄격 모드)\n   538|\n   539|`--auto-workspace`처럼 자동 실행 화이트리스트를 쓰는 모드에서는 아래 명령이\n   540|`[y/N/a]` 확인 대상입니다(필요하면 `a`로 세션 한정 자동 허용). **기본(허용) 모드**\n   541|에서는 여기 있는 명령도 `sudo`·설치·폴더 밖 삭제가 아니면 그냥 실행됩니다.\n   542|\n   543|| 분류 | 예 | 이유 |\n   544||------|-----|------|\n   545|| 삭제·덮어쓰기·권한 | `rm`, `rmdir`, `mv`, `cp`, `truncate`, `dd`, `shred`, `chmod`, `chown`, `tee` | 되돌리기 어렵거나 데이터 손실 |\n   546|| 다운로드·설치·전송 | `curl`, `wget`, `pip install`, `npm install`, `npm ci`, `uv pip install`, `poetry install`, `apt install` | 외부 통신, 환경 변경 |\n   547|| 원격·이력 변경 | `git commit`, `git push`, `git pull`, `git fetch`, `git checkout`, `git switch`, `git reset`, `git clean`, `git stash` | 이력/원격 상태 변경 |\n   548|| 임의 코드 실행 | `bash run.sh`, `sh -c`, `./run.sh`, `python3 -c`, `eval`, `sed -i`, `awk`, `xargs` | 무엇이든 실행될 수 있음 |\n   549|| 서비스·컨테이너 변경 | `docker run/build`, `kubectl apply/delete`, `systemctl restart`, `kill`, `pkill` | 실행 중인 환경에 영향 |\n   550|| 파일을 고치는 검사 | `ruff check --fix`, `eslint --fix`, `black .`, `cargo fmt` | 검사 도구지만 파일 수정 |\n   551|| 위험 조각이 섞인 연결 | `ls && rm -rf x`, `pytest -q && npm install`, `ls; cat f`(`;`) | 한 조각이라도 위험하면 그 조각은 확인 |\n   552|\n   553|그 밖의 명령(예: `make install`, `make clean`, `npm run deploy`)도 엄격 모드에서는\n   554|확인 대상이며, 조각마다 `y`(이번만) / `a`(그 조각 자동 허용) / `n`(전체 거부)\n   555|중에서 고릅니다(조합 명령이면 `all`로 남은 조각을 한꺼번에 허용).\n   556|`llm --yes`는 모든 확인을 건너뜁니다.\n   557|\n   558|---\n   559|\n   560|## 설정과 환경변수\n   561|\n   562|| 이름 | 기본값 | 설명 |\n   563||------|--------|------|\n   564|| `DEEPSEEK_API_KEY` | (없음) | **필수**. API 키 |\n   565|| `LLM_MODEL` | `deepseek-flash` | 기본 모델 |\n   566|| `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(glow)을 끄고 원문 출력 |\n   567|| `LLM_ALLOW_ALL` | (미설정) | `1`/`true`/`yes`/`on` 이면 `--allow-all`(기본값과 동일) |\n   568|| `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐 |\n   569|| `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |\n   570|\n   571|`/etc/env/.env` 파일이 있으면 시작 시 로드됩니다(이미 설정된 환경변수는\n   572|덮어쓰지 않음).\n   573|\n   574|---\n   575|\n   576|## 파일/데이터 위치\n   577|\n   578|| 경로 | 용도 |\n   579||------|------|\n   580|| `/etc/env/.env` | API 키 등 환경변수 (자동 로드) |\n   581|| `~/.local/share/llm/history_<세션>.json` | 세션별 대화 기록 |\n   582|| `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (경로 키 정규화) |\n   583|| `~/.local/share/llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 |\n   584|| `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답) |\n   585|| `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |\n   586|\n   587|대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로\n   588|처리됩니다. 중간에 끊긴(도구 호출만 있고 결과가 없는) 턴은 로드 시 자동\n   589|정리됩니다. 사고 과정(`reasoning_content`)은 API 프로토콜상 같은 턴에서만\n   590|되돌려주고, 디스크에는 저장하지 않습니다(`strip_reasoning`).\n   591|\n   592|---\n   593|\n   594|## 아키텍처\n   595|\n   596|```\n   597|llm (bash)  →  agent.py (python)\n   598|```\n   599|\n   600|`agent.py`의 주요 구성:\n   601|\n   602|- **진입/CLI**: `main`, `parse_args`, `canonical_folder`\n   603|- **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행 → 결과 피드백 반복\n   604|- **API 계층**: `http_json`, `stream_chat`, `complete` (SSE 스트리밍, 비스트림\n   605|  폴백, `StreamInterrupted`로 부분 응답 보존, `on_delta`/`make_stream_progress`\n   606|  로 사고·본문 진행 표시)\n   607|- **도구 계층**: `tool_*` 함수 + `run_tool` 디스패처 + `tool_schemas`\n   608|- **안전/검증**: `resolve_in_workspace`, `is_secret_path`, `SHELL_DENY`,\n   609|  `is_safe_command`(읽기 전용 자동 실행), `needs_confirm_always`/`_deletes_outside_workspace`\n   610|  (기본 허용 모드에서 `sudo`·설치·폴더 밖 삭제만 확인), `intent_summary`(명령 의도 요약),\n   611|  `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`, 중단 시 롤백),\n   612|  `command_prefix` / `strip_env_assignments`(자동 허용 접두, 환경변수 지정 인식),\n   613|  `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)\n   614|- **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`\n   615|  (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),\n   616|  `load_session_rules`\n   617|- **요약/백업**: `should_summarize`, `summarize_messages`, `backup_conversation`,\n   618|  `apply_summary`, `maybe_summarize`, `cmd_summarize`\n   619|- **UI**: `render_markdown`(glow), `print_title`/`print_info`/`print_ok`/\n   620|  `print_warn`/`print_error`, `rule`(구분선, 한글 폭 고려)\n   621|\n   622|### 처리 흐름 (에이전트 모드)\n   623|\n   624|1. 사용자 프롬프트를 세션 기록에 추가하고 저장\n   625|2. 시스템 프롬프트(워크스페이스 정보 + 세션 규칙) 구성\n   626|3. 모델 호출 → (사고/작성 진행 상태 한 줄) → 텍스트 또는 도구 호출 수신\n   627|4. 도구 호출이면 `🔧 이름 <의도 요약>` 한 줄 + `✓/✗ 결과 요약`을 출력하고\n   628|   실행 후 결과를 대화에 추가해 3으로 반복 (셸은 확인이 필요할 때만 명령 원문\n   629|   프롬프트)\n   630|5. 최종 텍스트 응답을 저장하고 Markdown으로 출력\n   631|\n   632|반복이 `--max-steps`(기본 50)에 도달하면 곧바로 끝내지 않고 **이어서 같은\n   633|횟수만큼 더 진행할지 `[y/N]`으로 묻는다**(`ask_continue_steps`). `y`면 한도를\n   634|같은 값만큼 늘려 계속하고, `N`이면 그때까지의 기록을 저장한 채 멈춘다.\n   635|대화 기록은 저장돼 있으므로 이어서 요청을 보내면 계속 진행된다. TTY가\n   636|아닌 환경(파이프·자동화)에서는 물어볼 수 없으므로 자동으로 중단한다.\n   637|\n   638|---\n   639|\n   640|## 문제 해결\n   641|\n   642|### `llm: command not found`\n   643|\n   644|- `~/bin`이 PATH에 없을 수 있습니다.\n   645|  ```bash\n   646|  echo $PATH | tr ':' '\\n' | grep \"$HOME/bin\"\n   647|  echo 'export PATH=\"$HOME/bin:$PATH\"' >> ~/.bashrc\n   648|  source ~/.bashrc\n   649|  ```\n   650|- 심볼릭 링크 확인:\n   651|  ```bash\n   652|  readlink ~/bin/llm   # agent.py가 있는 llm을 가리켜야 함\n   653|  ```\n   654|\n   655|### `DEEPSEEK_API_KEY가 없습니다`\n   656|\n   657|- `/etc/env/.env` 또는 환경변수에 키가 있는지 확인하세요.\n   658|\n   659|### 답변이 Markdown 원문으로 보임\n   660|\n   661|- `glow`가 없거나, TTY가 아니거나, `LLM_RAW`가 설정된 경우입니다.\n   662|  ```bash\n   663|  which glow\n   664|  ```\n   665|\n   666|### 셸 실행이 거부됨\n   667|\n   668|- TTY가 아닌 환경이면 `--yes`가 필요합니다.\n   669|- 기본(허용) 모드에서도 `sudo`·설치·폴더 밖 삭제는 확인을 받습니다.\n   670|  자동화에서는 `--yes`를 쓰거나 해당 항목을 `a`로 한 번 허용하세요.\n   671|\n   672|---\n   673|\n   674|## 개발 규칙\n   675|\n   676|이 저장소에서 작업할 때 지켜야 할 규칙입니다.\n   677|\n   678|1. **표준 라이브러리만** 사용합니다(의존성 추가 금지).\n   679|2. 변경은 **최소**로, 기존 구조와 UI 스타일(아이콘/색상/구분선)을 유지합니다.\n   680|3. 기존 파일 편집은 `str_replace`로, 새 파일은 `write_file`로 작성합니다.\n   681|4. **기능/CLI 옵션/동작이 바뀌면 `README.md`를 즉시 갱신합니다.**\n   682|5. 한글 응답을 기본으로 합니다.\n   683|6. `.env`, 키 파일 등 비밀 정보는 출력하지 않습니다.\n   684|7. 편집 후에는 가능한 범위에서 검증합니다(문법 검사, 실행 확인 등).\n   685|\n   686|세션 규칙 원본은 [`.llm/rules.md`](.llm/rules.md)에서 관리됩니다.\n   687|\n   688|---\n   689|\n   690|## 라이선스\n   691|\n   692|별도 라이선스가 명시되지 않은 개인용 프로젝트입니다."
+    },
+    {
+      "role": "assistant",
+      "content": "README는 파악했습니다. 이제 `agent.py`의 실제 구조(함수/상수)를 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_zob1Vxk3OYQWpjsXjJWq6286",
+          "type": "function",
+          "function": {
+            "name": "grep",
+            "arguments": "{\"pattern\": \"^(def |class |[A-Z_0-9]+ *=)\", \"path\": \"agent.py\"}"
+          }
+        },
+        {
+          "id": "call_01_z8dcCxKkUJezwGD8vKTA4595",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && git log --oneline -10 2>/dev/null; echo \\\"---\\\"; git status --short 2>/dev/null; echo \\\"--- .gitignore ---\\\"; cat .gitignore\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_zob1Vxk3OYQWpjsXjJWq6286",
+      "name": "grep",
+      "content": "agent.py:24:API_URL = \"https://api.deepseek.com/chat/completions\"\nagent.py:25:BALANCE_URL = \"https://api.deepseek.com/user/balance\"\nagent.py:26:HISTORY_DIR = Path.home() / \".local/share/llm\"\nagent.py:27:DEFAULT_MODEL = os.environ.get(\"LLM_MODEL\", \"deepseek-flash\")\nagent.py:30:DEFAULT_MAX_STEPS = 50\nagent.py:31:MAX_READ_BYTES = 200_000\nagent.py:32:MAX_TOOL_CHARS = 80_000\nagent.py:33:MAX_GREP_HITS = 80\nagent.py:34:MAX_RULES_CHARS = 24_000\nagent.py:35:RULES_REL = Path(\".llm\") / \"rules.md\"\nagent.py:40:SUMMARY_TRIGGER_CHARS = 120_000\nagent.py:41:SUMMARY_TRIGGER_MESSAGES = 160\nagent.py:42:SUMMARY_KEEP_RECENT = 24\nagent.py:44:SUMMARY_MIN_NEW_MESSAGES = 40\nagent.py:45:SUMMARY_MAX_CHARS = 4_000\nagent.py:46:SUMMARY_DIR_NAME = \"summaries\"\nagent.py:47:SUMMARY_MARKER = \"[이전 대화 요약]\"\nagent.py:49:SUMMARY_STAMP_RE = re.compile(r\"<!--\\s*llm-summary-at:(\\d+)\\s*-->\")\nagent.py:50:IGNORE_DIRS = {\nagent.py:60:SECRET_NAMES = {\nagent.py:69:SHELL_DENY = (\nagent.py:78:SHELL_ASK_HEADS = {\"sudo\", \"su\", \"doas\", \"pkexec\"}\nagent.py:79:SHELL_ASK_PATTERNS = (\nagent.py:100:SHELL_ASK_DELETE_HEADS = {\"rm\", \"rmdir\", \"shred\", \"truncate\", \"dd\"}\nagent.py:103:def _deletes_outside_workspace(segment: str, root: Path) -> bool:\nagent.py:120:def needs_confirm_always(command: str, root: Path | None = None) -> bool:\nagent.py:138:SHELL_SAFE_COMMANDS = {\nagent.py:148:SHELL_SAFE_GIT_SUBCOMMANDS = {\nagent.py:154:SHELL_SAFE_PY_MODULES = {\nagent.py:158:SHELL_SAFE_CHECKERS = {\nagent.py:163:SHELL_CHECK_WRITE_FLAGS = {\nagent.py:167:SHELL_PAIRS_ONLY_READONLY = ((\"black\", {\"--check\", \"--diff\"}), (\"prettier\", {\"--check\"}))\nagent.py:169:SHELL_SAFE_PAIRS = {\nagent.py:177:SHELL_SAFE_SUBCOMMANDS = {\nagent.py:198:SHELL_SAFE_RUN_SCRIPTS = {\nagent.py:203:SHELL_SAFE_MAKE_TARGETS = {\nagent.py:208:SHELL_UNSAFE_PATTERN = re.compile(\nagent.py:218:SHELL_HARMLESS_REDIRECT = re.compile(r\"\\d?>\\s*/dev/null|\\d?>&\\s*\\d|&>\\s*/dev/null\")\nagent.py:221:SHELL_ENV_ASSIGN_RE = re.compile(r\"[A-Za-z_][A-Za-z0-9_]*=\\S*\")\nagent.py:223:SHELL_ENV_UNSAFE_NAMES = {\nagent.py:235:def strip_env_assignments(tokens: list[str]) -> tuple[list[str], list[str]]:\nagent.py:244:def env_assignments_unsafe(envs: list[str]) -> bool:\nagent.py:250:SHELL_WRITE_ARG_PATTERN = re.compile(\nagent.py:255:SHELL_CHAIN_SPLIT = re.compile(r\"&&|\\|\\||\\||;|&\")\nagent.py:258:SHELL_META_PATTERN = re.compile(r\"[;&|<>`\\n]|\\$\\(\")\nagent.py:260:SHELL_NO_PREFIX_HEADS = {\nagent.py:267:SHELL_SUBCOMMAND_PROGRAMS = {\nagent.py:273:SHELL_NO_PREFIX_SUBCOMMANDS = {(\"cargo\", \"fmt\"), (\"cargo\", \"clippy\")}\nagent.py:275:SHELL_FLAG_SENSITIVE_HEADS = {\nagent.py:282:SHELL_WORKSPACE_BLOCK_HEADS = {\nagent.py:296:SHELL_WORKSPACE_BLOCK_GIT = {\nagent.py:301:SHELL_WORKSPACE_BLOCK_GIT_FLAGS = {\"--amend\", \"--hard\", \"--force\"}\nagent.py:303:SHELL_WORKSPACE_CODE_FLAGS = {\"-c\", \"--command\", \"-e\", \"--eval\"}\nagent.py:304:SHELL_WORKSPACE_INTERPRETERS = {\nagent.py:308:SHELL_WORKSPACE_FIND_WRITE_ARGS = {\nagent.py:312:SHELL_WORKSPACE_PROTECTED_TARGETS = {\".\", \"..\", \"/\", \"~\", \"*\", \"./*\", \".git\", \"./.git\"}\nagent.py:313:SHELL_WORKSPACE_PROTECTED_HEADS = {\"rm\", \"rmdir\", \"mv\", \"chmod\", \"chown\", \"shred\"}\nagent.py:314:SHELL_WORKSPACE_SCRIPT_SUFFIXES = (\".sh\", \".bash\", \".zsh\", \".fish\", \".command\", \".ps1\")\nagent.py:315:SHELL_WORKSPACE_SPECIAL_PATHS = {\"/dev/null\", \"/dev/stdout\", \"/dev/stderr\", \"/dev/tty\"}\nagent.py:318:def is_safe_command(command: str) -> bool:\nagent.py:334:def _is_safe_simple_command(part: str) -> bool:\nagent.py:379:def _safe_package_command(head: str, rest: list[str]) -> bool:\nagent.py:388:def _safe_make(rest: list[str]) -> bool:\nagent.py:396:def _safe_python(rest: list[str]) -> bool:\nagent.py:413:def _workspace_path_ok(root: Path, token: str) -> bool:\nagent.py:439:def _workspace_fragment_safe(fragment: str, root: Path) -> bool:\nagent.py:483:def is_workspace_command(command: str, root: Path) -> bool:\nagent.py:501:def color_enabled() -> bool:\nagent.py:505:class C:\nagent.py:509:def init_color() -> None:\nagent.py:522:def eprint(*args: Any, **kwargs: Any) -> None:\nagent.py:526:def terminal_width() -> int:\nagent.py:533:RULE_WIDTH = 60\nagent.py:536:def char_width(ch: str) -> int:\nagent.py:543:def display_width(text: str) -> int:\nagent.py:547:def pad(text: str, width: int) -> str:\nagent.py:552:def rule(char: str = \"─\", label: str | None = None) -> str:\nagent.py:564:def print_title(label: str) -> None:\nagent.py:569:def print_section(label: str) -> None:\nagent.py:575:def print_info(message: str) -> None:\n... [stopped at 80 hits after 1 files]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_z8dcCxKkUJezwGD8vKTA4595",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n4910662 세션-폴더 1:1 바인딩: 소유 폴더 외 설정/수정 거부, --view 읽기 전용 허용, --rebind/--unbind 추가, --root·current_session 제거\n632a81a 에이전트 한도 도달 시 이어서 진행 여부 확인(y/N) 추가, --max-steps 기본값 50\nc5b1dd9 rules: 셀프테스트 잔여 파일 삭제 상시 허용 예외 추가\ncb6eca6 docs: 엄격 모드 명칭 명확화\n3e99751 기본 셸 실행을 허용 모드로 변경(--allow-all) 및 README 갱신\ndd167ad feat: 단계 구분선(── N/M단계 ──) 출력 제거 (README 갱신)\n8b2a80b docs: --auto-workspace 환경변수 접두 예외 설명 추가\nd2b3da3 feat: 자동 허용 조각별 저장, 환경변수 접두 인식, 중단 시 롤백\n16ce273 feat: 조합 셸 명령의 확인·자동 허용을 조각 단위로 분리 (README 갱신)\n8dfc54e feat: run 스크립트 의도 세분화(test/build/lint) 및 자동 허용 안내 문구 정리 (README 갱신)\n---\n--- .gitignore ---\n__pycache__/\n*.pyc\n*.bak\n.env\n"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_3f3mePIkrvr0VdaeJ8zf2482",
+          "type": "function",
+          "function": {
+            "name": "grep",
+            "arguments": "{\"path\": \"agent.py\", \"pattern\": \"^def \"}"
+          }
+        },
+        {
+          "id": "call_01_qhSDWquTO4kd1DPm0rlI0274",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && python3 -m py_compile agent.py && echo \\\"py_compile OK\\\" && python3 --version\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_3f3mePIkrvr0VdaeJ8zf2482",
+      "name": "grep",
+      "content": "agent.py:103:def _deletes_outside_workspace(segment: str, root: Path) -> bool:\nagent.py:120:def needs_confirm_always(command: str, root: Path | None = None) -> bool:\nagent.py:235:def strip_env_assignments(tokens: list[str]) -> tuple[list[str], list[str]]:\nagent.py:244:def env_assignments_unsafe(envs: list[str]) -> bool:\nagent.py:318:def is_safe_command(command: str) -> bool:\nagent.py:334:def _is_safe_simple_command(part: str) -> bool:\nagent.py:379:def _safe_package_command(head: str, rest: list[str]) -> bool:\nagent.py:388:def _safe_make(rest: list[str]) -> bool:\nagent.py:396:def _safe_python(rest: list[str]) -> bool:\nagent.py:413:def _workspace_path_ok(root: Path, token: str) -> bool:\nagent.py:439:def _workspace_fragment_safe(fragment: str, root: Path) -> bool:\nagent.py:483:def is_workspace_command(command: str, root: Path) -> bool:\nagent.py:501:def color_enabled() -> bool:\nagent.py:509:def init_color() -> None:\nagent.py:522:def eprint(*args: Any, **kwargs: Any) -> None:\nagent.py:526:def terminal_width() -> int:\nagent.py:536:def char_width(ch: str) -> int:\nagent.py:543:def display_width(text: str) -> int:\nagent.py:547:def pad(text: str, width: int) -> str:\nagent.py:552:def rule(char: str = \"─\", label: str | None = None) -> str:\nagent.py:564:def print_title(label: str) -> None:\nagent.py:569:def print_section(label: str) -> None:\nagent.py:575:def print_info(message: str) -> None:\nagent.py:579:def print_ok(message: str) -> None:\nagent.py:583:def print_warn(message: str, stream: bool = False) -> None:\nagent.py:588:def print_error(message: str, stream: bool = True) -> None:\nagent.py:593:def render_markdown(text: str, raw: bool = False) -> None:\nagent.py:646:def clear_status() -> None:\nagent.py:651:def make_stream_progress(show_thinking: bool = False) -> Callable[[str, str], None]:\nagent.py:751:def load_dotenv(path: Path = Path(\"/etc/env/.env\")) -> None:\nagent.py:765:def env_flag(name: str) -> bool:\nagent.py:770:def api_key() -> str:\nagent.py:778:def history_file_for(session: str) -> Path:\nagent.py:783:def canonical_folder(path: Path | str) -> str:\nagent.py:798:def bindings_file() -> Path:\nagent.py:802:def load_bindings() -> dict[str, str]:\nagent.py:822:def save_bindings(folders: dict[str, str]) -> None:\nagent.py:831:def sanitize_session_name(name: str) -> str:\nagent.py:837:def auto_session_name(root: Path, folders: dict[str, str]) -> str:\nagent.py:855:def ensure_binding(\nagent.py:879:def unbind_session(folders: dict[str, str], session: str) -> dict[str, str]:\nagent.py:885:def folder_for_session(folders: dict[str, str], session: str) -> str | None:\nagent.py:889:def summaries_dir(session: str) -> Path:\nagent.py:893:def history_chars(messages: list[dict[str, Any]]) -> int:\nagent.py:905:def last_summary_count(messages: list[dict[str, Any]]) -> int | None:\nagent.py:918:def should_summarize(messages: list[dict[str, Any]]) -> bool:\nagent.py:941:def summarize_prompt(messages: list[dict[str, Any]]) -> str:\nagent.py:973:def summarize_messages(messages: list[dict[str, Any]], model: str) -> str | None:\nagent.py:999:def backup_conversation(\nagent.py:1071:def keep_recent_complete_messages(\nagent.py:1141:def apply_summary(\nagent.py:1196:def maybe_summarize(\nagent.py:1253:def cmd_summarize(\nagent.py:1284:def load_history(path: Path) -> list[dict[str, Any]]:\nagent.py:1327:def strip_reasoning(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:\nagent.py:1337:def save_history(path: Path, messages: list[dict[str, Any]]) -> None:\nagent.py:1344:def repair_history(\nagent.py:1464:def workspace_listing(root: Path, limit: int = 40) -> str:\nagent.py:1494:def rules_path(root: Path) -> Path:\nagent.py:1498:def extra_rules_dir(root: Path) -> Path:\nagent.py:1502:def load_session_rules(root: Path) -> str:\nagent.py:1520:def cmd_show_rules(root: Path, raw: bool = False) -> int:\nagent.py:1537:def cmd_init_rules(root: Path) -> int:\nagent.py:1550:def build_system_prompt(root: Path, session: str) -> str:\nagent.py:1582:def build_chat_system_prompt() -> str:\nagent.py:1597:def tool_schemas() -> list[dict[str, Any]]:\nagent.py:1687:def is_secret_path(path: Path) -> bool:\nagent.py:1697:def resolve_in_workspace(root: Path, raw: str) -> Path:\nagent.py:1710:def clip(text: str, limit: int = MAX_TOOL_CHARS) -> str:\nagent.py:1716:def tool_read_file(root: Path, args: dict[str, Any]) -> str:\nagent.py:1743:def tool_write_file(root: Path, args: dict[str, Any]) -> str:\nagent.py:1754:def tool_str_replace(root: Path, args: dict[str, Any]) -> str:\nagent.py:1772:def tool_delete_file(root: Path, args: dict[str, Any]) -> str:\nagent.py:1780:def tool_list_dir(root: Path, args: dict[str, Any]) -> str:\nagent.py:1799:def should_skip_dir(name: str) -> bool:\nagent.py:1803:def tool_glob(root: Path, args: dict[str, Any]) -> str:\nagent.py:1823:def tool_grep(root: Path, args: dict[str, Any]) -> str:\nagent.py:1874:def split_shell_commands(command: str) -> list[tuple[str, str]]:\nagent.py:2017:def strip_heredoc_bodies(command: str) -> str:\nagent.py:2039:def intent_for_step(command: str) -> str | None:\n... [stopped at 80 hits after 1 files]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_qhSDWquTO4kd1DPm0rlI0274",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\npy_compile OK\nPython 3.12.3\n"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_VVtE6zZ1QrKsKx7KY7zB6837",
+          "type": "function",
+          "function": {
+            "name": "grep",
+            "arguments": "{\"path\": \"agent.py\", \"pattern\": \"^def (?![a-z_]+:).*(2[1-9]\\\\d\\\\d|3\\\\d\\\\d\\\\d)\"}"
+          }
+        },
+        {
+          "id": "call_01_TsIZB3FJJZr1XLlQjsWl3448",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && grep -n '^def ' agent.py | tail -40\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_VVtE6zZ1QrKsKx7KY7zB6837",
+      "name": "grep",
+      "content": "(no matches in 1 files)"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_TsIZB3FJJZr1XLlQjsWl3448",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n1710:def clip(text: str, limit: int = MAX_TOOL_CHARS) -> str:\n1716:def tool_read_file(root: Path, args: dict[str, Any]) -> str:\n1743:def tool_write_file(root: Path, args: dict[str, Any]) -> str:\n1754:def tool_str_replace(root: Path, args: dict[str, Any]) -> str:\n1772:def tool_delete_file(root: Path, args: dict[str, Any]) -> str:\n1780:def tool_list_dir(root: Path, args: dict[str, Any]) -> str:\n1799:def should_skip_dir(name: str) -> bool:\n1803:def tool_glob(root: Path, args: dict[str, Any]) -> str:\n1823:def tool_grep(root: Path, args: dict[str, Any]) -> str:\n1874:def split_shell_commands(command: str) -> list[tuple[str, str]]:\n2017:def strip_heredoc_bodies(command: str) -> str:\n2039:def intent_for_step(command: str) -> str | None:\n2119:def intent_summary(command: str) -> str:\n2138:def allow_file(session: str) -> Path:\n2142:def command_key(command: str) -> str:\n2147:def command_prefix(command: str) -> str | None:\n2176:def has_write_args(command: str) -> bool:\n2277:def shell_allow_hint(approval: \"ShellApproval | None\", target: str) -> str:\n2287:def ask_shell_segment(\n2314:def confirm_shell(\n2398:def tool_shell(\n2450:def parse_tool_args(raw: str) -> dict[str, Any]:\n2463:def run_tool(\n2502:def summarize_args(name: str, raw_args: str) -> str:\n2521:def http_json(url: str, payload: dict[str, Any] | None = None, timeout: int = 180) -> Any:\n2551:def stream_chat(\n2663:def complete(\n2748:def print_banner(session: str, root: Path, chat_only: bool) -> None:\n2761:def cmd_balance() -> int:\n2783:def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:\n2803:def cmd_allow(session: str, clear: bool) -> int:\n2828:def cmd_view(session: str, history_file: Path) -> int:\n2839:def last_assistant_text(messages: list[dict[str, Any]]) -> str:\n2846:def extract_bash_block(text: str) -> str | None:\n2853:def cmd_run(session: str, history_file: Path) -> int:\n2883:def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> None:\n2939:def ask_continue_steps(limit: int, extra: int) -> bool:\n2959:def cmd_agent(\n3146:def parse_args(argv: list[str]) -> argparse.Namespace:\n3196:def main(argv: list[str] | None = None) -> int:\n"
+    },
+    {
+      "role": "assistant",
+      "content": "구조를 충분히 파악했습니다. 요약해 드립니다.\n\n## 프로젝트 구조 — `llm` (DeepSeek CLI 코딩 에이전트)\n\n### 파일 구성\n```\nllm/\n├── llm            # bash 진입점 (17줄, /etc/env/.env 로드 후 agent.py 실행)\n├── agent.py       # 실제 로직 (3,370줄 / ~126KB, Python 표준 라이브러리만)\n├── README.md      # 문서 (692줄, 한국어)\n├── .llm/rules.md  # 세션 규칙 (매 요청 시스템 프롬프트에 포함)\n└── .gitignore     # __pycache__, .env 등\n```\n- 실행: `llm` 래퍼가 자기 위치 기준으로 `python3 -u agent.py \"$@\"` 실행. Python 3.10+ 필요(현재 3.12.3).\n- `python3 -m py_compile agent.py` → OK (정상 상태).\n\n### `agent.py` 논리 구조 (기능별)\n| 영역 | 주요 함수/상수 |\n|------|----------------|\n| **CLI/진입** | `main`, `parse_args`, `canonical_folder`, `cmd_balance` |\n| **API 계층** | `http_json`, `stream_chat`, `complete` (SSE 스트리밍, 비스트림 폴백, `StreamInterrupted`) |\n| **에이전트 루프** | `cmd_agent` (모델 호출→도구 실행→피드백 반복), `ask_continue_steps` (`--max-steps` 한도 시 y/N) |\n| **도구 계층** | `tool_read_file/write_file/str_replace/delete_file/list_dir/glob/grep/shell`, `run_tool` 디스패처, `tool_schemas` |\n| **안전/검증** | `resolve_in_workspace`, `is_secret_path`, `SHELL_DENY`, `is_safe_command`, `needs_confirm_always`, `_deletes_outside_workspace`, `is_workspace_command`, `intent_summary` |\n| **셸 확인/허용** | `confirm_shell`, `ask_shell_segment`, `command_prefix`, `strip_env_assignments`, `ShellApproval` (`--allow-list`/`--allow-clear`) |\n| **세션/바인딩** | `load_history`/`save_history`, `ensure_binding`/`load_bindings`, `unbind_session`, `canonical_folder` |\n| **요약/백업** | `should_summarize`, `summarize_messages`, `backup_conversation`, `apply_summary`, `maybe_summarize` |\n| **규칙** | `load_session_rules`, `build_system_prompt`, `cmd_show_rules`, `cmd_init_rules` |\n| **UI** | `render_markdown`(glow), `print_title/info/ok/warn/error`, `rule`, `display_width`/`pad`(한글 폭) |\n\n### 핵심 동작 요약\n- **두 모드**: 에이전트 모드(도구 자동 사용) / `--chat`(도구 없는 순수 대화).\n- **셸 실행 안전장치**(핵심 설계): 기본은 **허용 모드**(`--allow-all`)로 `sudo`·설치·폴더 밖 삭제만 확인, 나머지는 자동 실행. `--auto-workspace`(작업폴더 내 명령만), `--confirm-all`(전부 확인)로 강도 조절. 위험 패턴(`rm -rf /` 등)은 무조건 차단.\n- **세션 모델**: 폴더 1:1 바인딩(`bindings.json`), 대화는 `~/.local/share/llm/history_<세션>.json`에 원자적 저장. 소유 폴더 외 세션은 `--view` 같은 읽기 전용만 허용.\n- **대화 요약**: 최근 24개 제외 앞부분이 12만 자/160개 초과 시 자동 요약(쿨다운 40개), 요약본+원본을 `summaries/<세션>/`에 백업.\n- **상수 기본값**: 모델 `deepseek-flash`, `--max-steps` 50, `MAX_READ_BYTES` 200KB, `MAX_TOOL_CHARS` 80KB, `MAX_GREP_HITS` 80, `MAX_RULES_CHARS` 24,000.\n\n### 데이터/설정 위치\n- `/etc/env/.env`(자동 로드, `DEEPSEEK_API_KEY` 등), `~/.local/share/llm/`(히스토리·바인딩·요약·셸 허용), `<작업폴더>/.llm/rules.md`.\n\n문서(`README.md`)와 실제 코드가 잘 일치하며, 최근 커밋 이력은 세션 1:1 바인딩·조각별 셸 허용·한도 도달 확인 기능이 반영되어 있습니다. 특정 부분(예: `cmd_agent` 루프 상세, 셸 허용 로직)을 더 깊게 보고 싶으시면 알려주세요."
+    },
+    {
+      "role": "user",
+      "content": "llm -s <이름> --rebind 명령어의 사용목적은?"
+    },
+    {
+      "role": "assistant",
+      "content": "`--rebind`의 정확한 동작을 코드에서 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_1QCqh2gcAL2KZNt9Jzjo0766",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"agent.py\", \"offset\": 855, \"limit\": 40}"
+          }
+        },
+        {
+          "id": "call_01_Rcs3rtBdx4I5UNMkhSRu8207",
+          "type": "function",
+          "function": {
+            "name": "grep",
+            "arguments": "{\"path\": \"agent.py\", \"pattern\": \"rebind|ensure_binding|--unbind\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_1QCqh2gcAL2KZNt9Jzjo0766",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n   855|def ensure_binding(\n   856|    folders: dict[str, str], root: Path, session: str, *, reassign: bool = False\n   857|) -> tuple[dict[str, str], str | None, str | None]:\n   858|    \"\"\"이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.\n   859|\n   860|    반환: (folders, error, detail)\n   861|      - error=\"folder_already_bound\" → detail=이 폴더에 이미 묶인 세션 이름\n   862|      - error=\"session_bound_elsewhere\" → detail=세션을 소유한 폴더 경로\n   863|    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.\n   864|    \"\"\"\n   865|    folder_s = canonical_folder(root)\n   866|    owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\n   867|    existing = folders.get(folder_s)  # 이 폴더에 묶인 세션\n   868|    if not reassign:\n   869|        if existing is not None and existing != session:\n   870|            return folders, \"folder_already_bound\", existing\n   871|        if owner is not None and owner != folder_s:\n   872|            return folders, \"session_bound_elsewhere\", owner\n   873|    folders = {p: s for p, s in folders.items() if s != session and p != folder_s}\n   874|    folders[folder_s] = session\n   875|    save_bindings(folders)\n   876|    return folders, None, None\n   877|\n   878|\n   879|def unbind_session(folders: dict[str, str], session: str) -> dict[str, str]:\n   880|    folders = {canonical_folder(path): sess for path, sess in folders.items() if sess != session}\n   881|    save_bindings(folders)\n   882|    return folders\n   883|\n   884|\n   885|def folder_for_session(folders: dict[str, str], session: str) -> str | None:\n   886|    return next((path for path, sess in folders.items() if sess == session), None)\n   887|\n   888|\n   889|def summaries_dir(session: str) -> Path:\n   890|    return HISTORY_DIR / SUMMARY_DIR_NAME / sanitize_session_name(session)\n   891|\n   892|\n   893|def history_chars(messages: list[dict[str, Any]]) -> int:\n   894|    \"\"\"대화 전체의 대략적인 문자 수(도구 결과 포함).\"\"\"\n... [2476 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_Rcs3rtBdx4I5UNMkhSRu8207",
+      "name": "grep",
+      "content": "agent.py:855:def ensure_binding(\nagent.py:863:    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.\nagent.py:2904:        (\"llm -s <이름> --rebind\", \"다른 폴더의 세션을 이 폴더로 재지정\"),\nagent.py:2905:        (\"llm --unbind\", \"이 폴더의 세션 매핑 해제 (기록은 유지)\"),\nagent.py:3153:    parser.add_argument(\"--rebind\", action=\"store_true\", help=\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\")\nagent.py:3154:    parser.add_argument(\"--unbind\", action=\"store_true\", help=\"이 폴더의 세션 매핑만 해제 (기록은 유지)\")\nagent.py:3245:    if args.rebind and not args.session:\nagent.py:3246:        print_error(\"--rebind 는 -s <이름> 과 함께 사용하세요.\")\nagent.py:3256:        if args.rebind:\nagent.py:3258:            folders, err, _ = ensure_binding(folders, root, session, reassign=True)\nagent.py:3272:                print_info(f\"옮기려면  llm -s {session} --rebind\")\nagent.py:3278:            folders, err, detail = ensure_binding(folders, root, session)\nagent.py:3281:                print_info(\"세션을 바꾸려면  llm -s <이름> --rebind\")\nagent.py:3292:                folders, err, _ = ensure_binding(folders, root, session)"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_oMx7W6ngsSedBBakjCG25012",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 50, \"offset\": 3240, \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_oMx7W6ngsSedBBakjCG25012",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n  3240|        folders = unbind_session(folders, owned)\n  3241|        print_ok(f\"이 폴더의 세션 매핑을 해제했습니다 (세션: {owned}).\")\n  3242|        print_info(f\"대화 기록은 남아 있습니다: {history_file_for(owned)}\")\n  3243|        return 0\n  3244|\n  3245|    if args.rebind and not args.session:\n  3246|        print_error(\"--rebind 는 -s <이름> 과 함께 사용하세요.\")\n  3247|        return 1\n  3248|\n  3249|    if args.session:\n  3250|        session = args.session.strip()\n  3251|        if not session:\n  3252|            print_error(\"세션 이름이 비어 있습니다.\")\n  3253|            return 1\n  3254|        owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\n  3255|\n  3256|        if args.rebind:\n  3257|            # 명시적 재지정: 이 폴더로 옮긴다(기존 소유 폴더는 해제됨).\n  3258|            folders, err, _ = ensure_binding(folders, root, session, reassign=True)\n  3259|            if err:\n  3260|                print_error(f\"세션을 이 폴더로 옮기지 못했습니다: {err}\")\n  3261|                return 1\n  3262|            if owner is not None and owner != folder_key:\n  3263|                print_info(f\"세션 '{session}' 폴더 매핑: {owner} → {root}\")\n  3264|            if owned is not None and owned != session:\n  3265|                print_info(f\"이 폴더의 이전 세션 '{owned}' 매핑을 해제했습니다.\")\n  3266|        elif owner is not None and owner != folder_key:\n  3267|            # 남의 세션: 설정·수정·삭제는 거부, 조회(--view/--allow-list)만 허용.\n  3268|            if not (inspect_only and read_only):\n  3269|                print_error(f\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\")\n  3270|                print_info(f\"  {owner}\")\n  3271|                print_info(\"이 폴더에서는 조회(--view)만 가능합니다.\")\n  3272|                print_info(f\"옮기려면  llm -s {session} --rebind\")\n  3273|                return 1\n  3274|        elif owner is None and inspect_only and read_only:\n  3275|            pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.\n  3276|        else:\n  3277|            # 내 세션이거나, 아직 주인이 없는 이름 → 이 폴더에 바인딩.\n  3278|            folders, err, detail = ensure_binding(folders, root, session)\n  3279|            if err == \"folder_already_bound\":\n  3280|                print_error(f\"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.\")\n  3281|                print_info(\"세션을 바꾸려면  llm -s <이름> --rebind\")\n  3282|                return 1\n  3283|            if err == \"session_bound_elsewhere\":\n  3284|                print_error(f\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\")\n  3285|                print_info(f\"  {detail}\")\n  3286|                return 1\n  3287|    else:\n  3288|        session = owned\n  3289|        if session is None:\n... [81 more lines; use offset/limit]"
+    },
+    {
+      "role": "assistant",
+      "content": "`llm -s <이름> --rebind`의 목적을 코드 기준으로 설명드립니다.\n\n## 한 줄 요약\n**다른 폴더에 묶여 있는 세션을 지금 있는 폴더로 \"명시적으로 옮기는\" 명령**입니다. (세션 기록 자체는 유지)\n\n## 왜 필요한가\n이 에이전트는 세션 이름과 폴더를 **1:1로** 묶어 관리합니다(`bindings.json`).\n- 세션 하나는 폴더 하나만 소유할 수 있고, 폴더 하나는 세션 하나만 가집니다.\n- 그래서 다른 폴더가 소유한 세션 이름을 `-s`로 지정하면 **거부**됩니다.\n  - 코드: `agent.py:3266` — `owner != folder_key`이면 \"다른 폴더에 바인딩되어 있습니다\" 에러 후 종료.\n  - 이때 안내 문구가 바로 `옮기려면  llm -s {session} --rebind` (`agent.py:3272`).\n- 즉, 오타·사고로 세션 소유권이 바뀌지 않도록 기본은 막고, **의도를 명시했을 때만** 옮기게 한 안전장치입니다.\n\n## `--rebind`가 하는 일\n`ensure_binding(..., reassign=True)` (`agent.py:855`, 호출부 `3256~3265`):\n1. 기존 소유 폴더의 매핑을 **해제**하고, 이 폴더로 세션을 **재지정**합니다.\n2. 이 폴더에 이미 다른 세션이 묶여 있었으면 그 세션 매핑도 해제합니다.\n3. 실행 결과를 안내로 보여줍니다.\n   ```\n   세션 'X' 폴더 매핑: /이전/폴더 → /지금/폴더\n   이 폴더의 이전 세션 'Y' 매핑을 해제했습니다.\n   ```\n\n## 대표 사용 시나리오\n- **프로젝트 폴더를 옮기거나 이름을 바꿈** → 이전 경로에 묶여 있던 세션을 새 경로로 재지정.\n- **잘못된 폴더에서 쌓은 대화를 다른 폴더로 옮겨 이어가기**.\n- **이 폴더에 엉뚱한 세션이 바인딩돼 있어 바꾸고 싶을 때** (`folder_already_bound`, `agent.py:3279`).\n\n## 짝이 되는 명령\n- 반대 동작: `llm --unbind` — 이 폴더의 매핑만 해제(대화 기록은 디스크에 그대로 유지).\n- 참고: `--view`처럼 **보기만** 하는 명령은 남의 세션이어도 허용되며 바인딩을 만들지 않습니다(`agent.py:3268`).\n- 주의: `--rebind`는 `-s <이름>`과 **반드시 함께** 써야 합니다(`agent.py:3245`).\n\n요약하면, **\"세션 소유권은 기본적으로 잠그되, `--rebind`로만 풀 수 있게 한 명시적 이전 명령\"** 입니다."
+    },
+    {
+      "role": "user",
+      "content": "그런의미가 아니야. 현재 세션에서 프로젝트 진행중 다른 세션의 맥락을 참고해서 현재세션에 반영하기 위함이야. 계획을 다시 설명해봐"
+    },
+    {
+      "role": "assistant",
+      "content": "목적을 다시 이해했습니다. 정확히 짚기 위해 관련 코드(세션 로드/주입, `cmd_agent`, `cmd_view`)를 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_4jGspQmfoWHqvWPXqZQB6660",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"agent.py\", \"offset\": 2959, \"limit\": 190}"
+          }
+        },
+        {
+          "id": "call_01_9CDgJu4Wopea7AdqtIB81169",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"agent.py\", \"offset\": 3287, \"limit\": 84}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_4jGspQmfoWHqvWPXqZQB6660",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n  2959|def cmd_agent(\n  2960|    prompt: str,\n  2961|    session: str,\n  2962|    history_file: Path,\n  2963|    root: Path,\n  2964|    chat_only: bool,\n  2965|    yes: bool,\n  2966|    model: str,\n  2967|    max_steps: int,\n  2968|    stream: bool,\n  2969|    thinking: bool = True,\n  2970|    show_thinking: bool = False,\n  2971|    auto_safe: bool = True,\n  2972|    auto_workspace: bool = False,\n  2973|    allow_all: bool = False,\n  2974|) -> int:\n  2975|    print_banner(session, root, chat_only)\n  2976|\n  2977|    stripped = prompt.strip().lower()\n  2978|    if stripped in {\"/summary\", \"/summarize\", \"/요약\"}:\n  2979|        return cmd_summarize(session, history_file, model, force=True)\n  2980|\n  2981|    messages = load_history(history_file)\n  2982|    messages.append({\"role\": \"user\", \"content\": prompt})\n  2983|    save_history(history_file, messages)\n  2984|\n  2985|    if chat_only:\n  2986|        system = build_chat_system_prompt()\n  2987|        tools = None\n  2988|    else:\n  2989|        system = build_system_prompt(root, session)\n  2990|        tools = tool_schemas()\n  2991|\n  2992|    progress = make_stream_progress(show_thinking) if stream else None\n  2993|    approval = ShellApproval(session) if (not chat_only and not yes) else None\n  2994|\n  2995|    step = 0\n  2996|    step_limit = max_steps\n  2997|    while True:\n  2998|        step += 1\n  2999|        if step > step_limit:\n  3000|            # 한도 도달: 바로 끝내지 않고 이어서 진행할지 묻는다.\n  3001|            if not ask_continue_steps(step_limit, max_steps):\n  3002|                print_warn(\n  3003|                    f\"최대 단계({step_limit})에서 멈췄습니다. \"\n  3004|                    \"--max-steps 로 한도를 늘리거나 이어서 요청을 보내세요.\",\n  3005|                    stream=True,\n  3006|                )\n  3007|                return 1\n  3008|            step_limit += max_steps\n  3009|\n  3010|        # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.\n  3011|\n  3012|        messages = maybe_summarize(\n  3013|            session,\n  3014|            history_file,\n  3015|            messages,\n  3016|            model,\n  3017|            auto=True,\n  3018|        )\n  3019|\n  3020|        # API 호출 직전 최종 구조 검증\n  3021|        repaired_messages = repair_history(messages)\n  3022|\n  3023|        if len(repaired_messages) != len(messages):\n  3024|            print_warn(\n  3025|                \"API 호출 전 손상된 Tool Calling 메시지를 제거했습니다.\",\n  3026|                stream=True,\n  3027|            )\n  3028|\n  3029|            messages = repaired_messages\n  3030|\n  3031|            save_history(\n  3032|                history_file,\n  3033|                messages,\n  3034|            )\n  3035|\n  3036|        api_messages = [\n  3037|            {\n  3038|                \"role\": \"system\",\n  3039|                \"content\": system,\n  3040|            },\n  3041|            *messages,\n  3042|        ]\n  3043|\n  3044|        try:\n  3045|            content, tool_calls, finish, reasoning = complete(\n  3046|                api_messages,\n  3047|                tools,\n  3048|                model,\n  3049|                stream,\n  3050|                thinking,\n  3051|                on_delta=progress,\n  3052|            )\n  3053|        except RuntimeError as exc:\n  3054|            clear_status()\n  3055|            print_error(f\"API 오류: {exc}\", stream=True)\n  3056|            return 1\n  3057|\n  3058|        clear_status()\n  3059|\n  3060|        if not stream and thinking and reasoning:\n  3061|            # 비스트리밍 모드: 사고 과정은 기본으로 감추고 요약만 알려준다.\n  3062|            if show_thinking:\n  3063|                report_reasoning = make_stream_progress(True)\n  3064|                report_reasoning(\"reasoning\", reasoning)\n  3065|                report_reasoning(\"end\", \"\")\n  3066|            else:\n  3067|                print_info(\n  3068|                    f\"사고 과정 {len(reasoning):,}자 진행 (원문은 --show-thinking)\"\n  3069|                )\n  3070|\n  3071|        # Agent mode: execute structured tool calls and continue the loop.\n  3072|        if tool_calls and not chat_only:\n  3073|            assistant_message: dict[str, Any] = {\n  3074|                \"role\": \"assistant\",\n  3075|                \"content\": content or \"\",\n  3076|                \"tool_calls\": tool_calls,\n  3077|            }\n  3078|            if reasoning:\n  3079|                # tools 사용 시 사고 과정을 함께 되돌려줘야 한다(프로토콜 요구).\n  3080|                # 디스크 저장 시에는 strip_reasoning 이 제거한다.\n  3081|                assistant_message[\"reasoning_content\"] = reasoning\n  3082|            messages.append(assistant_message)\n  3083|\n  3084|            total = len(tool_calls)\n  3085|            for idx, tc in enumerate(tool_calls, 1):\n  3086|                fn = tc.get(\"function\") or {}\n  3087|                name = fn.get(\"name\") or \"?\"\n  3088|                raw_args = fn.get(\"arguments\") or \"{}\"\n  3089|\n  3090|                summary = summarize_args(name, raw_args)\n  3091|                counter = f\"{C.dim}[{idx}/{total}]{C.reset} \" if total > 1 else \"\"\n  3092|                print(f\"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}\")\n  3093|\n  3094|                result = run_tool(\n  3095|                    name,\n  3096|                    raw_args,\n  3097|                    root,\n  3098|                    yes,\n  3099|                    auto_safe,\n  3100|                    approval,\n  3101|                    auto_workspace,\n  3102|                    allow_all,\n  3103|                )\n  3104|                preview = result.splitlines()[0][:120] if result else \"\"\n  3105|                if result.startswith(\"ERROR:\"):\n  3106|                    print(f\"      {C.red}✗ {preview}{C.reset}\")\n  3107|                else:\n  3108|                    print(f\"      {C.green}✓{C.reset} {C.dim}{preview}{C.reset}\")\n  3109|\n  3110|                messages.append(\n  3111|                    {\n  3112|                        \"role\": \"tool\",\n  3113|                        \"tool_call_id\": tc.get(\"id\") or \"\",\n  3114|                        \"name\": name,\n  3115|                        \"content\": clip(result),\n  3116|                    }\n  3117|                )\n  3118|\n  3119|            save_history(history_file, messages)\n  3120|            continue\n  3121|\n  3122|        # Chat mode must never receive structured tool calls because tools=None.\n  3123|        # If a provider unexpectedly returns them, report the protocol issue.\n  3124|        if tool_calls and chat_only:\n  3125|            print_warn(\n  3126|                \"채팅 모드에서 예상치 못한 도구 호출을 받았습니다. \"\n  3127|                \"최종 텍스트만 처리합니다.\",\n  3128|                stream=True,\n  3129|            )\n  3130|\n  3131|        # Final answer: save first, then render exactly once with glow.\n  3132|        if content:\n  3133|            messages.append({\"role\": \"assistant\", \"content\": content})\n  3134|            save_history(history_file, messages)\n  3135|\n  3136|            clear_status()\n  3137|            print()\n  3138|            print_title(\"🤖 답변\")\n  3139|            render_markdown(content)\n  3140|            return 0\n  3141|\n  3142|        print_warn(f\"빈 응답 (finish={finish})\", stream=True)\n  3143|        return 1\n  3144|\n  3145|\n  3146|def parse_args(argv: list[str]) -> argparse.Namespace:\n  3147|    parser = argparse.ArgumentParser(\n  3148|        prog=\"llm\",\n... [222 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_9CDgJu4Wopea7AdqtIB81169",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n  3287|    else:\n  3288|        session = owned\n  3289|        if session is None:\n  3290|            if prompt:\n  3291|                session = auto_session_name(root, folders)\n  3292|                folders, err, _ = ensure_binding(folders, root, session)\n  3293|                if err:\n  3294|                    print_error(f\"세션을 만들지 못했습니다: {err}\")\n  3295|                    return 1\n  3296|            elif inspect_only:\n  3297|                print_error(\"이 폴더에 매핑된 세션이 없습니다.\")\n  3298|                print_info(\"대화를 시작하거나  llm -s <이름>  으로 지정하세요.\")\n  3299|                return 1\n  3300|            else:\n  3301|                list_sessions(None, folders, root)\n  3302|                return 0\n  3303|\n  3304|    history_file = history_file_for(session)\n  3305|\n  3306|    if args.view:\n  3307|        return cmd_view(session, history_file)\n  3308|    if args.run:\n  3309|        return cmd_run(session, history_file)\n  3310|    if args.summarize:\n  3311|        return cmd_summarize(session, history_file, args.model, force=True)\n  3312|    if args.allow_list or args.allow_clear:\n  3313|        return cmd_allow(session, clear=args.allow_clear)\n  3314|    if args.delete:\n  3315|        existed = history_file.is_file()\n  3316|        if existed:\n  3317|            history_file.unlink()\n  3318|        folders = unbind_session(folders, session)\n  3319|        if existed:\n  3320|            print_ok(f\"[{session}] 세션 파일을 완전히 삭제했습니다.\")\n  3321|        else:\n  3322|            print_ok(f\"[{session}] 폴더 매핑을 해제했습니다.\")\n  3323|        return 0\n  3324|    if args.clear:\n  3325|        if history_file.is_file():\n  3326|            save_history(history_file, [])\n  3327|            print_ok(f\"[{session}] 세션 내용을 비웠습니다 (초기화).\")\n  3328|            return 0\n  3329|        print_error(f\"[{session}] 세션 파일이 존재하지 않습니다.\")\n  3330|        return 1\n  3331|\n  3332|    if not prompt:\n  3333|        list_sessions(session, folders, root)\n  3334|        return 0\n  3335|\n  3336|    # 셸 자동 실행 범위: --confirm-all > --allow-all/LLM_ALLOW_ALL >\n  3337|    # --auto-workspace/LLM_AUTO_WORKSPACE > 기본(허용: sudo·설치만 확인)\n  3338|    if args.confirm_all:\n  3339|        auto_workspace, allow_all = False, False\n  3340|    elif args.allow_all or env_flag(\"LLM_ALLOW_ALL\"):\n  3341|        auto_workspace, allow_all = False, True\n  3342|    elif args.auto_workspace or env_flag(\"LLM_AUTO_WORKSPACE\"):\n  3343|        auto_workspace, allow_all = True, False\n  3344|    else:\n  3345|        auto_workspace, allow_all = False, True\n  3346|\n  3347|    return cmd_agent(\n  3348|        prompt=prompt,\n  3349|        session=session,\n  3350|        history_file=history_file,\n  3351|        root=root,\n  3352|        chat_only=args.chat,\n  3353|        yes=args.yes,\n  3354|        model=args.model,\n  3355|        max_steps=max(1, args.max_steps),\n  3356|        stream=not args.no_stream,\n  3357|        thinking=not args.no_thinking,\n  3358|        show_thinking=args.show_thinking,\n  3359|        auto_safe=not args.confirm_all,\n  3360|        auto_workspace=auto_workspace,\n  3361|        allow_all=allow_all,\n  3362|    )\n  3363|\n  3364|\n  3365|if __name__ == \"__main__\":\n  3366|    try:\n  3367|        sys.exit(main())\n  3368|    except KeyboardInterrupt:\n  3369|        eprint(f\"\\n{C.yellow}⚠️  중단되었습니다.{C.reset}\")\n  3370|        sys.exit(130)"
+    },
+    {
+      "role": "assistant",
+      "content": "코드를 확인해 보니, 지금 말씀하신 목적과 **현재 `--rebind` 구현이 서로 다릅니다.** 이 지점을 먼저 분명히 하고 계획을 다시 정리하겠습니다.\n\n## 1. 현재 `-s <이름> --rebind`가 실제로 하는 일 (목적과 불일치)\n\n`agent.py:3256-3265` 기준으로 `--rebind`는 **세션 소유권을 이전**합니다.\n- `ensure_binding(..., reassign=True)` → 세션 B를 **이 폴더로 옮기고** 이전 소유 폴더 매핑을 해제 (`agent.py:855-876`).\n- 그리고 `session = args.session`이 되어 **이후 대화는 B로 진행**됩니다.\n\n즉 지금 명령은 \"A 폴더가 B 세션을 **빼앗아** 그 세션으로 갈아타는\" 동작입니다.\n→ **A 세션의 연속성이 끊기고, B의 소유권도 바뀝니다.** 말씀하신 \"A를 진행하면서 B 맥락을 참고\"와는 정반대입니다.\n\n## 2. 재해석한 요구사항\n\n- **A(현재 프로젝트 세션)를 그대로 유지**한 채 작업을 계속한다.\n- **B(다른 세션)의 대화 맥락을 참고**해 A에 반영한다.\n- **B의 소유권/기록은 절대 건드리지 않는다** (읽기 전용).\n- 반영 범위는 선택 가능하면 좋다(요약만 / 최근 N개 / 전체).\n\n즉 필요한 건 \"재바인딩(ownership 이동)\"이 아니라 **\"컨텍스트 주입(import/reference)\"** 기능입니다.\n\n## 3. 계획 (안)\n\n기존 규칙(세션 1:1, `--view` 읽기 전용)을 깨지 않도록 **A는 그대로 두고 B를 읽어 A에 합치는** 방향으로 설계합니다.\n\n**방안 A — 1회성 참조 주입 (권장)**\n- 새 옵션: `llm --ref <세션>` (예: `llm --ref design-notes \"이 맥락 참고해서 이어서 구현해줘\"`)\n- 동작: B 히스토리 로드 → 요약(또는 발췌) → **A 대화에 \"참고: 다른 세션 B의 맥락\" 형태의 메시지로 삽입 후 저장**.\n- A는 `owned` 세션 유지, B는 손대지 않음. 재사용: `load_history`, `summarize_messages`, `history_to_markdown` (`agent.py:1284, 973, 2783`).\n\n**방안 B — 지속 참조(link)**\n- `llm --link <세션>`: A에 참조 세션 목록을 저장하고 **매 요청마다 B의 요약을 시스템 프롬프트에 주입** (`build_system_prompt`, `agent.py:1550`).\n- \"B가 계속 갱신되는 걸 반영\"하기엔 좋지만 상태 관리가 늘어남.\n\n**방안 C — 요약만 1회 복사**\n- 방안 A에서 원문 전체 대신 `summarize_messages` 결과만 주입(가볍게). 가장 단순.\n\n## 4. 지켜야 할 제약\n\n- B는 반드시 **읽기 전용**(소유권·기록 불변, `--view`와 동일한 권한 규칙).\n- A의 대화 파일에 주입 이력이 남으므로 요약 트리거(`should_summarize`)에 영향 — 주입량 제한 필요.\n- 기능 추가이므로 **`README.md`의 CLI 옵션 표·세션/규칙 설명 동시 갱신** (세션 규칙 필수).\n\n## 5. 진행 제안\n\n어느 방식을 원하시는지 정해 주시면 다음 순서로 진행하겠습니다.\n1. `git commit`으로 **checkpoint** 생성\n2. `parse_args`에 옵션 추가 + `main`에서 B 읽기 전용 로드/주입 로직 구현\n3. `python3 -m py_compile agent.py` 검증 → `README.md` 갱신\n4. (원하시면) 자동 테스트 세션으로 동작 확인\n\n혹시 제가 목적을 여전히 다르게 잡고 있다면, **\"B 맥락을 A에 반영\"한다는 게 구체적으로 어떤 형태를 원하시는지**(예: A 대화에 문장으로 붙는다 / 시스템 규칙처럼 상시 적용된다 / 특정 범위만) 한 가지만 알려주시면 그에 맞춰 계획을 좁히겠습니다."
+    },
+    {
+      "role": "user",
+      "content": "방안A가 맞아"
+    },
+    {
+      "role": "assistant",
+      "content": "방안 A로 확정했습니다. 구현 전에 관련 코드를 정확히 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_VEyMslT2QxOJ4acAX3Or4913",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"agent.py\", \"offset\": 941, \"limit\": 60}"
+          }
+        },
+        {
+          "id": "call_01_uIAPspovjd4wMVrlxKf65202",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"agent.py\", \"offset\": 1284, \"limit\": 60}"
+          }
+        },
+        {
+          "id": "call_02_RNiph01vtdvK01E7QVax7823",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"agent.py\", \"offset\": 2783, \"limit\": 70}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_VEyMslT2QxOJ4acAX3Or4913",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n   941|def summarize_prompt(messages: list[dict[str, Any]]) -> str:\n   942|    parts = [\n   943|        \"다음은 사용자와 코딩 에이전트의 대화 기록입니다.\",\n   944|        \"이 대화를 한국어로 간결하게 요약하세요.\",\n   945|        \"반드시 포함할 것:\",\n   946|        \"- 사용자의 목표/요청\",\n   947|        \"- 결정된 사항과 이유\",\n   948|        \"- 생성/수정된 파일과 핵심 코드 변경\",\n   949|        \"- 미해결 과제(TODO)\",\n   950|        \"군더더기 없이 마크다운 불릿으로 정리하고, 요약만 출력하세요.\",\n   951|        \"\",\n   952|        \"=== 대화 시작 ===\",\n   953|    ]\n   954|    for msg in messages:\n   955|        role = msg.get(\"role\")\n   956|        content = (msg.get(\"content\") or \"\").strip()\n   957|        if role == \"user\" and content:\n   958|            parts.append(f\"[사용자] {content}\")\n   959|        elif role == \"assistant\":\n   960|            calls = msg.get(\"tool_calls\") or []\n   961|            if content:\n   962|                parts.append(f\"[에이전트] {content}\")\n   963|            for tc in calls:\n   964|                fn = tc.get(\"function\") or {}\n   965|                parts.append(f\"[도구 호출] {fn.get('name', '?')} {fn.get('arguments', '')}\")\n   966|        elif role == \"tool\" and content:\n   967|            preview = content if len(content) < 800 else content[:800] + \"…\"\n   968|            parts.append(f\"[도구 결과] {preview}\")\n   969|    parts.append(\"=== 대화 끝 ===\")\n   970|    return \"\\n\".join(parts)\n   971|\n   972|\n   973|def summarize_messages(messages: list[dict[str, Any]], model: str) -> str | None:\n   974|    \"\"\"모델에 요약을 요청한다. 실패하면 None.\"\"\"\n   975|    payload = {\n   976|        \"model\": model,\n   977|        \"messages\": [\n   978|            {\n   979|                \"role\": \"system\",\n   980|                \"content\": (\n   981|                    \"You are a precise summarizer. Summarize the conversation in Korean \"\n   982|                    \"with concise markdown bullets. Output only the summary.\"\n   983|                ),\n   984|            },\n   985|            {\"role\": \"user\", \"content\": summarize_prompt(messages)},\n   986|        ],\n   987|        \"stream\": False,\n   988|    }\n   989|    data = http_json(API_URL, payload)\n   990|    if data.get(\"error\"):\n   991|        err = data[\"error\"]\n   992|        msg = err.get(\"message\") if isinstance(err, dict) else str(err)\n   993|        raise RuntimeError(msg)\n   994|    choice = (data.get(\"choices\") or [{}])[0]\n   995|    content = (choice.get(\"message\") or {}).get(\"content\") or \"\"\n   996|    return content.strip() or None\n   997|\n   998|\n   999|def backup_conversation(\n  1000|    session: str,\n... [2370 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_uIAPspovjd4wMVrlxKf65202",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n  1284|def load_history(path: Path) -> list[dict[str, Any]]:\n  1285|    \"\"\"세션 기록을 읽고 손상된 Tool Calling 메시지를 자동 복구한다.\"\"\"\n  1286|\n  1287|    if not path.is_file():\n  1288|        return []\n  1289|\n  1290|    try:\n  1291|        data = json.loads(\n  1292|            path.read_text(\n  1293|                encoding=\"utf-8\"\n  1294|            )\n  1295|        )\n  1296|\n  1297|    except (OSError, json.JSONDecodeError):\n  1298|        return []\n  1299|\n  1300|    if not isinstance(data, list):\n  1301|        return []\n  1302|\n  1303|    original_count = len(data)\n  1304|\n  1305|    repaired = repair_history(data)\n  1306|\n  1307|    # 기존 세션 파일이 손상되어 있었다면\n  1308|    # 다음 실행부터 다시 문제가 생기지 않도록 자동 저장\n  1309|    if len(repaired) != original_count:\n  1310|        try:\n  1311|            save_history(path, repaired)\n  1312|\n  1313|            print_info(\n  1314|                \"손상된 Tool Calling 대화 기록을 자동 복구했습니다 \"\n  1315|                f\"({original_count} → {len(repaired)}개 메시지).\"\n  1316|            )\n  1317|\n  1318|        except OSError as exc:\n  1319|            print_warn(\n  1320|                f\"대화 기록 복구본 저장 실패: {exc}\",\n  1321|                stream=True,\n  1322|            )\n  1323|\n  1324|    return repaired\n  1325|\n  1326|\n  1327|def strip_reasoning(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:\n  1328|    \"\"\"디스크에 저장할 때 사고 과정(reasoning_content)은 제거한다.\"\"\"\n  1329|    stripped: list[dict[str, Any]] = []\n  1330|    for message in messages:\n  1331|        if isinstance(message, dict) and \"reasoning_content\" in message:\n  1332|            message = {k: v for k, v in message.items() if k != \"reasoning_content\"}\n  1333|        stripped.append(message)\n  1334|    return stripped\n  1335|\n  1336|\n  1337|def save_history(path: Path, messages: list[dict[str, Any]]) -> None:\n  1338|    path.parent.mkdir(parents=True, exist_ok=True)\n  1339|    tmp = path.with_suffix(path.suffix + \".tmp\")\n  1340|    tmp.write_text(json.dumps(strip_reasoning(messages), ensure_ascii=False, indent=2) + \"\\n\", encoding=\"utf-8\")\n  1341|    tmp.replace(path)\n  1342|\n  1343|\n... [2027 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_02_RNiph01vtdvK01E7QVax7823",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n  2783|def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:\n  2784|    lines = [f\"# 📖 [{session}] 세션 대화 내용\", \"\"]\n  2785|    for msg in messages:\n  2786|        role = msg.get(\"role\")\n  2787|        content = msg.get(\"content\") or \"\"\n  2788|        if role == \"user\":\n  2789|            lines += [\"## 👤 사용자\", \"\", content, \"\", \"---\", \"\"]\n  2790|        elif role == \"assistant\":\n  2791|            calls = msg.get(\"tool_calls\") or []\n  2792|            if calls:\n  2793|                names = \", \".join((c.get(\"function\") or {}).get(\"name\", \"?\") for c in calls)\n  2794|                lines += [\"## 🔧 도구 호출\", \"\", f\"`{names}`\", \"\", \"---\", \"\"]\n  2795|            if content:\n  2796|                lines += [\"## 🤖 딥시크\", \"\", content, \"\", \"---\", \"\"]\n  2797|        elif role == \"tool\":\n  2798|            preview = content if len(content) < 400 else content[:400] + \"…\"\n  2799|            lines += [\"## 📄 도구 결과\", \"\", f\"```\\n{preview}\\n```\", \"\", \"---\", \"\"]\n  2800|    return \"\\n\".join(lines)\n  2801|\n  2802|\n  2803|def cmd_allow(session: str, clear: bool) -> int:\n  2804|    \"\"\"세션의 셸 자동 허용 목록을 보거나 비운다.\"\"\"\n  2805|    approval = ShellApproval(session)\n  2806|    if clear:\n  2807|        if not approval.exact and not approval.prefixes:\n  2808|            print_info(f\"[{session}] 자동 허용 목록이 이미 비어 있습니다.\")\n  2809|            return 0\n  2810|        approval.clear()\n  2811|        print_ok(f\"[{session}] 셸 자동 허용 목록을 비웠습니다.\")\n  2812|        return 0\n  2813|\n  2814|    print_title(f\"셸 자동 허용 목록  [{session}]\")\n  2815|    if not approval.exact and not approval.prefixes:\n  2816|        print_info(\"등록된 항목이 없습니다. 확인 프롬프트에서 a 를 선택하면 추가됩니다.\")\n  2817|        return 0\n  2818|    for prefix in sorted(approval.prefixes):\n  2819|        print(f\"   {C.green}계열{C.reset}  {prefix} {C.dim}(...){C.reset}\")\n  2820|    for command in sorted(approval.exact):\n  2821|        if command_prefix(command) not in approval.prefixes:\n  2822|            print(f\"   {C.cyan}정확{C.reset}  {command}\")\n  2823|    print_info(f\"파일: {approval.path}\")\n  2824|    print_info(\"해제: llm --allow-clear\")\n  2825|    return 0\n  2826|\n  2827|\n  2828|def cmd_view(session: str, history_file: Path) -> int:\n  2829|    if not history_file.is_file():\n  2830|        print_error(f\"[{session}] 세션에 저장된 대화가 없습니다.\")\n  2831|        print_info(\"대화를 시작하면 이 세션에 기록이 저장됩니다.\")\n  2832|        return 1\n  2833|\n  2834|    messages = load_history(history_file)\n  2835|    render_markdown(history_to_markdown(session, messages))\n  2836|    return 0\n  2837|\n  2838|\n  2839|def last_assistant_text(messages: list[dict[str, Any]]) -> str:\n  2840|    for msg in reversed(messages):\n  2841|        if msg.get(\"role\") == \"assistant\" and (msg.get(\"content\") or \"\").strip():\n  2842|            return msg[\"content\"]\n  2843|    return \"\"\n  2844|\n  2845|\n  2846|def extract_bash_block(text: str) -> str | None:\n  2847|    m = re.search(r\"```(?:bash|sh)\\s*\\n(.*?)```\", text, re.DOTALL | re.IGNORECASE)\n  2848|    if not m:\n  2849|        return None\n  2850|    return m.group(1).strip()\n  2851|\n  2852|\n... [518 more lines; use offset/limit]"
+    },
+    {
+      "role": "assistant",
+      "content": "이제 `parse_args`와 `main` 시작부를 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_6RoWKrsYMLQ7SeJcnLNw4729",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 100, \"offset\": 3146, \"path\": \"agent.py\"}"
+          }
+        },
+        {
+          "id": "call_01_MWZnihkKgzrTVXa2gxLT3508",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 45, \"offset\": 2883, \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_6RoWKrsYMLQ7SeJcnLNw4729",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n  3146|def parse_args(argv: list[str]) -> argparse.Namespace:\n  3147|    parser = argparse.ArgumentParser(\n  3148|        prog=\"llm\",\n  3149|        add_help=True,\n  3150|        description=\"DeepSeek CLI 에이전트\",\n  3151|    )\n  3152|    parser.add_argument(\"-s\", \"--session\", help=\"세션 이름 (이 폴더에 매핑)\")\n  3153|    parser.add_argument(\"--rebind\", action=\"store_true\", help=\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\")\n  3154|    parser.add_argument(\"--unbind\", action=\"store_true\", help=\"이 폴더의 세션 매핑만 해제 (기록은 유지)\")\n  3155|    parser.add_argument(\"--chat\", action=\"store_true\", help=\"도구 없이 순수 채팅\")\n  3156|    parser.add_argument(\"-y\", \"--yes\", action=\"store_true\", help=\"셸 명령 확인 생략\")\n  3157|    parser.add_argument(\"--model\", default=DEFAULT_MODEL, help=f\"모델 (기본: {DEFAULT_MODEL})\")\n  3158|    parser.add_argument(\n  3159|        \"--max-steps\",\n  3160|        type=int,\n  3161|        default=DEFAULT_MAX_STEPS,\n  3162|        help=f\"에이전트 루프 최대 횟수 (기본: {DEFAULT_MAX_STEPS}, 도달 시 이어서 진행할지 확인)\",\n  3163|    )\n  3164|    parser.add_argument(\"--no-stream\", action=\"store_true\", help=\"스트리밍 비활성화\")\n  3165|    parser.add_argument(\"--no-thinking\", action=\"store_true\", help=\"사고(thinking) 비활성화 (더 빠른 응답)\")\n  3166|    parser.add_argument(\n  3167|        \"--show-thinking\",\n  3168|        action=\"store_true\",\n  3169|        help=\"모델의 사고 과정(reasoning) 원문을 회색으로 실시간 출력\",\n  3170|    )\n  3171|    parser.add_argument(\"--confirm-all\", action=\"store_true\", help=\"읽기 전용 명령도 확인 후 실행 (자동 실행 비활성)\")\n  3172|    parser.add_argument(\n  3173|        \"--allow-all\",\n  3174|        action=\"store_true\",\n  3175|        help=\"sudo·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (기본값, LLM_ALLOW_ALL=1과 동일)\",\n  3176|    )\n  3177|    parser.add_argument(\n  3178|        \"--auto-workspace\",\n  3179|        action=\"store_true\",\n  3180|        help=\"작업 폴더 안에서 끝나는 명령은 확인 없이 실행 (폴더 밖·설치·이력 변경은 확인, LLM_AUTO_WORKSPACE=1이면 기본 활성)\",\n  3181|    )\n  3182|    parser.add_argument(\"--allow-list\", action=\"store_true\", help=\"이 세션의 셸 자동 허용 목록 보기\")\n  3183|    parser.add_argument(\"--allow-clear\", action=\"store_true\", help=\"이 세션의 셸 자동 허용 목록 비우기\")\n  3184|    parser.add_argument(\"--init-rules\", action=\"store_true\", help=\"이 폴더에 .llm/rules.md 생성\")\n  3185|    parser.add_argument(\"--rules\", action=\"store_true\", help=\"이 폴더의 세션 규칙 보기\")\n  3186|    parser.add_argument(\"--summarize\", action=\"store_true\", help=\"현재 대화를 지금 요약·백업 (강제)\")\n  3187|    parser.add_argument(\"--balance\", action=\"store_true\")\n  3188|    parser.add_argument(\"--view\", action=\"store_true\")\n  3189|    parser.add_argument(\"--run\", action=\"store_true\")\n  3190|    parser.add_argument(\"--clear\", action=\"store_true\")\n  3191|    parser.add_argument(\"--delete\", action=\"store_true\")\n  3192|    parser.add_argument(\"prompt\", nargs=argparse.REMAINDER, help=\"질문\")\n  3193|    return parser.parse_args(argv)\n  3194|\n  3195|\n  3196|def main(argv: list[str] | None = None) -> int:\n  3197|    load_dotenv()\n  3198|    init_color()\n  3199|    args = parse_args(argv if argv is not None else sys.argv[1:])\n  3200|\n  3201|    if args.balance:\n  3202|        return cmd_balance()\n  3203|\n  3204|    # 세션은 \"지금 이 폴더\"에만 묶인다. --root 같은 경로 우회는 두지 않는다.\n  3205|    root = Path.cwd().resolve()\n  3206|    if not root.is_dir():\n  3207|        print_error(f\"작업 디렉터리가 없습니다: {root}\")\n  3208|        return 1\n  3209|    folder_key = canonical_folder(root)\n  3210|    HISTORY_DIR.mkdir(parents=True, exist_ok=True)\n  3211|    folders = load_bindings()\n  3212|\n  3213|    if args.init_rules:\n  3214|        rc = cmd_init_rules(root)\n  3215|        if args.rules:\n  3216|            return cmd_show_rules(root) if rc == 0 else rc\n  3217|        return rc\n  3218|    if args.rules:\n  3219|        return cmd_show_rules(root)\n  3220|\n  3221|    prompt_parts = list(args.prompt or [])\n  3222|    if prompt_parts and prompt_parts[0] == \"--\":\n  3223|        prompt_parts = prompt_parts[1:]\n  3224|    prompt = \" \".join(prompt_parts).strip()\n  3225|\n  3226|    inspect_only = (\n  3227|        args.view or args.run or args.clear or args.delete or args.summarize\n  3228|        or args.allow_list or args.allow_clear\n  3229|    )\n  3230|    # 남의 세션에도 허용되는 \"보기만\" 하는 명령.\n  3231|    read_only = bool(args.view or args.allow_list)\n  3232|\n  3233|    owned = folders.get(folder_key)  # 이 폴더에 묶인 세션\n  3234|    session: str | None = None\n  3235|\n  3236|    if args.unbind:\n  3237|        if owned is None:\n  3238|            print_info(\"이 폴더에 매핑된 세션이 없습니다.\")\n  3239|            return 0\n  3240|        folders = unbind_session(folders, owned)\n  3241|        print_ok(f\"이 폴더의 세션 매핑을 해제했습니다 (세션: {owned}).\")\n  3242|        print_info(f\"대화 기록은 남아 있습니다: {history_file_for(owned)}\")\n  3243|        return 0\n  3244|\n  3245|    if args.rebind and not args.session:\n... [125 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_MWZnihkKgzrTVXa2gxLT3508",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n  2883|def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> None:\n  2884|    files = {f.name[len(\"history_\") : -len(\".json\")]: f for f in HISTORY_DIR.glob(\"history_*.json\")}\n  2885|    names = sorted(set(files) | set(folders.values()))\n  2886|    mapped = folders.get(canonical_folder(root))\n  2887|\n  2888|    print_title(\"💡 DeepSeek LLM CLI\")\n  2889|    print(f\"  {C.dim}📂 작업 폴더{C.reset}  {root}\")\n  2890|    mapped_txt = mapped if mapped else f\"{C.yellow}(없음 — 다음 대화 때 생성){C.reset}\"\n  2891|    print(f\"  {C.dim}🔗 매핑 세션{C.reset}  {mapped_txt}\")\n  2892|    rules_file = rules_path(root)\n  2893|    rules_txt = str(rules_file) if rules_file.is_file() else f\"{C.yellow}(없음 — llm --init-rules){C.reset}\"\n  2894|    print(f\"  {C.dim}📜 세션 규칙{C.reset}  {rules_txt}\")\n  2895|\n  2896|    print_section(\"사용법\")\n  2897|    usage = [\n  2898|        ('llm \"질문\"', \"이 폴더 세션으로 에이전트 실행\"),\n  2899|        ('llm --chat \"질문\"', \"도구 없이 순수 채팅\"),\n  2900|        ('llm --yes \"질문\"', \"셸 명령 확인 생략\"),\n  2901|        ('llm --auto-workspace \"질문\"', \"폴더 안 명령은 자동 실행\"),\n  2902|        ('llm --show-thinking \"질문\"', \"사고 과정 원문까지 표시\"),\n  2903|        (\"llm -s <이름>\", \"이 폴더를 해당 세션에 매핑\"),\n  2904|        (\"llm -s <이름> --rebind\", \"다른 폴더의 세션을 이 폴더로 재지정\"),\n  2905|        (\"llm --unbind\", \"이 폴더의 세션 매핑 해제 (기록은 유지)\"),\n  2906|        (\"llm --init-rules\", \".llm/rules.md 생성\"),\n  2907|        (\"llm --rules\", \"세션 규칙 보기\"),\n  2908|        (\"llm --run\", \"직전 응답의 스크립트 실행\"),\n  2909|        (\"llm --view\", \"대화 내용 보기 (마크다운)\"),\n  2910|        (\"llm --summarize\", \"현재 대화를 요약·백업 (강제)\"),\n  2911|        (\"llm --clear\", \"현재 세션 내용 비우기\"),\n  2912|        (\"llm --delete\", \"현재 세션 파일 삭제\"),\n  2913|        (\"llm --allow-list\", \"셸 자동 허용 목록 보기\"),\n  2914|        (\"llm --allow-clear\", \"셸 자동 허용 목록 비우기\"),\n  2915|        (\"llm --balance\", \"API 잔액 조회 (KRW 환산)\"),\n  2916|    ]\n  2917|    width = max(display_width(cmd) for cmd, _ in usage)\n  2918|    for cmd, desc in usage:\n  2919|        print(f\"   {C.cyan}{pad(cmd, width)}{C.reset}  {C.dim}{desc}{C.reset}\")\n  2920|\n  2921|    print_section(f\"저장된 세션  ({HISTORY_DIR})\")\n  2922|    if not names:\n  2923|        print(f\"   {C.dim}(저장된 세션이 없습니다){C.reset}\")\n  2924|        print(f\"{C.dim}{rule()}{C.reset}\")\n  2925|        return\n  2926|\n  2927|    current = active or mapped\n... [443 more lines; use offset/limit]"
+    },
+    {
+      "role": "assistant",
+      "content": "핵심 헬퍼 몇 개를 더 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_bf0yq386xBQuOjPcZ1Gb8866",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 60, \"offset\": 751, \"path\": \"agent.py\"}"
+          }
+        },
+        {
+          "id": "call_01_cOM137eU7HdyL5cbTC0k4114",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 14, \"offset\": 36, \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_bf0yq386xBQuOjPcZ1Gb8866",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n   751|def load_dotenv(path: Path = Path(\"/etc/env/.env\")) -> None:\n   752|    if not path.is_file():\n   753|        return\n   754|    for raw in path.read_text(encoding=\"utf-8\", errors=\"replace\").splitlines():\n   755|        line = raw.strip()\n   756|        if not line or line.startswith(\"#\") or \"=\" not in line:\n   757|            continue\n   758|        key, _, val = line.partition(\"=\")\n   759|        key = key.strip()\n   760|        val = val.strip().strip(\"'\").strip('\"')\n   761|        if key and key not in os.environ:\n   762|            os.environ[key] = val\n   763|\n   764|\n   765|def env_flag(name: str) -> bool:\n   766|    \"\"\"환경변수를 불리언으로 읽는다(1/true/yes/on/y 만 참).\"\"\"\n   767|    return os.environ.get(name, \"\").strip().lower() in {\"1\", \"true\", \"yes\", \"on\", \"y\"}\n   768|\n   769|\n   770|def api_key() -> str:\n   771|    key = os.environ.get(\"DEEPSEEK_API_KEY\", \"\").strip()\n   772|    if not key:\n   773|        eprint(\"DEEPSEEK_API_KEY가 없습니다. /etc/env/.env 또는 환경변수를 확인하세요.\")\n   774|        sys.exit(1)\n   775|    return key\n   776|\n   777|\n   778|def history_file_for(session: str) -> Path:\n   779|    HISTORY_DIR.mkdir(parents=True, exist_ok=True)\n   780|    return HISTORY_DIR / f\"history_{session}.json\"\n   781|\n   782|\n   783|def canonical_folder(path: Path | str) -> str:\n   784|    \"\"\"폴더 경로를 비교용 정규 키로 만든다(심볼릭 링크 해소·구분자/대소문자 정리).\n   785|\n   786|    세션 바인딩의 진실은 이 키 하나뿐이다. 원본 문자열은 표시용으로만 쓴다.\n   787|    \"\"\"\n   788|    p = os.path.realpath(os.fspath(path))\n   789|    if len(p) > 1:\n   790|        p = p.rstrip(\"/\\\\\") or os.sep\n   791|    if sys.platform == \"darwin\" or os.name == \"nt\":\n   792|        p = p.lower()\n   793|    if os.name == \"nt\" and len(p) > 2 and p[1] == \":\":\n   794|        p = p[0].upper() + p[1:]\n   795|    return p\n   796|\n   797|\n   798|def bindings_file() -> Path:\n   799|    return HISTORY_DIR / \"bindings.json\"\n   800|\n   801|\n   802|def load_bindings() -> dict[str, str]:\n   803|    path = bindings_file()\n   804|    if not path.is_file():\n   805|        return {}\n   806|    try:\n   807|        data = json.loads(path.read_text(encoding=\"utf-8\"))\n   808|    except (OSError, json.JSONDecodeError):\n   809|        return {}\n   810|    folders = data.get(\"folders\")\n... [2560 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_cOM137eU7HdyL5cbTC0k4114",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3370 lines)\n    36|\n    37|# 대화 자동 요약/백업 설정\n    38|# 트리거는 \"압축 대상\"(최근 SUMMARY_KEEP_RECENT개를 뺀 앞부분)만 보고 판단한다.\n    39|# 최근 메시지는 어차피 남기므로 대용량 도구 출력 몇 개로 요약이 걸리지 않게 한다.\n    40|SUMMARY_TRIGGER_CHARS = 120_000\n    41|SUMMARY_TRIGGER_MESSAGES = 160\n    42|SUMMARY_KEEP_RECENT = 24\n    43|# 요약 직후에는 새 메시지가 이만큼 쌓이기 전까지 다시 요약하지 않는다(쿨다운).\n    44|SUMMARY_MIN_NEW_MESSAGES = 40\n    45|SUMMARY_MAX_CHARS = 4_000\n    46|SUMMARY_DIR_NAME = \"summaries\"\n    47|SUMMARY_MARKER = \"[이전 대화 요약]\"\n    48|# 요약 시점의 메시지 수를 요약본 본문에 흔적 없이 남겨 쿨다운 판단에 쓴다.\n    49|SUMMARY_STAMP_RE = re.compile(r\"<!--\\s*llm-summary-at:(\\d+)\\s*-->\")\n... [3321 more lines; use offset/limit]"
+    },
+    {
+      "role": "assistant",
+      "content": "구조 파악 완료. 방안 A(1회성 참조 주입)를 구현하겠습니다. 먼저 안전 체크포인트를 확인합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_Oljw06kylB1DJMPOWNLp3620",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && git status --short && echo \\\"--- clean check done ---\\\"\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_Oljw06kylB1DJMPOWNLp3620",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n--- clean check done ---\n"
+    },
+    {
+      "role": "assistant",
+      "content": "작업 트리가 깨끗해 체크포인트는 생략합니다(규칙: 이미 커밋된 상태면 생략 가능). 이제 구현합니다.\n\n**1) 상수 추가**",
+      "tool_calls": [
+        {
+          "id": "call_00_8oK0BT9XmSrruhWpmHVW5269",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"path\": \"agent.py\", \"old_string\": \"SUMMARY_STAMP_RE = re.compile(r\\\"<!--\\\\s*llm-summary-at:(\\\\d+)\\\\s*-->\\\")\", \"new_string\": \"SUMMARY_STAMP_RE = re.compile(r\\\"<!--\\\\s*llm-summary-at:(\\\\d+)\\\\s*-->\\\")\\n\\n# 다른 세션 참조(--ref): 이번 세션 대화에 1회 주입할 맥락의 상한.\\nREF_MARKER = \\\"[참고: 다른 세션의 맥락]\\\"\\nREF_MAX_CHARS = 24_000\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_8oK0BT9XmSrruhWpmHVW5269",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**2) 참조 컨텍스트 빌더/주입 헬퍼 추가**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_GobFhIVZVwS35eIHJHn75821",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"path\": \"agent.py\", \"old_string\": \"def cmd_view(session: str, history_file: Path) -> int:\", \"new_string\": \"def ref_digest(messages: list[dict[str, Any]]) -> str:\\n    \\\"\\\"\\\"다른 세션 기록에서 참고용 텍스트(사용자/에이전트 발화)만 추출한다.\\\"\\\"\\\"\\n    lines: list[str] = []\\n    for msg in messages:\\n        role = msg.get(\\\"role\\\")\\n        content = (msg.get(\\\"content\\\") or \\\"\\\").strip()\\n        if role == \\\"user\\\" and content:\\n            lines.append(f\\\"[사용자] {content}\\\")\\n        elif role == \\\"assistant\\\" and content:\\n            lines.append(f\\\"[에이전트] {content}\\\")\\n    return \\\"\\\\n\\\".join(lines)\\n\\n\\ndef build_ref_context(sessions: list[str], model: str) -> str | None:\\n    \\\"\\\"\\\"--ref 세션들의 맥락을 하나의 텍스트로 만든다. 참조 대상은 수정하지 않는다.\\n\\n    길면 요약을 시도하고, 실패하면 앞부분만 잘라 쓴다.\\n    \\\"\\\"\\\"\\n    blocks: list[str] = []\\n    for raw in sessions:\\n        name = (raw or \\\"\\\").strip()\\n        if not name:\\n            continue\\n        messages = load_history(history_file_for(name))\\n        if not messages:\\n            print_warn(f\\\"참고 세션 '{name}'에 대화 기록이 없어 건너뜁니다.\\\")\\n            continue\\n        digest = ref_digest(messages)\\n        if not digest:\\n            print_warn(f\\\"참고 세션 '{name}'에 참고할 발화가 없어 건너뜁니다.\\\")\\n            continue\\n        if len(digest) > REF_MAX_CHARS:\\n            print_info(f\\\"참고 세션 '{name}'이 길어 요약합니다…\\\")\\n            try:\\n                summary = summarize_messages(messages, model)\\n            except RuntimeError as exc:\\n                print_warn(f\\\"요약 실패({exc}); 앞부분만 사용합니다.\\\")\\n                summary = None\\n            digest = summary if summary else digest[:REF_MAX_CHARS] + \\\"\\\\n…(이하 생략)\\\"\\n        blocks.append(f\\\"### 세션 '{name}'\\\\n{digest}\\\")\\n    if not blocks:\\n        return None\\n    return REF_MARKER + \\\"\\\\n\\\" + \\\"\\\\n\\\\n\\\".join(blocks)\\n\\n\\ndef inject_ref_context(history_file: Path, sessions: list[str], model: str) -> str | None:\\n    \\\"\\\"\\\"참고 맥락을 이번 세션 대화에 사용자 메시지로 1회 주입·저장한다.\\\"\\\"\\\"\\n    context = build_ref_context(sessions, model)\\n    if context is None:\\n        return None\\n    messages = load_history(history_file)\\n    messages.append({\\\"role\\\": \\\"user\\\", \\\"content\\\": context})\\n    save_history(history_file, messages)\\n    return context\\n\\n\\ndef cmd_view(session: str, history_file: Path) -> int:\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_GobFhIVZVwS35eIHJHn75821",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**3) CLI 옵션 `--ref` 추가**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_TyXBrchFmYoVdCINgEbk5643",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"    parser.add_argument(\\\"--rebind\\\", action=\\\"store_true\\\", help=\\\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\\\")\\n    parser.add_argument(\\\"--unbind\\\", action=\\\"store_true\\\", help=\\\"이 폴더의 세션 매핑만 해제 (기록은 유지)\\\")\\n    parser.add_argument(\\n        \\\"--ref\\\",\\n        action=\\\"append\\\",\\n        metavar=\\\"세션\\\",\\n        help=\\\"다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용)\\\",\\n    )\", \"old_string\": \"    parser.add_argument(\\\"--rebind\\\", action=\\\"store_true\\\", help=\\\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\\\")\\n    parser.add_argument(\\\"--unbind\\\", action=\\\"store_true\\\", help=\\\"이 폴더의 세션 매핑만 해제 (기록은 유지)\\\")\", \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_TyXBrchFmYoVdCINgEbk5643",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**4) `main`에 주입 처리 추가**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_hxDGqPDNWnML8X4lwvwq2053",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"        print_error(f\\\"[{session}] 세션 파일이 존재하지 않습니다.\\\")\\n        return 1\\n\\n    if args.ref:\\n        context = inject_ref_context(history_file, args.ref, args.model)\\n        if context is None:\\n            print_error(\\\"참고(--ref)할 세션이 없습니다. 기록이 있는 세션 이름을 지정하세요.\\\")\\n            return 1\\n        names = \\\", \\\".join(n.strip() for n in args.ref if n.strip())\\n        print_ok(f\\\"[{session}]에 참고 맥락을 주입했습니다: {names}\\\")\\n        if not prompt:\\n            return 0\\n\\n    if not prompt:\\n        list_sessions(session, folders, root)\\n        return 0\", \"old_string\": \"        print_error(f\\\"[{session}] 세션 파일이 존재하지 않습니다.\\\")\\n        return 1\\n\\n    if not prompt:\\n        list_sessions(session, folders, root)\\n        return 0\", \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_hxDGqPDNWnML8X4lwvwq2053",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**5) 세션 목록 사용법에 `--ref` 안내 추가**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_MG7rpxmNDu5igDpjfBhK7345",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"        (\\\"llm -s <이름> --rebind\\\", \\\"다른 폴더의 세션을 이 폴더로 재지정\\\"),\\n        (\\\"llm --ref <이름>\\\", \\\"다른 세션 맥락을 이번 세션에 1회 주입\\\"),\", \"old_string\": \"        (\\\"llm -s <이름> --rebind\\\", \\\"다른 폴더의 세션을 이 폴더로 재지정\\\"),\", \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_MG7rpxmNDu5igDpjfBhK7345",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**6) 문법 검증**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_F1SSnthoV1wCNsmJy5Bb6061",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && python3 -m py_compile agent.py && echo \\\"py_compile OK\\\" && ./llm --help 2>&1 | grep -A1 -- '--ref'\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_F1SSnthoV1wCNsmJy5Bb6061",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\npy_compile OK\nusage: llm [-h] [-s SESSION] [--rebind] [--unbind] [--ref 세션] [--chat] [-y]\n           [--model MODEL] [--max-steps MAX_STEPS] [--no-stream]\n--\n  --ref 세션              다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용)\n  --chat                도구 없이 순수 채팅\n"
+    },
+    {
+      "role": "assistant",
+      "content": "`--ref` 주입 로직을 API 호출 없이(프롬프트 없이) 검증하겠습니다. self-test 세션 패턴(`ztest*`)을 사용합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_2WmXj8cKYWk43MmJgzz05778",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\nD=\\\"$HOME/.local/share/llm\\\"\\npython3 - <<'PY'\\nimport json, pathlib, os\\nd = pathlib.Path(os.environ[\\\"HOME\\\"]) / \\\".local/share/llm\\\"\\nd.mkdir(parents=True, exist_ok=True)\\nmsgs = [\\n    {\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"프로젝트 X의 인증 모듈을 리팩터링해줘. 세션 토큰은 JWT로 유지.\\\"},\\n    {\\\"role\\\": \\\"assistant\\\", \\\"content\\\": \\\"auth/ 아래를 정리했습니다. 결정: JWT 유지, refresh 토큰 도입 보류.\\\"},\\n    {\\\"role\\\": \\\"user\\\", \\\"content\\\": \\\"미해결: 토큰 만료 처리 TODO 남겨줘.\\\"},\\n    {\\\"role\\\": \\\"assistant\\\", \\\"content\\\": \\\"TODO: 만료 시 재로그인 흐름 추가 예정.\\\"},\\n]\\n(d / \\\"history_ztestref_src.json\\\").write_text(json.dumps(msgs, ensure_ascii=False, indent=2))\\nprint(\\\"wrote source:\\\", d / \\\"history_ztestref_src.json\\\")\\nPY\\n# 목적지 폴더(새 바인딩 생성)에서 프롬프트 없이 주입만 수행\\nmkdir -p /tmp/llmreftest/b && cd /tmp/llmreftest/b\\nln -sf /home/rasp/codespace/userscript/llm/llm /tmp/llmref_bin 2>/dev/null || true\\necho \\\"=== run: llm -s ztestref_dst --ref ztestref_src (no prompt) ===\\\"\\n/home/rasp/codespace/userscript/llm/llm -s ztestref_dst --ref ztestref_src\\necho \\\"=== dst history ===\\\"\\npython3 - <<'PY'\\nimport json, pathlib, os\\np = pathlib.Path(os.environ[\\\"HOME\\\"]) / \\\".local/share/llm/history_ztestref_dst.json\\\"\\nprint(json.dumps(json.loads(p.read_text()), ensure_ascii=False, indent=2)[:800])\\nPY\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_2WmXj8cKYWk43MmJgzz05778",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\nwrote source: /home/rasp/.local/share/llm/history_ztestref_src.json\n=== run: llm -s ztestref_dst --ref ztestref_src (no prompt) ===\n✅ [ztestref_dst]에 참고 맥락을 주입했습니다: ztestref_src\n=== dst history ===\n[\n  {\n    \"role\": \"user\",\n    \"content\": \"[참고: 다른 세션의 맥락]\\n### 세션 'ztestref_src'\\n[사용자] 프로젝트 X의 인증 모듈을 리팩터링해줘. 세션 토큰은 JWT로 유지.\\n[에이전트] auth/ 아래를 정리했습니다. 결정: JWT 유지, refresh 토큰 도입 보류.\\n[사용자] 미해결: 토큰 만료 처리 TODO 남겨줘.\\n[에이전트] TODO: 만료 시 재로그인 흐름 추가 예정.\"\n  }\n]\n"
+    },
+    {
+      "role": "assistant",
+      "content": "주입이 정상 동작합니다. 이어서 다중 참조·없는 세션 경고·원본 불변을 확인합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_8kkgSlXEn9ZmdzJGyg602705",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\nD=\\\"$HOME/.local/share/llm\\\"\\nbefore=$(sha256sum \\\"$D/history_ztestref_src.json\\\" | cut -d' ' -f1)\\nmkdir -p /tmp/llmreftest/c && cd /tmp/llmreftest/c\\necho \\\"=== multiple refs + one missing ===\\\"\\n/home/rasp/codespace/userscript/llm/llm -s ztestref_dst2 --ref ztestref_src --ref ztestref_nope\\necho \\\"=== content (marker + both blocks) ===\\\"\\npython3 - <<'PY'\\nimport json, pathlib, os\\np = pathlib.Path(os.environ[\\\"HOME\\\"]) / \\\".local/share/llm/history_ztestref_dst2.json\\\"\\ntxt = p.read_text() if p.is_file() else \\\"(none)\\\"\\nprint(\\\"has marker:\\\", \\\"[참고: 다른 세션의 맥락]\\\" in txt)\\nprint(\\\"blocks:\\\", txt.count(\\\"### 세션\\\"))\\nPY\\nafter=$(sha256sum \\\"$D/history_ztestref_src.json\\\" | cut -d' ' -f1)\\necho \\\"=== source unchanged: $([ \\\"$before\\\" = \\\"$after\\\" ] && echo YES || echo NO) ===\\\"\\necho \\\"=== all-missing case (should error, exit 1) ===\\\"\\nmkdir -p /tmp/llmreftest/d && cd /tmp/llmreftest/d\\n/home/rasp/codespace/userscript/llm/llm -s ztestref_dst3 --ref ztestref_nope; echo \\\"exit=$?\\\"\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_8kkgSlXEn9ZmdzJGyg602705",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n=== multiple refs + one missing ===\n⚠️  참고 세션 'ztestref_nope'에 대화 기록이 없어 건너뜁니다.\n✅ [ztestref_dst2]에 참고 맥락을 주입했습니다: ztestref_src, ztestref_nope\n=== content (marker + both blocks) ===\nhas marker: True\nblocks: 1\n=== source unchanged: YES ===\n=== all-missing case (should error, exit 1) ===\n⚠️  참고 세션 'ztestref_nope'에 대화 기록이 없어 건너뜁니다.\nexit=1\n\n--- stderr ---\n❌ 참고(--ref)할 세션이 없습니다. 기록이 있는 세션 이름을 지정하세요.\n"
+    },
+    {
+      "role": "assistant",
+      "content": "정상 동작을 확인했습니다. 테스트 잔여물을 정리합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_fFCejxT0Rt4mvZy17kkP6565",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\nD=\\\"$HOME/.local/share/llm\\\"\\necho \\\"=== 삭제 대상 ===\\\"\\nls -1 \\\"$D\\\" | grep -E 'ztestref' || echo \\\"(파일 없음)\\\"\\nls -1d \\\"$D\\\"/summaries/ztestref* 2>/dev/null || echo \\\"(요약 디렉터리 없음)\\\"\\npython3 - <<'PY'\\nimport json, pathlib, os\\nd = pathlib.Path(os.environ[\\\"HOME\\\"]) / \\\".local/share/llm\\\"\\nbf = d / \\\"bindings.json\\\"\\nif bf.is_file():\\n    data = json.loads(bf.read_text())\\n    folders = data.get(\\\"folders\\\", {})\\n    stale = {k: v for k, v in folders.items() if \\\"ztestref\\\" in v or \\\"/tmp/llmreftest\\\" in k}\\n    print(\\\"바인딩 제거 대상:\\\", stale)\\nPY\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_fFCejxT0Rt4mvZy17kkP6565",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n=== 삭제 대상 ===\nhistory_ztestref_dst.json\nhistory_ztestref_dst2.json\nhistory_ztestref_src.json\n(요약 디렉터리 없음)\n바인딩 제거 대상: {'/tmp/llmreftest/b': 'ztestref_dst', '/tmp/llmreftest/c': 'ztestref_dst2', '/tmp/llmreftest/d': 'ztestref_dst3'}\n"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_TANtVy7EIpB98dh3SYHe7091",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\nD=\\\"$HOME/.local/share/llm\\\"\\nrm -f \\\"$D\\\"/history_ztestref_*.json \\\"$D\\\"/shell_allow_ztestref_*.json\\nrm -rf \\\"$D\\\"/summaries/ztestref*\\ncp \\\"$D/bindings.json\\\" \\\"$D/bindings.json.bak\\\" 2>/dev/null\\npython3 - <<'PY'\\nimport json, pathlib, os\\nd = pathlib.Path(os.environ[\\\"HOME\\\"]) / \\\".local/share/llm\\\"\\nbf = d / \\\"bindings.json\\\"\\ndata = json.loads(bf.read_text())\\nfolders = data.get(\\\"folders\\\", {})\\ncleaned = {k: v for k, v in folders.items()\\n           if \\\"ztestref\\\" not in v and \\\"/tmp/llmreftest\\\" not in k}\\ndata[\\\"folders\\\"] = cleaned\\ntmp = bf.with_suffix(\\\".json.tmp\\\")\\ntmp.write_text(json.dumps(data, ensure_ascii=False, indent=2) + \\\"\\\\n\\\")\\ntmp.replace(bf)\\nprint(\\\"남은 항목 수:\\\", len(cleaned))\\nPY\\nrm -f \\\"$D/bindings.json.bak\\\"\\nrm -rf /tmp/llmreftest /tmp/llmref_bin\\necho \\\"=== 정리 후 확인 ===\\\"\\nls -1 \\\"$D\\\" | grep -E 'ztestref' || echo \\\"잔여 ztestref 파일 없음\\\"\\npython3 -c \\\"import json,pathlib,os; d=pathlib.Path(os.environ['HOME'])/'.local/share/llm/bindings.json'; f=json.loads(d.read_text()).get('folders',{}); print('ztestref 잔여 바인딩:', {k:v for k,v in f.items() if 'ztestref' in v})\\\"\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_TANtVy7EIpB98dh3SYHe7091",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n남은 항목 수: 2\n=== 정리 후 확인 ===\n잔여 ztestref 파일 없음\nztestref 잔여 바인딩: {}\n"
+    },
+    {
+      "role": "assistant",
+      "content": "검증 완료·정리 완료. 이제 규칙에 따라 README를 갱신합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_LwpreMLTPhIhTLARx4og3462",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"| `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\\n| `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |\", \"old_string\": \"| `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\", \"path\": \"README.md\"}"
+          }
+        },
+        {
+          "id": "call_01_ZonC0pZ5dO79hpsTg3Kv3956",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"# 읽기 전용 명령도 매번 확인 (자동 실행 비활성)\\nllm --confirm-all \\\"이 폴더 상태를 점검해줘\\\"\\n\\n# 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업\\nllm --ref design-notes \\\"이 맥락 참고해서 인증 모듈 리팩터링 이어줘\\\"\\n\\n# 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기\", \"old_string\": \"# 읽기 전용 명령도 매번 확인 (자동 실행 비활성)\\nllm --confirm-all \\\"이 폴더 상태를 점검해줘\\\"\\n\\n# 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기\", \"path\": \"README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_LwpreMLTPhIhTLARx4og3462",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_ZonC0pZ5dO79hpsTg3Kv3956",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_LrfUPiItdcjhc6ySzKKW2850",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"| `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |\\n| `--ref <이름>` (다른 세션 맥락 주입) | 가능 | **가능 (참조 대상은 읽기 전용)** |\", \"old_string\": \"| `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |\", \"path\": \"README.md\"}"
+          }
+        },
+        {
+          "id": "call_01_ET_XjFConRPHhqRXaRor3Tz4443",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\\n\\n### 다른 세션 맥락 참조 (`--ref`)\\n\\n진행 중인 세션(A)을 유지한 채 **다른 세션(B)의 맥락을 참고**하고 싶을 때 씁니다.\\n\\n- `llm --ref <이름> \\\"질문\\\"` 은 B의 맥락을 **이번 세션(A)에 1회 주입**한 뒤 대화를\\n  진행합니다. A는 그대로 유지되고, B는 **읽기 전용**으로만 읽어 소유권·기록이\\n  바뀌지 않습니다(`--view`와 같은 권한 규칙).\\n- 주입 내용은 B의 사용자/에이전트 발화를 뽑아 `[참고: 다른 세션의 맥락]` 표시가\\n  붙은 **사용자 메시지로 A 기록에 저장**됩니다(이후 턴에서도 A의 맥락으로 남음).\\n- 여러 세션을 동시에 참조할 수 있습니다: `llm --ref A --ref B \\\"질문\\\"`.\\n- 프롬프트 없이 `llm --ref B` 로 실행하면 **주입만 하고 종료**합니다\\n  (A 세션이 이미 있어야 함).\\n- B의 발췌가 `REF_MAX_CHARS`(24,000자)를 넘으면 요약을 시도하고, 실패하면 앞부분만\\n  잘라 씁니다. 기록이 없는 세션 이름은 경고 후 건너뜁니다.\\n- **소유권 이동이 필요하면 `--rebind`**, **맥락 참고만 하려면 `--ref`** 입니다.\", \"old_string\": \"- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\", \"path\": \"README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_LrfUPiItdcjhc6ySzKKW2850",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_ET_XjFConRPHhqRXaRor3Tz4443",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "아키텍처 섹션에도 반영하고, 인자 파싱을 검증하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_vCKZLSVkSPvOCAUZZFq68732",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"- **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`\\n  (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),\\n  `load_session_rules`, `ref_digest`/`build_ref_context`/`inject_ref_context`(다른 세션\\n  맥락 1회 주입, `--ref`)\", \"old_string\": \"- **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`\\n  (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),\\n  `load_session_rules`\", \"path\": \"README.md\"}"
+          }
+        },
+        {
+          "id": "call_01_U2My3GsCDKB4VFzoLfLF2656",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && python3 - <<'PY'\\nimport agent\\nfor argv in [\\n    [\\\"--ref\\\", \\\"B\\\", \\\"질문\\\"],\\n    [\\\"--ref\\\", \\\"B\\\", \\\"--ref\\\", \\\"C\\\", \\\"질문\\\"],\\n    [\\\"--ref\\\", \\\"B\\\"],\\n    [\\\"-s\\\", \\\"S\\\", \\\"--ref\\\", \\\"B\\\", \\\"--\\\", \\\"질문\\\"],\\n    [\\\"--ref\\\", \\\"B\\\", \\\"--view\\\"],\\n]:\\n    a = agent.parse_args(argv)\\n    print(argv, \\\"-> ref=\\\", a.ref, \\\"session=\\\", a.session, \\\"prompt=\\\", a.prompt, \\\"view=\\\", a.view)\\nPY\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_vCKZLSVkSPvOCAUZZFq68732",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_U2My3GsCDKB4VFzoLfLF2656",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n['--ref', 'B', '질문'] -> ref= ['B'] session= None prompt= ['질문'] view= False\n['--ref', 'B', '--ref', 'C', '질문'] -> ref= ['B', 'C'] session= None prompt= ['질문'] view= False\n['--ref', 'B'] -> ref= ['B'] session= None prompt= [] view= False\n['-s', 'S', '--ref', 'B', '--', '질문'] -> ref= ['B'] session= S prompt= ['--', '질문'] view= False\n['--ref', 'B', '--view'] -> ref= ['B'] session= None prompt= [] view= True\n"
+    },
+    {
+      "role": "assistant",
+      "content": "인자 파싱도 정상입니다. 최종 diff를 확인합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_O9hO0Y3r3vpyxB038mtq8520",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && python3 -m py_compile agent.py && echo \\\"py_compile OK\\\" && echo \\\"===== agent.py diff =====\\\" && git diff --stat && git diff agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_O9hO0Y3r3vpyxB038mtq8520",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\npy_compile OK\n===== agent.py diff =====\n README.md | 24 +++++++++++++++++++-\n agent.py  | 77 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++\n 2 files changed, 100 insertions(+), 1 deletion(-)\ndiff --git a/agent.py b/agent.py\nindex e39d49d..6d44f70 100755\n--- a/agent.py\n+++ b/agent.py\n@@ -47,6 +47,10 @@ SUMMARY_DIR_NAME = \"summaries\"\n SUMMARY_MARKER = \"[이전 대화 요약]\"\n # 요약 시점의 메시지 수를 요약본 본문에 흔적 없이 남겨 쿨다운 판단에 쓴다.\n SUMMARY_STAMP_RE = re.compile(r\"<!--\\s*llm-summary-at:(\\d+)\\s*-->\")\n+\n+# 다른 세션 참조(--ref): 이번 세션 대화에 1회 주입할 맥락의 상한.\n+REF_MARKER = \"[참고: 다른 세션의 맥락]\"\n+REF_MAX_CHARS = 24_000\n IGNORE_DIRS = {\n     \".git\",\n     \"node_modules\",\n@@ -2825,6 +2829,62 @@ def cmd_allow(session: str, clear: bool) -> int:\n     return 0\n \n \n+def ref_digest(messages: list[dict[str, Any]]) -> str:\n+    \"\"\"다른 세션 기록에서 참고용 텍스트(사용자/에이전트 발화)만 추출한다.\"\"\"\n+    lines: list[str] = []\n+    for msg in messages:\n+        role = msg.get(\"role\")\n+        content = (msg.get(\"content\") or \"\").strip()\n+        if role == \"user\" and content:\n+            lines.append(f\"[사용자] {content}\")\n+        elif role == \"assistant\" and content:\n+            lines.append(f\"[에이전트] {content}\")\n+    return \"\\n\".join(lines)\n+\n+\n+def build_ref_context(sessions: list[str], model: str) -> str | None:\n+    \"\"\"--ref 세션들의 맥락을 하나의 텍스트로 만든다. 참조 대상은 수정하지 않는다.\n+\n+    길면 요약을 시도하고, 실패하면 앞부분만 잘라 쓴다.\n+    \"\"\"\n+    blocks: list[str] = []\n+    for raw in sessions:\n+        name = (raw or \"\").strip()\n+        if not name:\n+            continue\n+        messages = load_history(history_file_for(name))\n+        if not messages:\n+            print_warn(f\"참고 세션 '{name}'에 대화 기록이 없어 건너뜁니다.\")\n+            continue\n+        digest = ref_digest(messages)\n+        if not digest:\n+            print_warn(f\"참고 세션 '{name}'에 참고할 발화가 없어 건너뜁니다.\")\n+            continue\n+        if len(digest) > REF_MAX_CHARS:\n+            print_info(f\"참고 세션 '{name}'이 길어 요약합니다…\")\n+            try:\n+                summary = summarize_messages(messages, model)\n+            except RuntimeError as exc:\n+                print_warn(f\"요약 실패({exc}); 앞부분만 사용합니다.\")\n+                summary = None\n+            digest = summary if summary else digest[:REF_MAX_CHARS] + \"\\n…(이하 생략)\"\n+        blocks.append(f\"### 세션 '{name}'\\n{digest}\")\n+    if not blocks:\n+        return None\n+    return REF_MARKER + \"\\n\" + \"\\n\\n\".join(blocks)\n+\n+\n+def inject_ref_context(history_file: Path, sessions: list[str], model: str) -> str | None:\n+    \"\"\"참고 맥락을 이번 세션 대화에 사용자 메시지로 1회 주입·저장한다.\"\"\"\n+    context = build_ref_context(sessions, model)\n+    if context is None:\n+        return None\n+    messages = load_history(history_file)\n+    messages.append({\"role\": \"user\", \"content\": context})\n+    save_history(history_file, messages)\n+    return context\n+\n+\n def cmd_view(session: str, history_file: Path) -> int:\n     if not history_file.is_file():\n         print_error(f\"[{session}] 세션에 저장된 대화가 없습니다.\")\n@@ -2902,6 +2962,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No\n         ('llm --show-thinking \"질문\"', \"사고 과정 원문까지 표시\"),\n         (\"llm -s <이름>\", \"이 폴더를 해당 세션에 매핑\"),\n         (\"llm -s <이름> --rebind\", \"다른 폴더의 세션을 이 폴더로 재지정\"),\n+        (\"llm --ref <이름>\", \"다른 세션 맥락을 이번 세션에 1회 주입\"),\n         (\"llm --unbind\", \"이 폴더의 세션 매핑 해제 (기록은 유지)\"),\n         (\"llm --init-rules\", \".llm/rules.md 생성\"),\n         (\"llm --rules\", \"세션 규칙 보기\"),\n@@ -3152,6 +3213,12 @@ def parse_args(argv: list[str]) -> argparse.Namespace:\n     parser.add_argument(\"-s\", \"--session\", help=\"세션 이름 (이 폴더에 매핑)\")\n     parser.add_argument(\"--rebind\", action=\"store_true\", help=\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\")\n     parser.add_argument(\"--unbind\", action=\"store_true\", help=\"이 폴더의 세션 매핑만 해제 (기록은 유지)\")\n+    parser.add_argument(\n+        \"--ref\",\n+        action=\"append\",\n+        metavar=\"세션\",\n+        help=\"다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용)\",\n+    )\n     parser.add_argument(\"--chat\", action=\"store_true\", help=\"도구 없이 순수 채팅\")\n     parser.add_argument(\"-y\", \"--yes\", action=\"store_true\", help=\"셸 명령 확인 생략\")\n     parser.add_argument(\"--model\", default=DEFAULT_MODEL, help=f\"모델 (기본: {DEFAULT_MODEL})\")\n@@ -3329,6 +3396,16 @@ def main(argv: list[str] | None = None) -> int:\n         print_error(f\"[{session}] 세션 파일이 존재하지 않습니다.\")\n         return 1\n \n+    if args.ref:\n+        context = inject_ref_context(history_file, args.ref, args.model)\n+        if context is None:\n+            print_error(\"참고(--ref)할 세션이 없습니다. 기록이 있는 세션 이름을 지정하세요.\")\n+            return 1\n+        names = \", \".join(n.strip() for n in args.ref if n.strip())\n+        print_ok(f\"[{session}]에 참고 맥락을 주입했습니다: {names}\")\n+        if not prompt:\n+            return 0\n+\n     if not prompt:\n         list_sessions(session, folders, root)\n         return 0\n"
+    },
+    {
+      "role": "assistant",
+      "content": "README diff도 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_gRWf5Xv4qZvjE3CvpRxS1249",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && git diff README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_gRWf5Xv4qZvjE3CvpRxS1249",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\ndiff --git a/README.md b/README.md\nindex 359b5d0..a6099b1 100644\n--- a/README.md\n+++ b/README.md\n@@ -133,6 +133,9 @@ llm --show-thinking \"이 코드의 버그 원인을 추적해줘\"\n # 읽기 전용 명령도 매번 확인 (자동 실행 비활성)\n llm --confirm-all \"이 폴더 상태를 점검해줘\"\n \n+# 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업\n+llm --ref design-notes \"이 맥락 참고해서 인증 모듈 리팩터링 이어줘\"\n+\n # 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기\n llm --allow-list\n llm --allow-clear\n@@ -160,6 +163,7 @@ llm --allow-clear\n | `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |\n | `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |\n | `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\n+| `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |\n | `--chat` | 도구 없이 순수 채팅 모드 |\n | `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |\n | `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일) |\n@@ -232,6 +236,7 @@ llm --delete\n | 대화·이어가기 / `--clear` / `--delete` / `--summarize` / `--run` / `--allow-clear` | 가능 | **거부** |\n | `-s <이름>` 으로 매핑(설정) | 가능 | **거부** |\n | `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |\n+| `--ref <이름>` (다른 세션 맥락 주입) | 가능 | **가능 (참조 대상은 읽기 전용)** |\n \n - 다른 폴더가 소유한 세션 이름을 `-s`로 지정하면 거부하고 소유 폴더만\n   안내합니다. 매핑 파일은 바뀌지 않습니다.\n@@ -241,6 +246,22 @@ llm --delete\n   이전 소유 폴더는 매핑이 해제됩니다.\n - `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\n \n+### 다른 세션 맥락 참조 (`--ref`)\n+\n+진행 중인 세션(A)을 유지한 채 **다른 세션(B)의 맥락을 참고**하고 싶을 때 씁니다.\n+\n+- `llm --ref <이름> \"질문\"` 은 B의 맥락을 **이번 세션(A)에 1회 주입**한 뒤 대화를\n+  진행합니다. A는 그대로 유지되고, B는 **읽기 전용**으로만 읽어 소유권·기록이\n+  바뀌지 않습니다(`--view`와 같은 권한 규칙).\n+- 주입 내용은 B의 사용자/에이전트 발화를 뽑아 `[참고: 다른 세션의 맥락]` 표시가\n+  붙은 **사용자 메시지로 A 기록에 저장**됩니다(이후 턴에서도 A의 맥락으로 남음).\n+- 여러 세션을 동시에 참조할 수 있습니다: `llm --ref A --ref B \"질문\"`.\n+- 프롬프트 없이 `llm --ref B` 로 실행하면 **주입만 하고 종료**합니다\n+  (A 세션이 이미 있어야 함).\n+- B의 발췌가 `REF_MAX_CHARS`(24,000자)를 넘으면 요약을 시도하고, 실패하면 앞부분만\n+  잘라 씁니다. 기록이 없는 세션 이름은 경고 후 건너뜁니다.\n+- **소유권 이동이 필요하면 `--rebind`**, **맥락 참고만 하려면 `--ref`** 입니다.\n+\n ---\n \n ## 대화 요약과 백업\n@@ -613,7 +634,8 @@ llm (bash)  →  agent.py (python)\n   `ShellApproval`(세션별 자동 허용 목록, `--allow-list`/`--allow-clear`)\n - **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`\n   (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),\n-  `load_session_rules`\n+  `load_session_rules`, `ref_digest`/`build_ref_context`/`inject_ref_context`(다른 세션\n+  맥락 1회 주입, `--ref`)\n - **요약/백업**: `should_summarize`, `summarize_messages`, `backup_conversation`,\n   `apply_summary`, `maybe_summarize`, `cmd_summarize`\n - **UI**: `render_markdown`(glow), `print_title`/`print_info`/`print_ok`/\n"
+    },
+    {
+      "role": "assistant",
+      "content": "모든 변경이 정상입니다. 커밋합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_up5eAWhpMmIexBAQecVS3552",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && git add -A && git commit -q -m \\\"feat: --ref 로 다른 세션 맥락을 현재 세션에 1회 주입 (README 갱신)\\\" && git log --oneline -3\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_up5eAWhpMmIexBAQecVS3552",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n6fd2203 feat: --ref 로 다른 세션 맥락을 현재 세션에 1회 주입 (README 갱신)\n4910662 세션-폴더 1:1 바인딩: 소유 폴더 외 설정/수정 거부, --view 읽기 전용 허용, --rebind/--unbind 추가, --root·current_session 제거\n632a81a 에이전트 한도 도달 시 이어서 진행 여부 확인(y/N) 추가, --max-steps 기본값 50\n"
+    },
+    {
+      "role": "assistant",
+      "content": "방안 A(1회성 참조 주입)를 구현·검증·커밋까지 마쳤습니다.\n\n## 구현 요약\n\n**새 옵션: `llm --ref <세션>`** (여러 번 지정 가능)\n\n```\nllm --ref design-notes \"이 맥락 참고해서 인증 모듈 리팩터링 이어줘\"\nllm --ref A --ref B \"질문\"      # 여러 세션 동시 참조\nllm --ref design-notes          # 프롬프트 없이 주입만 하고 종료\n```\n\n### 동작\n1. 참조 세션(B)의 기록에서 사용자/에이전트 발화만 뽑아 **텍스트 다이제스트** 생성 (`ref_digest`).\n2. `[참고: 다른 세션의 맥락]` 표시를 붙여 **현재 세션(A)에 사용자 메시지로 저장** (`inject_ref_context`).\n3. 이후 A가 평소처럼 진행 — A는 그대로 유지, **B는 읽기 전용**(소유권·기록 불변, `--view`와 동일 권한 규칙).\n\n### 추가한 코드 (`agent.py`)\n- 상수: `REF_MARKER`, `REF_MAX_CHARS = 24_000`\n- 함수: `ref_digest` / `build_ref_context` / `inject_ref_context`\n  - B 발췌가 24,000자를 넘으면 기존 `summarize_messages`로 요약 시도, 실패 시 앞부분만 잘라 사용\n  - 기록 없는 세션은 경고 후 건너뜀, 전부 없으면 에러(exit 1)\n- `parse_args`에 `--ref`(append), `main`에서 주입 처리, 세션 목록 사용법에 안내 추가\n\n### 검증 (self-test 세션 `ztestref*`, API 호출 없이)\n- 단일/다중 참조 주입 → `[참고: 다른 세션의 맥락]` + 블록 정상 생성 ✅\n- 없는 세션 → 경고 후 건너뜀 / 전부 없으면 에러 ✅\n- **참조 대상 파일 해시 불변**(읽기 전용) ✅\n- 인자 파싱(다중 `--ref`, `-s`+`--`, `--view` 조합) ✅\n- `python3 -m py_compile agent.py` OK ✅\n- 테스트 잔여물(`ztestref*` 히스토리·바인딩) 삭제 완료 ✅\n\n### 문서\n- README: CLI 옵션 표, 빠른 시작 예시, 세션 권한 표, **\"다른 세션 맥락 참조 (`--ref`)\"** 신규 하위 섹션, 아키텍처 항목 갱신\n\n### 참고(현재 한계)\n- `--ref`는 주입 시점에 A 기록에 저장되므로, 반복 실행하면 참조 블록이 쌓입니다(필요 시 `--clear`).\n- `--view`/`--run` 같은 \"보기 전용\" 명령과 함께 쓰면 `--ref`는 동작하지 않습니다(해당 명령이 먼저 반환).\n\n커밋: `6fd2203 feat: --ref 로 다른 세션 맥락을 현재 세션에 1회 주입 (README 갱신)`"
+    },
+    {
+      "role": "user",
+      "content": "아직도 사용법에는 llm -s <이름> --rebind와 같은 위험한 명령이 남아 있어"
+    },
+    {
+      "role": "assistant",
+      "content": "맞습니다. `list_sessions`의 사용법 안내와 README에 `--rebind`가 그대로 남아 있습니다. 위치를 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_k91y0qKTHyNXUpgW6KJ00336",
+          "type": "function",
+          "function": {
+            "name": "grep",
+            "arguments": "{\"pattern\": \"rebind\", \"path\": \".\", \"glob\": \"*.py\"}"
+          }
+        },
+        {
+          "id": "call_01_aONT8dCN3eJ7K0CfNKyu9606",
+          "type": "function",
+          "function": {
+            "name": "grep",
+            "arguments": "{\"pattern\": \"rebind\", \"path\": \"README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_k91y0qKTHyNXUpgW6KJ00336",
+      "name": "grep",
+      "content": "agent.py:867:    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.\nagent.py:2964:        (\"llm -s <이름> --rebind\", \"다른 폴더의 세션을 이 폴더로 재지정\"),\nagent.py:3214:    parser.add_argument(\"--rebind\", action=\"store_true\", help=\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\")\nagent.py:3312:    if args.rebind and not args.session:\nagent.py:3313:        print_error(\"--rebind 는 -s <이름> 과 함께 사용하세요.\")\nagent.py:3323:        if args.rebind:\nagent.py:3339:                print_info(f\"옮기려면  llm -s {session} --rebind\")\nagent.py:3348:                print_info(\"세션을 바꾸려면  llm -s <이름> --rebind\")"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_aONT8dCN3eJ7K0CfNKyu9606",
+      "name": "grep",
+      "content": "README.md:164:| `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |\nREADME.md:198:llm -s mysession --rebind\nREADME.md:245:- 세션을 옮기려면 `llm -s <이름> --rebind`로 **명시적으로** 지정해야 합니다.\nREADME.md:263:- **소유권 이동이 필요하면 `--rebind`**, **맥락 참고만 하려면 `--ref`** 입니다."
+    },
+    {
+      "role": "assistant",
+      "content": "`--rebind`가 사용법 안내·README·에러 힌트에 그대로 남아 있네요. 안전한 대체 경로(`--unbind` 후 재바인딩)가 이미 있으므로 `--rebind`를 완전히 제거하겠습니다. 먼저 정확한 코드 위치를 확인합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_4rzCS966eJK71MYQJpNV1631",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 80, \"offset\": 3300, \"path\": \"agent.py\"}"
+          }
+        },
+        {
+          "id": "call_01_Q2BAJuLNLxRtItBDKOEv8634",
+          "type": "function",
+          "function": {
+            "name": "grep",
+            "arguments": "{\"path\": \"agent.py\", \"pattern\": \"ensure_binding\\\\(\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_4rzCS966eJK71MYQJpNV1631",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3447 lines)\n  3300|    owned = folders.get(folder_key)  # 이 폴더에 묶인 세션\n  3301|    session: str | None = None\n  3302|\n  3303|    if args.unbind:\n  3304|        if owned is None:\n  3305|            print_info(\"이 폴더에 매핑된 세션이 없습니다.\")\n  3306|            return 0\n  3307|        folders = unbind_session(folders, owned)\n  3308|        print_ok(f\"이 폴더의 세션 매핑을 해제했습니다 (세션: {owned}).\")\n  3309|        print_info(f\"대화 기록은 남아 있습니다: {history_file_for(owned)}\")\n  3310|        return 0\n  3311|\n  3312|    if args.rebind and not args.session:\n  3313|        print_error(\"--rebind 는 -s <이름> 과 함께 사용하세요.\")\n  3314|        return 1\n  3315|\n  3316|    if args.session:\n  3317|        session = args.session.strip()\n  3318|        if not session:\n  3319|            print_error(\"세션 이름이 비어 있습니다.\")\n  3320|            return 1\n  3321|        owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\n  3322|\n  3323|        if args.rebind:\n  3324|            # 명시적 재지정: 이 폴더로 옮긴다(기존 소유 폴더는 해제됨).\n  3325|            folders, err, _ = ensure_binding(folders, root, session, reassign=True)\n  3326|            if err:\n  3327|                print_error(f\"세션을 이 폴더로 옮기지 못했습니다: {err}\")\n  3328|                return 1\n  3329|            if owner is not None and owner != folder_key:\n  3330|                print_info(f\"세션 '{session}' 폴더 매핑: {owner} → {root}\")\n  3331|            if owned is not None and owned != session:\n  3332|                print_info(f\"이 폴더의 이전 세션 '{owned}' 매핑을 해제했습니다.\")\n  3333|        elif owner is not None and owner != folder_key:\n  3334|            # 남의 세션: 설정·수정·삭제는 거부, 조회(--view/--allow-list)만 허용.\n  3335|            if not (inspect_only and read_only):\n  3336|                print_error(f\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\")\n  3337|                print_info(f\"  {owner}\")\n  3338|                print_info(\"이 폴더에서는 조회(--view)만 가능합니다.\")\n  3339|                print_info(f\"옮기려면  llm -s {session} --rebind\")\n  3340|                return 1\n  3341|        elif owner is None and inspect_only and read_only:\n  3342|            pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.\n  3343|        else:\n  3344|            # 내 세션이거나, 아직 주인이 없는 이름 → 이 폴더에 바인딩.\n  3345|            folders, err, detail = ensure_binding(folders, root, session)\n  3346|            if err == \"folder_already_bound\":\n  3347|                print_error(f\"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.\")\n  3348|                print_info(\"세션을 바꾸려면  llm -s <이름> --rebind\")\n  3349|                return 1\n  3350|            if err == \"session_bound_elsewhere\":\n  3351|                print_error(f\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\")\n  3352|                print_info(f\"  {detail}\")\n  3353|                return 1\n  3354|    else:\n  3355|        session = owned\n  3356|        if session is None:\n  3357|            if prompt:\n  3358|                session = auto_session_name(root, folders)\n  3359|                folders, err, _ = ensure_binding(folders, root, session)\n  3360|                if err:\n  3361|                    print_error(f\"세션을 만들지 못했습니다: {err}\")\n  3362|                    return 1\n  3363|            elif inspect_only:\n  3364|                print_error(\"이 폴더에 매핑된 세션이 없습니다.\")\n  3365|                print_info(\"대화를 시작하거나  llm -s <이름>  으로 지정하세요.\")\n  3366|                return 1\n  3367|            else:\n  3368|                list_sessions(None, folders, root)\n  3369|                return 0\n  3370|\n  3371|    history_file = history_file_for(session)\n  3372|\n  3373|    if args.view:\n  3374|        return cmd_view(session, history_file)\n  3375|    if args.run:\n  3376|        return cmd_run(session, history_file)\n  3377|    if args.summarize:\n  3378|        return cmd_summarize(session, history_file, args.model, force=True)\n  3379|    if args.allow_list or args.allow_clear:\n... [68 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_Q2BAJuLNLxRtItBDKOEv8634",
+      "name": "grep",
+      "content": "agent.py:859:def ensure_binding(\nagent.py:3325:            folders, err, _ = ensure_binding(folders, root, session, reassign=True)\nagent.py:3345:            folders, err, detail = ensure_binding(folders, root, session)\nagent.py:3359:                folders, err, _ = ensure_binding(folders, root, session)"
+    },
+    {
+      "role": "assistant",
+      "content": "`--rebind` 관련 코드를 순서대로 제거합니다.\n\n**1) `ensure_binding`에서 `reassign` 로직 제거**",
+      "tool_calls": [
+        {
+          "id": "call_00_Nx2eMC6eLoTqRxO668xj4655",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 26, \"offset\": 859, \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_Nx2eMC6eLoTqRxO668xj4655",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3447 lines)\n   859|def ensure_binding(\n   860|    folders: dict[str, str], root: Path, session: str, *, reassign: bool = False\n   861|) -> tuple[dict[str, str], str | None, str | None]:\n   862|    \"\"\"이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.\n   863|\n   864|    반환: (folders, error, detail)\n   865|      - error=\"folder_already_bound\" → detail=이 폴더에 이미 묶인 세션 이름\n   866|      - error=\"session_bound_elsewhere\" → detail=세션을 소유한 폴더 경로\n   867|    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.\n   868|    \"\"\"\n   869|    folder_s = canonical_folder(root)\n   870|    owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\n   871|    existing = folders.get(folder_s)  # 이 폴더에 묶인 세션\n   872|    if not reassign:\n   873|        if existing is not None and existing != session:\n   874|            return folders, \"folder_already_bound\", existing\n   875|        if owner is not None and owner != folder_s:\n   876|            return folders, \"session_bound_elsewhere\", owner\n   877|    folders = {p: s for p, s in folders.items() if s != session and p != folder_s}\n   878|    folders[folder_s] = session\n   879|    save_bindings(folders)\n   880|    return folders, None, None\n   881|\n   882|\n   883|def unbind_session(folders: dict[str, str], session: str) -> dict[str, str]:\n   884|    folders = {canonical_folder(path): sess for path, sess in folders.items() if sess != session}\n... [2563 more lines; use offset/limit]"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_v54Cwfq9OZQYDQ4MOseF1264",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"path\": \"agent.py\", \"old_string\": \"def ensure_binding(\\n    folders: dict[str, str], root: Path, session: str, *, reassign: bool = False\\n) -> tuple[dict[str, str], str | None, str | None]:\\n    \\\"\\\"\\\"이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.\\n\\n    반환: (folders, error, detail)\\n      - error=\\\"folder_already_bound\\\" → detail=이 폴더에 이미 묶인 세션 이름\\n      - error=\\\"session_bound_elsewhere\\\" → detail=세션을 소유한 폴더 경로\\n    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.\\n    \\\"\\\"\\\"\\n    folder_s = canonical_folder(root)\\n    owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\\n    existing = folders.get(folder_s)  # 이 폴더에 묶인 세션\\n    if not reassign:\\n        if existing is not None and existing != session:\\n            return folders, \\\"folder_already_bound\\\", existing\\n        if owner is not None and owner != folder_s:\\n            return folders, \\\"session_bound_elsewhere\\\", owner\\n    folders = {p: s for p, s in folders.items() if s != session and p != folder_s}\\n    folders[folder_s] = session\\n    save_bindings(folders)\\n    return folders, None, None\", \"new_string\": \"def ensure_binding(\\n    folders: dict[str, str], root: Path, session: str\\n) -> tuple[dict[str, str], str | None, str | None]:\\n    \\\"\\\"\\\"이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.\\n\\n    이미 다른 폴더가 소유한 세션은 이 폴더로 끌어오지 않는다(남의 소유를 존중).\\n    소유권을 옮기려면 소유 폴더에서 `llm --unbind` 후 이 폴더에서 다시 지정한다.\\n\\n    반환: (folders, error, detail)\\n      - error=\\\"folder_already_bound\\\" → detail=이 폴더에 이미 묶인 세션 이름\\n      - error=\\\"session_bound_elsewhere\\\" → detail=세션을 소유한 폴더 경로\\n    \\\"\\\"\\\"\\n    folder_s = canonical_folder(root)\\n    owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\\n    existing = folders.get(folder_s)  # 이 폴더에 묶인 세션\\n    if existing is not None and existing != session:\\n        return folders, \\\"folder_already_bound\\\", existing\\n    if owner is not None and owner != folder_s:\\n        return folders, \\\"session_bound_elsewhere\\\", owner\\n    folders = {p: s for p, s in folders.items() if s != session and p != folder_s}\\n    folders[folder_s] = session\\n    save_bindings(folders)\\n    return folders, None, None\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_v54Cwfq9OZQYDQ4MOseF1264",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**2) `--rebind` 옵션 제거**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_yghXRd4tSwl5eVYvIJJs2996",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"    parser.add_argument(\\\"-s\\\", \\\"--session\\\", help=\\\"세션 이름 (이 폴더에 매핑)\\\")\\n    parser.add_argument(\\\"--unbind\\\", action=\\\"store_true\\\", help=\\\"이 폴더의 세션 매핑만 해제 (기록은 유지)\\\")\", \"old_string\": \"    parser.add_argument(\\\"-s\\\", \\\"--session\\\", help=\\\"세션 이름 (이 폴더에 매핑)\\\")\\n    parser.add_argument(\\\"--rebind\\\", action=\\\"store_true\\\", help=\\\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\\\")\\n    parser.add_argument(\\\"--unbind\\\", action=\\\"store_true\\\", help=\\\"이 폴더의 세션 매핑만 해제 (기록은 유지)\\\")\", \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_yghXRd4tSwl5eVYvIJJs2996",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**3) `main`의 rebind 분기·힌트 제거 및 안전한 이전 안내로 교체**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_qQQ8iS4wGyAnIlHn0e983898",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"    if args.session:\\n        session = args.session.strip()\\n        if not session:\\n            print_error(\\\"세션 이름이 비어 있습니다.\\\")\\n            return 1\\n        owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\\n\\n        if owner is not None and owner != folder_key:\\n            # 남의 세션: 설정·수정·삭제는 거부, 조회(--view/--allow-list)만 허용.\\n            if not (inspect_only and read_only):\\n                print_error(f\\\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\\\")\\n                print_info(f\\\"  {owner}\\\")\\n                print_info(\\\"이 폴더에서는 조회(--view)만 가능합니다.\\\")\\n                print_info(f\\\"맥락이 필요하면  llm --ref {session} \\\\\\\"질문\\\\\\\"\\\")\\n                print_info(f\\\"소유권을 옮기려면 {owner} 에서  llm --unbind  후 여기서 다시 지정하세요.\\\")\\n                return 1\\n        elif owner is None and inspect_only and read_only:\\n            pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.\\n        else:\\n            # 내 세션이거나, 아직 주인이 없는 이름 → 이 폴더에 바인딩.\\n            folders, err, detail = ensure_binding(folders, root, session)\\n            if err == \\\"folder_already_bound\\\":\\n                print_error(f\\\"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.\\\")\\n                print_info(\\\"바꾸려면  llm --unbind  후  llm -s <이름>\\\")\\n                return 1\\n            if err == \\\"session_bound_elsewhere\\\":\\n                print_error(f\\\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\\\")\\n                print_info(f\\\"  {detail}\\\")\\n                return 1\", \"old_string\": \"    if args.rebind and not args.session:\\n        print_error(\\\"--rebind 는 -s <이름> 과 함께 사용하세요.\\\")\\n        return 1\\n\\n    if args.session:\\n        session = args.session.strip()\\n        if not session:\\n            print_error(\\\"세션 이름이 비어 있습니다.\\\")\\n            return 1\\n        owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\\n\\n        if args.rebind:\\n            # 명시적 재지정: 이 폴더로 옮긴다(기존 소유 폴더는 해제됨).\\n            folders, err, _ = ensure_binding(folders, root, session, reassign=True)\\n            if err:\\n                print_error(f\\\"세션을 이 폴더로 옮기지 못했습니다: {err}\\\")\\n                return 1\\n            if owner is not None and owner != folder_key:\\n                print_info(f\\\"세션 '{session}' 폴더 매핑: {owner} → {root}\\\")\\n            if owned is not None and owned != session:\\n                print_info(f\\\"이 폴더의 이전 세션 '{owned}' 매핑을 해제했습니다.\\\")\\n        elif owner is not None and owner != folder_key:\\n            # 남의 세션: 설정·수정·삭제는 거부, 조회(--view/--allow-list)만 허용.\\n            if not (inspect_only and read_only):\\n                print_error(f\\\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\\\")\\n                print_info(f\\\"  {owner}\\\")\\n                print_info(\\\"이 폴더에서는 조회(--view)만 가능합니다.\\\")\\n                print_info(f\\\"옮기려면  llm -s {session} --rebind\\\")\\n                return 1\\n        elif owner is None and inspect_only and read_only:\\n            pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.\\n        else:\\n            # 내 세션이거나, 아직 주인이 없는 이름 → 이 폴더에 바인딩.\\n            folders, err, detail = ensure_binding(folders, root, session)\\n            if err == \\\"folder_already_bound\\\":\\n                print_error(f\\\"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.\\\")\\n                print_info(\\\"세션을 바꾸려면  llm -s <이름> --rebind\\\")\\n                return 1\\n            if err == \\\"session_bound_elsewhere\\\":\\n                print_error(f\\\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\\\")\\n                print_info(f\\\"  {detail}\\\")\\n                return 1\", \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_qQQ8iS4wGyAnIlHn0e983898",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**4) 사용법 안내에서 `--rebind` 제거**",
+      "tool_calls": [
+        {
+          "id": "call_00_CouSQocY7OxA1pZZxNl29412",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"        (\\\"llm -s <이름>\\\", \\\"이 폴더를 해당 세션에 매핑\\\"),\\n        (\\\"llm --ref <이름>\\\", \\\"다른 세션 맥락을 이번 세션에 1회 주입\\\"),\\n        (\\\"llm --unbind\\\", \\\"이 폴더의 세션 매핑 해제 (기록은 유지)\\\"),\", \"old_string\": \"        (\\\"llm -s <이름>\\\", \\\"이 폴더를 해당 세션에 매핑\\\"),\\n        (\\\"llm -s <이름> --rebind\\\", \\\"다른 폴더의 세션을 이 폴더로 재지정\\\"),\\n        (\\\"llm --ref <이름>\\\", \\\"다른 세션 맥락을 이번 세션에 1회 주입\\\"),\\n        (\\\"llm --unbind\\\", \\\"이 폴더의 세션 매핑 해제 (기록은 유지)\\\"),\", \"path\": \"agent.py\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_CouSQocY7OxA1pZZxNl29412",
+      "name": "str_replace",
+      "content": "updated agent.py (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "**5) 검증 (문법 + `--rebind` 제거 + 인자 파싱)**",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_3fTiEkbXzlDqH8dRwYep2778",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && python3 -m py_compile agent.py && echo \\\"py_compile OK\\\"\\necho \\\"=== --rebind 잔여 참조 (agent.py) ===\\\"\\ngrep -n \\\"rebind\\\" agent.py || echo \\\"(없음)\\\"\\necho \\\"=== --rebind 사용 시 동작 ===\\\"\\n./llm --rebind 2>&1 | tail -3; echo \\\"exit=$?\\\"\\necho \\\"=== 사용법 출력에 rebind 없음 확인 ===\\\"\\npython3 - <<'PY'\\nimport agent\\nfor argv in [[\\\"-s\\\",\\\"S\\\",\\\"--rebind\\\"], [\\\"-s\\\",\\\"S\\\"], [\\\"--ref\\\",\\\"B\\\",\\\"q\\\"]]:\\n    try:\\n        a = agent.parse_args(argv)\\n        print(argv, \\\"OK ref=\\\", a.ref, \\\"session=\\\", a.session)\\n    except SystemExit as e:\\n        print(argv, \\\"SystemExit:\\\", e.code)\\nPY\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_3fTiEkbXzlDqH8dRwYep2778",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\npy_compile OK\n=== --rebind 잔여 참조 (agent.py) ===\n(없음)\n=== --rebind 사용 시 동작 ===\n           [--delete]\n           ...\nllm: error: unrecognized arguments: --rebind\nexit=0\n=== 사용법 출력에 rebind 없음 확인 ===\n['-s', 'S', '--rebind'] SystemExit: 2\n['-s', 'S'] OK ref= None session= S\n['--ref', 'B', 'q'] OK ref= ['B'] session= None\n\n--- stderr ---\nusage: llm [-h] [-s SESSION] [--unbind] [--ref 세션] [--chat] [-y]\n           [--model MODEL] [--max-steps MAX_STEPS] [--no-stream]\n           [--no-thinking] [--show-thinking] [--confirm-all] [--allow-all]\n           [--auto-workspace] [--allow-list] [--allow-clear] [--init-rules]\n           [--rules] [--summarize] [--balance] [--view] [--run] [--clear]\n           [--delete]\n           ...\nllm: error: unrecognized arguments: --rebind\n"
+    },
+    {
+      "role": "assistant",
+      "content": "README에서 `--rebind` 관련 부분을 모두 확인합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_wHfgjKpQlD8qZJjNrUMz9060",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"path\": \"README.md\", \"offset\": 156, \"limit\": 110}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_wHfgjKpQlD8qZJjNrUMz9060",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/README.md (714 lines)\n   156|| `llm --chat \"질문\"` | 도구 없이 순수 채팅 |\n   157|| `llm` | 상태/세션 목록/사용법 표시 |\n   158|\n   159|### 옵션\n   160|\n   161|| 옵션 | 설명 |\n   162||------|------|\n   163|| `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |\n   164|| `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |\n   165|| `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\n   166|| `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |\n   167|| `--chat` | 도구 없이 순수 채팅 모드 |\n   168|| `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |\n   169|| `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일) |\n   170|| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령만 확인 없이 실행 (기본보다 엄격, `LLM_AUTO_WORKSPACE=1`이면 기본 활성) |\n   171|| `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |\n   172|| `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 50). 한도에 도달하면 종료하지 않고 **이어서 N회 더 진행할지 `[y/N]`으로 확인** |\n   173|| `--no-stream` | 스트리밍 비활성화 |\n   174|| `--no-thinking` | 사고(thinking) 비활성화 (더 빠른 응답, `--chat`에서 유용) |\n   175|| `--show-thinking` | 사고 과정 원문을 회색으로 실시간 출력 (기본은 글자 수만 표시) |\n   176|| `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (모든 셸 명령 확인, 다른 모드보다 우선) |\n   177|| `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 |\n   178|| `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 |\n   179|| `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |\n   180|| `--rules` | 이 폴더의 세션 규칙 보기 |\n   181|| `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |\n   182|| `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |\n   183|| `--view` | 세션 대화 내용 보기 (Markdown) |\n   184|| `--clear` | 현재 세션 내용만 비우기 |\n   185|| `--delete` | 현재 세션 파일 삭제 및 폴더 매핑 해제 |\n   186|| `--balance` | DeepSeek API 잔액 조회 (KRW 환산) |\n   187|\n   188|셸 실행 범위 우선순위: `--confirm-all` > `--allow-all`/`LLM_ALLOW_ALL` >\n   189|`--auto-workspace`/`LLM_AUTO_WORKSPACE` > 기본(허용 모드).\n   190|\n   191|### 사용 예\n   192|\n   193|```bash\n   194|# 세션 이름을 명시적으로 고정 (이 폴더에 바인딩)\n   195|llm -s mysession \"이 대화는 mysession으로 저장해줘\"\n   196|\n   197|# 다른 폴더의 세션을 이 폴더로 옮김 (명시적)\n   198|llm -s mysession --rebind\n   199|\n   200|# 이 폴더의 세션 매핑만 해제 (기록은 유지)\n   201|llm --unbind\n   202|\n   203|# 다른 폴더 세션의 대화 내용 보기 (읽기 전용)\n   204|llm -s other --view\n   205|\n   206|# 최근 답변의 스크립트를 추출해 실행\n   207|llm --run\n   208|\n   209|# 세션 초기화 / 삭제\n   210|llm --clear\n   211|llm --delete\n   212|```\n   213|\n   214|> 옵션과 프롬프트를 함께 쓸 때는 프롬프트를 `--`로 구분할 수 있습니다.\n   215|> 예: `llm -s mysession -- \"질문\"`\n   216|\n   217|---\n   218|\n   219|## 세션과 폴더 매핑\n   220|\n   221|- **작업 폴더는 항상 지금 있는 폴더(`cwd`)입니다.** 경로를 지정하는\n   222|  `--root`는 없습니다.\n   223|- 하나의 **세션 이름**은 하나의 **폴더**에만 연결됩니다. 대화 기록은\n   224|  `~/.local/share/llm/history_<세션>.json`에 저장됩니다.\n   225|- 폴더-세션 매핑은 `~/.local/share/llm/bindings.json`에 저장되며, 경로 키는\n   226|  로드·저장 시 **정규화**됩니다(심볼릭 링크 해소, 뒤쪽 구분자 제거,\n   227|  macOS/Windows 대소문자 통일). `a`, `a/`, `a/.`, 심볼릭 링크 경로는 모두\n   228|  같은 폴더로 취급됩니다.\n   229|- 매핑이 없는 폴더에서 대화를 시작하면 **폴더 이름 기반으로 세션이 자동\n   230|  생성**됩니다. (예: `~/work/api` → 세션 `api`; 이름 충돌 시 해시 접미사 추가)\n   231|\n   232|### 소유와 권한\n   233|\n   234|| 동작 | 이 폴더의 세션 | 다른 폴더의 세션 |\n   235||------|------|------|\n   236|| 대화·이어가기 / `--clear` / `--delete` / `--summarize` / `--run` / `--allow-clear` | 가능 | **거부** |\n   237|| `-s <이름>` 으로 매핑(설정) | 가능 | **거부** |\n   238|| `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |\n   239|| `--ref <이름>` (다른 세션 맥락 주입) | 가능 | **가능 (참조 대상은 읽기 전용)** |\n   240|\n   241|- 다른 폴더가 소유한 세션 이름을 `-s`로 지정하면 거부하고 소유 폴더만\n   242|  안내합니다. 매핑 파일은 바뀌지 않습니다.\n   243|- 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `--view`처럼 보기만 하는\n   244|  명령만 허용됩니다. 보고만 하는 명령은 바인딩을 만들지 않습니다.\n   245|- 세션을 옮기려면 `llm -s <이름> --rebind`로 **명시적으로** 지정해야 합니다.\n   246|  이전 소유 폴더는 매핑이 해제됩니다.\n   247|- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\n   248|\n   249|### 다른 세션 맥락 참조 (`--ref`)\n   250|\n   251|진행 중인 세션(A)을 유지한 채 **다른 세션(B)의 맥락을 참고**하고 싶을 때 씁니다.\n   252|\n   253|- `llm --ref <이름> \"질문\"` 은 B의 맥락을 **이번 세션(A)에 1회 주입**한 뒤 대화를\n   254|  진행합니다. A는 그대로 유지되고, B는 **읽기 전용**으로만 읽어 소유권·기록이\n   255|  바뀌지 않습니다(`--view`와 같은 권한 규칙).\n   256|- 주입 내용은 B의 사용자/에이전트 발화를 뽑아 `[참고: 다른 세션의 맥락]` 표시가\n   257|  붙은 **사용자 메시지로 A 기록에 저장**됩니다(이후 턴에서도 A의 맥락으로 남음).\n   258|- 여러 세션을 동시에 참조할 수 있습니다: `llm --ref A --ref B \"질문\"`.\n   259|- 프롬프트 없이 `llm --ref B` 로 실행하면 **주입만 하고 종료**합니다\n   260|  (A 세션이 이미 있어야 함).\n   261|- B의 발췌가 `REF_MAX_CHARS`(24,000자)를 넘으면 요약을 시도하고, 실패하면 앞부분만\n   262|  잘라 씁니다. 기록이 없는 세션 이름은 경고 후 건너뜁니다.\n   263|- **소유권 이동이 필요하면 `--rebind`**, **맥락 참고만 하려면 `--ref`** 입니다.\n   264|\n   265|---\n... [449 more lines; use offset/limit]"
+    },
+    {
+      "role": "assistant",
+      "content": "README를 갱신합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_iQjxpoGQjEcF6I2e3v278621",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"| `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |\\n| `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\", \"old_string\": \"| `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |\\n| `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |\\n| `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\", \"path\": \"README.md\"}"
+          }
+        },
+        {
+          "id": "call_01_ET_3Q1Ba2i7qiUnWPpQWU5M4690",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"# 세션 이름을 명시적으로 고정 (이 폴더에 바인딩)\\nllm -s mysession \\\"이 대화는 mysession으로 저장해줘\\\"\\n\\n# 이 폴더의 세션 매핑만 해제 (기록은 유지)\\nllm --unbind\\n\\n# 다른 폴더 세션의 대화 내용 보기 (읽기 전용)\\nllm -s other --view\\n\\n# 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업\\nllm --ref design-notes \\\"이 맥락 참고해서 이어줘\\\"\", \"old_string\": \"# 세션 이름을 명시적으로 고정 (이 폴더에 바인딩)\\nllm -s mysession \\\"이 대화는 mysession으로 저장해줘\\\"\\n\\n# 다른 폴더의 세션을 이 폴더로 옮김 (명시적)\\nllm -s mysession --rebind\\n\\n# 이 폴더의 세션 매핑만 해제 (기록은 유지)\\nllm --unbind\\n\\n# 다른 폴더 세션의 대화 내용 보기 (읽기 전용)\\nllm -s other --view\", \"path\": \"README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_iQjxpoGQjEcF6I2e3v278621",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_ET_3Q1Ba2i7qiUnWPpQWU5M4690",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_ET_dflED0M2TXLUX0jPhwE60321",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"- 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `--view`처럼 보기만 하는\\n  명령만 허용됩니다. 보고만 하는 명령은 바인딩을 만들지 않습니다.\\n- 남의 세션을 이 폴더로 **끌어오는 명령은 두지 않습니다**(소유권 보호). 세션을\\n  옮기려면 소유 폴더에서 `llm --unbind`로 매핑을 푼 뒤(기록은 유지), 옮길 폴더에서\\n  `llm -s <이름>`으로 다시 지정합니다.\\n- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\", \"old_string\": \"- 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `--view`처럼 보기만 하는\\n  명령만 허용됩니다. 보고만 하는 명령은 바인딩을 만들지 않습니다.\\n- 세션을 옮기려면 `llm -s <이름> --rebind`로 **명시적으로** 지정해야 합니다.\\n  이전 소유 폴더는 매핑이 해제됩니다.\\n- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\", \"path\": \"README.md\"}"
+          }
+        },
+        {
+          "id": "call_01_ET_v3aI2qp11q5toLYLzcn10013",
+          "type": "function",
+          "function": {
+            "name": "str_replace",
+            "arguments": "{\"new_string\": \"- **맥락 참고만 하려면 `--ref`** (소유권은 옮기지 않음). 세션을 옮기는 경우에도\\n  소유 폴더에서 `llm --unbind` 후 새 폴더에서 `-s`로 다시 지정합니다.\", \"old_string\": \"- **소유권 이동이 필요하면 `--rebind`**, **맥락 참고만 하려면 `--ref`** 입니다.\", \"path\": \"README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ET_dflED0M2TXLUX0jPhwE60321",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_ET_v3aI2qp11q5toLYLzcn10013",
+      "name": "str_replace",
+      "content": "updated README.md (1 replacement)"
+    },
+    {
+      "role": "assistant",
+      "content": "",
+      "tool_calls": [
+        {
+          "id": "call_00_e3NwxJP6nR0ABuJqWRdf3029",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && echo \\\"=== rebind 잔여 참조 ===\\\" && grep -rn \\\"rebind\\\" agent.py README.md llm || echo \\\"(없음)\\\"\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_e3NwxJP6nR0ABuJqWRdf3029",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n=== rebind 잔여 참조 ===\n(없음)\n"
+    },
+    {
+      "role": "assistant",
+      "content": "문법 검증과 소유권 흐름 동작을 확인합니다(selftest 세션 사용).",
+      "tool_calls": [
+        {
+          "id": "call_00_jTLk1wGoEEbSNt5AlXDp6269",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && python3 -m py_compile agent.py && echo \\\"py_compile OK\\\"\\nLLM=/home/rasp/codespace/userscript/llm/llm\\nmkdir -p /tmp/llmown/a /tmp/llmown/b\\necho \\\"=== 1) A에 세션 ztestown 매핑 (프롬프트 없이 -s) ===\\\"\\ncd /tmp/llmown/a && $LLM -s ztestown\\necho \\\"=== 2) A에서 다른 이름으로 재지정 시도 (folder_already_bound 거부 + 힌트) ===\\\"\\ncd /tmp/llmown/a && $LLM -s ztestown2; echo \\\"exit=$?\\\"\\necho \\\"=== 3) B에서 남의 세션 지정 시도 (session_bound_elsewhere 거부 + 안전 안내) ===\\\"\\ncd /tmp/llmown/b && $LLM -s ztestown; echo \\\"exit=$?\\\"\\necho \\\"=== 4) A에서 --unbind 후 재바인딩 (안전한 이전) ===\\\"\\ncd /tmp/llmown/a && $LLM --unbind\\ncd /tmp/llmown/b && $LLM -s ztestown && echo \\\"재바인딩 OK\\\"\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_jTLk1wGoEEbSNt5AlXDp6269",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\npy_compile OK\n=== 1) A에 세션 ztestown 매핑 (프롬프트 없이 -s) ===\n───────────────────────────── 💡 DeepSeek LLM CLI ──────────────────────────────\n  📂 작업 폴더  /tmp/llmown/a\n  🔗 매핑 세션  ztestown\n  📜 세션 규칙  (없음 — llm --init-rules)\n\n사용법\n────────────────────────────────────────────────────────────────────────────────\n   llm \"질문\"                   이 폴더 세션으로 에이전트 실행\n   llm --chat \"질문\"            도구 없이 순수 채팅\n   llm --yes \"질문\"             셸 명령 확인 생략\n   llm --auto-workspace \"질문\"  폴더 안 명령은 자동 실행\n   llm --show-thinking \"질문\"   사고 과정 원문까지 표시\n   llm -s <이름>                이 폴더를 해당 세션에 매핑\n   llm --ref <이름>             다른 세션 맥락을 이번 세션에 1회 주입\n   llm --unbind                 이 폴더의 세션 매핑 해제 (기록은 유지)\n   llm --init-rules             .llm/rules.md 생성\n   llm --rules                  세션 규칙 보기\n   llm --run                    직전 응답의 스크립트 실행\n   llm --view                   대화 내용 보기 (마크다운)\n   llm --summarize              현재 대화를 요약·백업 (강제)\n   llm --clear                  현재 세션 내용 비우기\n   llm --delete                 현재 세션 파일 삭제\n   llm --allow-list             셸 자동 허용 목록 보기\n   llm --allow-clear            셸 자동 허용 목록 비우기\n   llm --balance                API 잔액 조회 (KRW 환산)\n\n저장된 세션  (/home/rasp/.local/share/llm)\n────────────────────────────────────────────────────────────────────────────────\n     llm  →  /home/rasp/codespace/userscript/llm  (189,459 B)\n     raspApi  →  /home/rasp/codespace/raspApi  (143,605 B)\n   ▶ ztestown  →  /tmp/llmown/a  (0 B)\n────────────────────────────────────────────────────────────────────────────────\n=== 2) A에서 다른 이름으로 재지정 시도 (folder_already_bound 거부 + 힌트) ===\nℹ️  바꾸려면  llm --unbind  후  llm -s <이름>\nexit=1\n=== 3) B에서 남의 세션 지정 시도 (session_bound_elsewhere 거부 + 안전 안내) ===\nℹ️    /tmp/llmown/a\nℹ️  이 폴더에서는 조회(--view)만 가능합니다.\nℹ️  맥락이 필요하면  llm --ref ztestown \"질문\"\nℹ️  소유권을 옮기려면 /tmp/llmown/a 에서  llm --unbind  후 여기서 다시 지정하세요.\nexit=1\n=== 4) A에서 --unbind 후 재바인딩 (안전한 이전) ===\n✅ 이 폴더의 세션 매핑을 해제했습니다 (세션: ztestown).\nℹ️  대화 기록은 남아 있습니다: /home/rasp/.local/share/llm/history_ztestown.json\n───────────────────────────── 💡 DeepSeek LLM CLI ──────────────────────────────\n  📂 작업 폴더  /tmp/llmown/b\n  🔗 매핑 세션  ztestown\n  📜 세션 규칙  (없음 — llm --init-rules)\n\n사용법\n────────────────────────────────────────────────────────────────────────────────\n   llm \"질문\"                   이 폴더 세션으로 에이전트 실행\n   llm --chat \"질문\"            도구 없이 순수 채팅\n   llm --yes \"질문\"             셸 명령 확인 생략\n   llm --auto-workspace \"질문\"  폴더 안 명령은 자동 실행\n   llm --show-thinking \"질문\"   사고 과정 원문까지 표시\n   llm -s <이름>                이 폴더를 해당 세션에 매핑\n   llm --ref <이름>             다른 세션 맥락을 이번 세션에 1회 주입\n   llm --unbind                 이 폴더의 세션 매핑 해제 (기록은 유지)\n   llm --init-rules             .llm/rules.md 생성\n   llm --rules                  세션 규칙 보기\n   llm --run                    직전 응답의 스크립트 실행\n   llm --view                   대화 내용 보기 (마크다운)\n   llm --summarize              현재 대화를 요약·백업 (강제)\n   llm --clear                  현재 세션 내용 비우기\n   llm --delete                 현재 세션 파일 삭제\n   llm --allow-list             셸 자동 허용 목록 보기\n   llm --allow-clear            셸 자동 허용 목록 비우기\n   llm --balance                API 잔액 조회 (KRW 환산)\n\n저장된 세션  (/home/rasp/.local/share/llm)\n────────────────────────────────────────────────────────────────────────────────\n     llm  →  /home/rasp/codespace/userscript/llm  (189,459 B)\n     raspApi  →  /home/rasp/codespace/raspApi  (143,605 B)\n   ▶ ztestown  →  /tmp/llmown/b  (0 B)\n────────────────────────────────────────────────────────────────────────────────\n재바인딩 OK\n\n--- stderr ---\n❌ 이 폴더는 이미 세션 'ztestown'에 바인딩되어 있습니다.\n❌ 세션 'ztestown'은(는) 다른 폴더에 바인딩되어 있습니다:\n"
+    },
+    {
+      "role": "assistant",
+      "content": "동작 확인 완료. selftest 잔여물(`ztest*`)을 정리합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_vKuh1uJwPbmT9QwLUxc00251",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\nD=\\\"$HOME/.local/share/llm\\\"\\necho \\\"=== 삭제 대상 ===\\\"\\nls -1 \\\"$D\\\" | grep -E '^history_ztest' || echo \\\"(히스토리 없음)\\\"\\npython3 -c \\\"import json,pathlib,os; d=pathlib.Path(os.environ['HOME'])/'.local/share/llm/bindings.json'; f=json.loads(d.read_text()).get('folders',{}); print('바인딩 제거 대상:', {k:v for k,v in f.items() if 'ztestown' in v or k.startswith('/tmp/llmown')})\\\"\\nrm -f \\\"$D\\\"/history_ztestown.json \\\"$D\\\"/shell_allow_ztestown.json\\nrm -rf \\\"$D\\\"/summaries/ztestown\\npython3 - <<'PY'\\nimport json, pathlib, os\\nbf = pathlib.Path(os.environ[\\\"HOME\\\"]) / \\\".local/share/llm/bindings.json\\\"\\ndata = json.loads(bf.read_text())\\nfolders = data.get(\\\"folders\\\", {})\\ndata[\\\"folders\\\"] = {k: v for k, v in folders.items() if \\\"ztestown\\\" not in v and not k.startswith(\\\"/tmp/llmown\\\")}\\ntmp = bf.with_suffix(\\\".json.tmp\\\"); tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2)+\\\"\\\\n\\\"); tmp.replace(bf)\\nprint(\\\"정리 후 항목 수:\\\", len(data[\\\"folders\\\"]))\\nPY\\nrm -rf /tmp/llmown\\necho \\\"=== 정리 후 확인 ===\\\"\\nls -1 \\\"$D\\\" | grep -E 'ztest' || echo \\\"잔여 ztest 파일 없음\\\"\\npython3 -c \\\"import json,pathlib,os; f=json.loads((pathlib.Path(os.environ['HOME'])/'.local/share/llm/bindings.json').read_text()).get('folders',{}); print('잔여 ztest 바인딩:', {k:v for k,v in f.items() if 'ztest' in v})\\\"\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_vKuh1uJwPbmT9QwLUxc00251",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n=== 삭제 대상 ===\n(히스토리 없음)\n바인딩 제거 대상: {'/tmp/llmown/b': 'ztestown'}\n정리 후 항목 수: 2\n=== 정리 후 확인 ===\n잔여 ztest 파일 없음\n잔여 ztest 바인딩: {}\n"
+    },
+    {
+      "role": "assistant",
+      "content": "최종 diff를 확인하고 커밋합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_d9dvzSe5nvscIx0wClew9146",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && python3 -m py_compile agent.py && echo \\\"py_compile OK\\\" && git diff --stat && echo \\\"===== agent.py =====\\\" && git diff agent.py && echo \\\"===== README.md =====\\\" && git diff README.md\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_d9dvzSe5nvscIx0wClew9146",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\npy_compile OK\n README.md | 15 ++++++++-------\n agent.py  | 38 ++++++++++++--------------------------\n 2 files changed, 20 insertions(+), 33 deletions(-)\n===== agent.py =====\ndiff --git a/agent.py b/agent.py\nindex 6d44f70..3582323 100755\n--- a/agent.py\n+++ b/agent.py\n@@ -857,23 +857,24 @@ def auto_session_name(root: Path, folders: dict[str, str]) -> str:\n \n \n def ensure_binding(\n-    folders: dict[str, str], root: Path, session: str, *, reassign: bool = False\n+    folders: dict[str, str], root: Path, session: str\n ) -> tuple[dict[str, str], str | None, str | None]:\n     \"\"\"이 폴더를 세션에 바인딩한다. 거부되면 아무것도 바꾸지 않는다.\n \n+    이미 다른 폴더가 소유한 세션은 이 폴더로 끌어오지 않는다(남의 소유를 존중).\n+    소유권을 옮기려면 소유 폴더에서 `llm --unbind` 후 이 폴더에서 다시 지정한다.\n+\n     반환: (folders, error, detail)\n       - error=\"folder_already_bound\" → detail=이 폴더에 이미 묶인 세션 이름\n       - error=\"session_bound_elsewhere\" → detail=세션을 소유한 폴더 경로\n-    reassign=True(`--rebind` 전용)면 기존 소유 폴더에서 이 폴더로 옮긴다.\n     \"\"\"\n     folder_s = canonical_folder(root)\n     owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\n     existing = folders.get(folder_s)  # 이 폴더에 묶인 세션\n-    if not reassign:\n-        if existing is not None and existing != session:\n-            return folders, \"folder_already_bound\", existing\n-        if owner is not None and owner != folder_s:\n-            return folders, \"session_bound_elsewhere\", owner\n+    if existing is not None and existing != session:\n+        return folders, \"folder_already_bound\", existing\n+    if owner is not None and owner != folder_s:\n+        return folders, \"session_bound_elsewhere\", owner\n     folders = {p: s for p, s in folders.items() if s != session and p != folder_s}\n     folders[folder_s] = session\n     save_bindings(folders)\n@@ -2961,7 +2962,6 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No\n         ('llm --auto-workspace \"질문\"', \"폴더 안 명령은 자동 실행\"),\n         ('llm --show-thinking \"질문\"', \"사고 과정 원문까지 표시\"),\n         (\"llm -s <이름>\", \"이 폴더를 해당 세션에 매핑\"),\n-        (\"llm -s <이름> --rebind\", \"다른 폴더의 세션을 이 폴더로 재지정\"),\n         (\"llm --ref <이름>\", \"다른 세션 맥락을 이번 세션에 1회 주입\"),\n         (\"llm --unbind\", \"이 폴더의 세션 매핑 해제 (기록은 유지)\"),\n         (\"llm --init-rules\", \".llm/rules.md 생성\"),\n@@ -3211,7 +3211,6 @@ def parse_args(argv: list[str]) -> argparse.Namespace:\n         description=\"DeepSeek CLI 에이전트\",\n     )\n     parser.add_argument(\"-s\", \"--session\", help=\"세션 이름 (이 폴더에 매핑)\")\n-    parser.add_argument(\"--rebind\", action=\"store_true\", help=\"다른 폴더의 세션을 이 폴더로 재지정 (-s 와 함께)\")\n     parser.add_argument(\"--unbind\", action=\"store_true\", help=\"이 폴더의 세션 매핑만 해제 (기록은 유지)\")\n     parser.add_argument(\n         \"--ref\",\n@@ -3309,10 +3308,6 @@ def main(argv: list[str] | None = None) -> int:\n         print_info(f\"대화 기록은 남아 있습니다: {history_file_for(owned)}\")\n         return 0\n \n-    if args.rebind and not args.session:\n-        print_error(\"--rebind 는 -s <이름> 과 함께 사용하세요.\")\n-        return 1\n-\n     if args.session:\n         session = args.session.strip()\n         if not session:\n@@ -3320,23 +3315,14 @@ def main(argv: list[str] | None = None) -> int:\n             return 1\n         owner = folder_for_session(folders, session)  # 세션을 소유한 폴더\n \n-        if args.rebind:\n-            # 명시적 재지정: 이 폴더로 옮긴다(기존 소유 폴더는 해제됨).\n-            folders, err, _ = ensure_binding(folders, root, session, reassign=True)\n-            if err:\n-                print_error(f\"세션을 이 폴더로 옮기지 못했습니다: {err}\")\n-                return 1\n-            if owner is not None and owner != folder_key:\n-                print_info(f\"세션 '{session}' 폴더 매핑: {owner} → {root}\")\n-            if owned is not None and owned != session:\n-                print_info(f\"이 폴더의 이전 세션 '{owned}' 매핑을 해제했습니다.\")\n-        elif owner is not None and owner != folder_key:\n+        if owner is not None and owner != folder_key:\n             # 남의 세션: 설정·수정·삭제는 거부, 조회(--view/--allow-list)만 허용.\n             if not (inspect_only and read_only):\n                 print_error(f\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\")\n                 print_info(f\"  {owner}\")\n                 print_info(\"이 폴더에서는 조회(--view)만 가능합니다.\")\n-                print_info(f\"옮기려면  llm -s {session} --rebind\")\n+                print_info(f\"맥락이 필요하면  llm --ref {session} \\\"질문\\\"\")\n+                print_info(f\"소유권을 옮기려면 {owner} 에서  llm --unbind  후 여기서 다시 지정하세요.\")\n                 return 1\n         elif owner is None and inspect_only and read_only:\n             pass  # 아직 주인 없는 이름 조회: 바인딩하지 않는다.\n@@ -3345,7 +3331,7 @@ def main(argv: list[str] | None = None) -> int:\n             folders, err, detail = ensure_binding(folders, root, session)\n             if err == \"folder_already_bound\":\n                 print_error(f\"이 폴더는 이미 세션 '{detail}'에 바인딩되어 있습니다.\")\n-                print_info(\"세션을 바꾸려면  llm -s <이름> --rebind\")\n+                print_info(\"바꾸려면  llm --unbind  후  llm -s <이름>\")\n                 return 1\n             if err == \"session_bound_elsewhere\":\n                 print_error(f\"세션 '{session}'은(는) 다른 폴더에 바인딩되어 있습니다:\")\n===== README.md =====\ndiff --git a/README.md b/README.md\nindex a6099b1..03eb0c8 100644\n--- a/README.md\n+++ b/README.md\n@@ -161,7 +161,6 @@ llm --allow-clear\n | 옵션 | 설명 |\n |------|------|\n | `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (다른 폴더가 소유한 세션이면 거부) |\n-| `--rebind` | `-s`와 함께: 다른 폴더의 세션을 이 폴더로 재지정 (기존 소유 폴더는 해제) |\n | `--unbind` | 이 폴더의 세션 매핑만 해제 (대화 기록은 유지) |\n | `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |\n | `--chat` | 도구 없이 순수 채팅 모드 |\n@@ -194,15 +193,15 @@ llm --allow-clear\n # 세션 이름을 명시적으로 고정 (이 폴더에 바인딩)\n llm -s mysession \"이 대화는 mysession으로 저장해줘\"\n \n-# 다른 폴더의 세션을 이 폴더로 옮김 (명시적)\n-llm -s mysession --rebind\n-\n # 이 폴더의 세션 매핑만 해제 (기록은 유지)\n llm --unbind\n \n # 다른 폴더 세션의 대화 내용 보기 (읽기 전용)\n llm -s other --view\n \n+# 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업\n+llm --ref design-notes \"이 맥락 참고해서 이어줘\"\n+\n # 최근 답변의 스크립트를 추출해 실행\n llm --run\n \n@@ -242,8 +241,9 @@ llm --delete\n   안내합니다. 매핑 파일은 바뀌지 않습니다.\n - 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `--view`처럼 보기만 하는\n   명령만 허용됩니다. 보고만 하는 명령은 바인딩을 만들지 않습니다.\n-- 세션을 옮기려면 `llm -s <이름> --rebind`로 **명시적으로** 지정해야 합니다.\n-  이전 소유 폴더는 매핑이 해제됩니다.\n+- 남의 세션을 이 폴더로 **끌어오는 명령은 두지 않습니다**(소유권 보호). 세션을\n+  옮기려면 소유 폴더에서 `llm --unbind`로 매핑을 푼 뒤(기록은 유지), 옮길 폴더에서\n+  `llm -s <이름>`으로 다시 지정합니다.\n - `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.\n \n ### 다른 세션 맥락 참조 (`--ref`)\n@@ -260,7 +260,8 @@ llm --delete\n   (A 세션이 이미 있어야 함).\n - B의 발췌가 `REF_MAX_CHARS`(24,000자)를 넘으면 요약을 시도하고, 실패하면 앞부분만\n   잘라 씁니다. 기록이 없는 세션 이름은 경고 후 건너뜁니다.\n-- **소유권 이동이 필요하면 `--rebind`**, **맥락 참고만 하려면 `--ref`** 입니다.\n+- **맥락 참고만 하려면 `--ref`** (소유권은 옮기지 않음). 세션을 옮기는 경우에도\n+  소유 폴더에서 `llm --unbind` 후 새 폴더에서 `-s`로 다시 지정합니다.\n \n ---\n \n"
+    },
+    {
+      "role": "assistant",
+      "content": "모든 변경이 정상입니다. 커밋합니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_ZLlzF4P6yNEicpRJSwwf7303",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm && git add -A && git commit -q -m \\\"refactor: 위험한 --rebind 제거, 세션 이전은 --unbind 후 재지정으로 안내 (README 갱신)\\\" && git log --oneline -3\"}"
+          }
+        }
+      ]
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_ZLlzF4P6yNEicpRJSwwf7303",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n27eda81 refactor: 위험한 --rebind 제거, 세션 이전은 --unbind 후 재지정으로 안내 (README 갱신)\n6fd2203 feat: --ref 로 다른 세션 맥락을 현재 세션에 1회 주입 (README 갱신)\n4910662 세션-폴더 1:1 바인딩: 소유 폴더 외 설정/수정 거부, --view 읽기 전용 허용, --rebind/--unbind 추가, --root·current_session 제거\n"
+    },
+    {
+      "role": "assistant",
+      "content": "`--rebind`를 완전히 제거했습니다.\n\n## 무엇을 바꿨나\n\n**`agent.py`**\n- `--rebind` CLI 옵션 삭제\n- `main`의 `--rebind` 분기 삭제 (`-s <이름>` 단독 지정은 그대로 정상 동작)\n- `ensure_binding`에서 `reassign` 파라미터와 소유권 탈취 로직 제거 → **남의 세션은 이 폴더로 끌어오지 않음**(소유권 보호)\n- 거부 메시지를 안전한 경로로 교체:\n  - 남의 세션: `맥락이 필요하면 llm --ref <이름> \"질문\"` / `소유권을 옮기려면 <소유폴더>에서 llm --unbind 후 여기서 다시 지정`\n  - 이 폴더 재바인딩: `바꾸려면 llm --unbind 후 llm -s <이름>`\n- `list_sessions`의 사용법 안내에서 `llm -s <이름> --rebind` 줄 제거\n\n**`README.md`**\n- 옵션 표에서 `--rebind` 행 삭제\n- 사용 예의 `llm -s mysession --rebind` 제거, `--ref` 예시 추가\n- \"세션을 옮기려면 `--rebind`\" 문장 → **\"남의 세션을 끌어오는 명령은 두지 않음. 옮기려면 소유 폴더에서 `--unbind` 후 새 폴더에서 `-s`\"** 로 교체\n- `--ref` 섹션의 `--rebind` 언급 정리\n\n## 검증\n- `python3 -m py_compile agent.py` OK\n- `grep rebind agent.py README.md` → **잔여 참조 없음**\n- `llm --rebind` → `unrecognized arguments`로 거부(사용법 출력에도 안 보임)\n- 소유권 흐름 실사용 확인: 매핑 → 재지정 거부(힌트) → 남의 세션 거부(안전 안내) → `--unbind` 후 재바인딩 성공\n- selftest 잔여물(`ztest*` 파일·바인딩·`/tmp/llmown`) 정리 완료\n\n## 세션 이전 방법(대체 경로)\n1. 소유 폴더에서 `llm --unbind` (기록은 유지)\n2. 옮길 폴더에서 `llm -s <이름>`\n\n커밋: `27eda81 refactor: 위험한 --rebind 제거, 세션 이전은 --unbind 후 재지정으로 안내 (README 갱신)`\n\n> 참고: 되돌리고 싶으시면 `git revert 27eda81`로 복원 가능합니다."
+    },
+    {
+      "role": "user",
+      "content": "unbind도 필요없는거 아니야? mv 사용시 필요한거야?"
+    },
+    {
+      "role": "assistant",
+      "content": "좋은 지적입니다. `mv` 시나리오에서 실제로 어떻게 되는지 코드와 재현 테스트로 확인하겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_qeHzNJ92n4XXKAQaFwuq6361",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 60, \"offset\": 802, \"path\": \"agent.py\"}"
+          }
+        },
+        {
+          "id": "call_01_E1LIIsE5rz8QhrqidUPv2537",
+          "type": "function",
+          "function": {
+            "name": "read_file",
+            "arguments": "{\"limit\": 30, \"offset\": 2966, \"path\": \"agent.py\"}"
+          }
+        }
+      ],
+      "reasoning_content": "사용자가 --unbind도 필요없는 것 아니냐고 묻습니다. mv 사용 시 필요한가?\n\n세션 바인딩은 canonical_folder(정규화된 절대경로)를 키로 저장합니다. 폴더를 mv로 옮기면 경로가 바뀌므로, 이전 경로에 바인딩된 세션은 새 경로에서 인식되지 않습니다.\n\n그래서 mv로 폴더를 옮기면:\n- 이전 경로의 바인딩은 남아있지만(폴더가 사라짐), 새 경로에서는 바인딩이 없으므로 새 세션 이름이 자동 생성됨.\n- 이때 --unbind는 이전 경로에서 실행할 수 없음(폴더가 없음). 새 경로에서 --unbind를 하면? 새 경로는 아직 바인딩이 없으니 \"매핑된 세션이 없습니다\".\n\n그래서 mv 후에는 --unbind가 실제로 무용지물일 수 있습니다. 새 경로에서 llm -s <기존세션이름>을 하면? 기존 세션은 이전 경로가 소유하고 있으므로 session_bound_elsewhere로 거부됩니다! 이게 문제입니다.\n\n이전 경로 폴더가 사라졌는데도 bindings.json에는 이전 경로 → 세션이 남아있으므로, 새 경로에서 그 세션 이름을 쓰려 하면 \"다른 폴더에 바인딩되어 있습니다\"로 거부됩니다. --rebind를 지웠으니 이제 mv 상황에서 세션을 이어가는 방법이 없습니다! --unbind도 이전 경로에서만 가능하고, 새 경로에서는 --unbind가 그 세션을 못 찾습니다.\n\n잠깐. --unbind는 `owned = folders.get(folder_key)`로 현재 폴더의 세션을 가져옵니다. 새 경로는 바인딩이 없으므로 owned=None → \"매핑된 세션이 없습니다\". 이전 경로 폴더가 없어졌으니 이전 경로로 cd해서 unbind할 수 없습니다.\n\n따라서 mv 시나리오에서 세션을 이어가려면:\n1. 새 경로에서 자동 세션이 생성되어 새 세션으로 시작 (기존 대화 이어짐 X)\n2. 또는 이전 경로를 다시 만들어서 거기서 --unbind\n\n이건 실제 문제입니다. 사용자 지적이 맞습니다.\n\n해결 방향:\n- stale binding 정리: bindings.json 로드 시 소유 폴더가 더 이상 존재하지 않으면 그 바인딩을 무효(고아)로 처리. 그러면 새 경로에서 -s <이름>을 하면 \"다른 폴더\"가 아니라 \"주인 없는 이름\"으로 취급되어 바인딩됨.\n- 또는 ensure_binding에서 owner 폴더가 실제로 존재하지 않으면 session_bound_elsewhere로 거부하지 않고 허용.\n\n이렇게 하면 mv 후에도 새 경로에서 `llm -s <이름>`으로 세션을 이어갈 수 있고, --unbind 없이도 됨. 그리고 --unbind는 이 폴더의 매핑을 푸는 용도로 남겨둘 수 있음(여전히 유용: 세션을 아예 분리하고 싶을 때, 예: 기록은 남기고 이 폴더는 새 세션으로 시작).\n\n하지만 사용자 질문: \"unbind도 필요없는거 아니야? mv 사용시 필요한거야?\"\n\n답변: \n- mv 시나리오를 제대로 지원하려면 stale binding을 자동 무효화하는 게 맞고, 그러면 unbind가 mv에 필요하지 않습니다.\n- unbind 자체는 다른 용도(이 폴더를 세션에서 분리)로 여전히 의미가 있지만, 사용자가 지적한 핵심은 \"이전 경로 폴더가 사라진 고아 바인딩\" 때문에 현재 구조가 막힌다는 점입니다.\n\n먼저 코드를 확인해서 현재 동작을 정확히 파악하고, 실제 mv 시나리오를 재현해보겠습니다. 그 다음 해결책을 제안/구현.\n\n계획을 세우고 사용자에게 확인받는 게 좋을까? 사용자가 질문을 던졌으니, 실증하고 개선안을 제시하는 게 좋습니다. 실제 재현 테스트를 해보겠습니다.\n\n먼저 코드 확인: folder_for_session, load_bindings. load_bindings에서 고아 폴더 처리가 있는지 확인.\n\n앞서 본 load_bindings 코드:\n```\ndef load_bindings() -> dict[str, str]:\n    path = bindings_file()\n    if not path.is_file():\n        return {}\n    try:\n        data = json.loads(path.read_text(encoding=\"utf-8\"))\n    except (OSError, json.JSONDecodeError):\n        return {}\n    folders = data.get(\"folders\")\n    ...\n```\n더 읽어보자. README에는 \"bindings.json의 해당 폴더 ↔ 세션 매핑(폴더가 사라진 항목 포함)\" 언급이 있었는데, load_bindings가 고아 항목을 걸러내는지 봐야 합니다.\n\n실제로 테스트를 재현해보겠습니다.\n\n우선 코드 확인부터."
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_qeHzNJ92n4XXKAQaFwuq6361",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3433 lines)\n   802|def bindings_file() -> Path:\n   803|    return HISTORY_DIR / \"bindings.json\"\n   804|\n   805|\n   806|def load_bindings() -> dict[str, str]:\n   807|    path = bindings_file()\n   808|    if not path.is_file():\n   809|        return {}\n   810|    try:\n   811|        data = json.loads(path.read_text(encoding=\"utf-8\"))\n   812|    except (OSError, json.JSONDecodeError):\n   813|        return {}\n   814|    folders = data.get(\"folders\")\n   815|    if not isinstance(folders, dict):\n   816|        return {}\n   817|    # 키는 로드 시 정규화한다(예전에 저장된 raw 경로도 같은 폴더로 인식).\n   818|    normalized: dict[str, str] = {}\n   819|    for path_str, session in folders.items():\n   820|        if not path_str or not session:\n   821|            continue\n   822|        normalized[canonical_folder(str(path_str))] = str(session)\n   823|    return normalized\n   824|\n   825|\n   826|def save_bindings(folders: dict[str, str]) -> None:\n   827|    HISTORY_DIR.mkdir(parents=True, exist_ok=True)\n   828|    normalized = {canonical_folder(path): session for path, session in folders.items()}\n   829|    path = bindings_file()\n   830|    tmp = path.with_suffix(\".tmp\")\n   831|    tmp.write_text(json.dumps({\"folders\": normalized}, ensure_ascii=False, indent=2) + \"\\n\", encoding=\"utf-8\")\n   832|    tmp.replace(path)\n   833|\n   834|\n   835|def sanitize_session_name(name: str) -> str:\n   836|    cleaned = re.sub(r\"[^\\w.\\-가-힣]\", \"_\", name.strip(), flags=re.UNICODE)\n   837|    cleaned = cleaned.strip(\"._\") or \"workspace\"\n   838|    return cleaned[:80]\n   839|\n   840|\n   841|def auto_session_name(root: Path, folders: dict[str, str]) -> str:\n   842|    root_s = canonical_folder(root)\n   843|    parts = [p for p in Path(root_s).parts if p not in {\"/\", \"\"}]\n   844|    slugs: list[str] = []\n   845|    for i in range(1, min(4, len(parts) + 1)):\n   846|        slug = sanitize_session_name(\"_\".join(parts[-i:]))\n   847|        if slug and slug not in slugs:\n   848|            slugs.append(slug)\n   849|    if not slugs:\n   850|        slugs = [\"workspace\"]\n   851|    for name in slugs:\n   852|        owner = folder_for_session(folders, name)\n   853|        if owner is None or owner == root_s:\n   854|            return name\n   855|    digest = hashlib.sha1(root_s.encode(\"utf-8\")).hexdigest()[:6]\n   856|    return f\"{slugs[0]}_{digest}\"\n   857|\n   858|\n   859|def ensure_binding(\n   860|    folders: dict[str, str], root: Path, session: str\n   861|) -> tuple[dict[str, str], str | None, str | None]:\n... [2572 more lines; use offset/limit]"
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_01_E1LIIsE5rz8QhrqidUPv2537",
+      "name": "read_file",
+      "content": "/home/rasp/codespace/userscript/llm/agent.py (3433 lines)\n  2966|        (\"llm --unbind\", \"이 폴더의 세션 매핑 해제 (기록은 유지)\"),\n  2967|        (\"llm --init-rules\", \".llm/rules.md 생성\"),\n  2968|        (\"llm --rules\", \"세션 규칙 보기\"),\n  2969|        (\"llm --run\", \"직전 응답의 스크립트 실행\"),\n  2970|        (\"llm --view\", \"대화 내용 보기 (마크다운)\"),\n  2971|        (\"llm --summarize\", \"현재 대화를 요약·백업 (강제)\"),\n  2972|        (\"llm --clear\", \"현재 세션 내용 비우기\"),\n  2973|        (\"llm --delete\", \"현재 세션 파일 삭제\"),\n  2974|        (\"llm --allow-list\", \"셸 자동 허용 목록 보기\"),\n  2975|        (\"llm --allow-clear\", \"셸 자동 허용 목록 비우기\"),\n  2976|        (\"llm --balance\", \"API 잔액 조회 (KRW 환산)\"),\n  2977|    ]\n  2978|    width = max(display_width(cmd) for cmd, _ in usage)\n  2979|    for cmd, desc in usage:\n  2980|        print(f\"   {C.cyan}{pad(cmd, width)}{C.reset}  {C.dim}{desc}{C.reset}\")\n  2981|\n  2982|    print_section(f\"저장된 세션  ({HISTORY_DIR})\")\n  2983|    if not names:\n  2984|        print(f\"   {C.dim}(저장된 세션이 없습니다){C.reset}\")\n  2985|        print(f\"{C.dim}{rule()}{C.reset}\")\n  2986|        return\n  2987|\n  2988|    current = active or mapped\n  2989|    for name in names:\n  2990|        f = files.get(name)\n  2991|        size = f\"{f.stat().st_size:,} B\" if f else \"0 B\"\n  2992|        folder = folder_for_session(folders, name) or \"(폴더 없음)\"\n  2993|        if name == current:\n  2994|            print(f\"   {C.green}▶ {C.bold}{name}{C.reset}  {C.dim}→{C.reset}  {folder}  {C.dim}({size}){C.reset}\")\n  2995|        else:\n... [438 more lines; use offset/limit]"
+    },
+    {
+      "role": "assistant",
+      "content": "`load_bindings`는 사라진 폴더(고아)를 정리하지 않고 그대로 남깁니다. `mv` 시나리오를 실제로 재현해 보겠습니다.",
+      "tool_calls": [
+        {
+          "id": "call_00_iVKCvIoVrCu7UhNVFdNf5229",
+          "type": "function",
+          "function": {
+            "name": "shell",
+            "arguments": "{\"command\": \"LLM=/home/rasp/codespace/userscript/llm/llm\\nD=\\\"$HOME/.local/share/llm\\\"\\nrm -rf /tmp/llmmv; mkdir -p /tmp/llmmv/proj\\n\\necho \\\"=== 1) /tmp/llmmv/proj 에서 세션 zmvproj 바인딩 ===\\\"\\ncd /tmp/llmmv/proj && $LLM -s zmvproj >/dev/null && python3 -c \\\"import json;print('binding:',json.load(open('$D/bindings.json'))['folders'])\\\"\\n\\necho \\\"=== 2) 폴더를 mv 로 이름 변경 (proj -> proj2) ===\\\"\\ncd /tmp/llmmv && mv proj proj2\\necho \\\"이전 경로 존재? $([ -d /tmp/llmmv/proj ] && echo YES || echo NO)\\\"\\n\\necho \\\"=== 3) 새 경로에서 기존 세션 이름으로 매핑 시도 ===\\\"\\ncd /tmp/llmmv/proj2 && $LLM -s zmvproj; echo \\\"exit=$?\\\"\\n\\necho \\\"=== 4) 새 경로에서 --unbind 시도 ===\\\"\\ncd /tmp/llmmv/proj2 && $LLM --unbind; echo \\\"exit=$?\\\"\\n\\necho \\\"=== 5) 이전 경로로 되돌아가 --unbind 가능한가? ===\\\"\\necho \\\"(폴더가 없어 cd 불가: $(cd /tmp/llmmv/proj 2>&1 | head -1))\\\"\"}"
+          }
+        }
+      ],
+      "reasoning_content": "확인: `load_bindings`는 고아 폴더(존재하지 않는 경로)를 걸러내지 않습니다. 즉 폴더가 사라져도 바인딩은 그대로 남습니다.\n\n이제 mv 시나리오를 재현해보겠습니다."
+    },
+    {
+      "role": "tool",
+      "tool_call_id": "call_00_iVKCvIoVrCu7UhNVFdNf5229",
+      "name": "shell",
+      "content": "exit 0\n--- stdout ---\n=== 1) /tmp/llmmv/proj 에서 세션 zmvproj 바인딩 ===\nbinding: {'/home/rasp/codespace/userscript/llm': 'llm', '/home/rasp/codespace/raspApi': 'raspApi', '/tmp/llmmv/proj': 'zmvproj'}\n=== 2) 폴더를 mv 로 이름 변경 (proj -> proj2) ===\n이전 경로 존재? NO\n=== 3) 새 경로에서 기존 세션 이름으로 매핑 시도 ===\nℹ️    /tmp/llmmv/proj\nℹ️  이 폴더에서는 조회(--view)만 가능합니다.\nℹ️  맥락이 필요하면  llm --ref zmvproj \"질문\"\nℹ️  소유권을 옮기려면 /tmp/llmmv/proj 에서  llm --unbind  후 여기서 다시 지정하세요.\nexit=1\n=== 4) 새 경로에서 --unbind 시도 ===\nℹ️  이 폴더에 매핑된 세션이 없습니다.\nexit=0\n=== 5) 이전 경로로 되돌아가 --unbind 가능한가? ===\n(폴더가 없어 cd 불가: /bin/bash: line 19: cd: /tmp/llmmv/proj: No such file or directory)\n\n--- stderr ---\n❌ 세션 'zmvproj'은(는) 다른 폴더에 바인딩되어 있습니다:\n"
+    }
+  ]
+}
