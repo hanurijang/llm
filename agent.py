@@ -1307,6 +1307,16 @@ def migrate_legacy_session(session: str) -> Path | None:
 
 
 def history_file_for(session: str) -> Path:
+    if not history_scope_is_repo():
+        # LLM_HISTORY=home 폴백: .llm 으로 옮기며 `*.migrated` 로 남긴 기록을 되살린다.
+        home = HISTORY_DIR / f"history_{session}.json"
+        legacy = home.with_name(home.name + ".migrated")
+        if not home.exists() and legacy.is_file():
+            try:
+                shutil.copy2(legacy, home)
+                print_info(f"[{session}] 옮겨 두었던 예전 홈 기록을 다시 꺼내 왔습니다: {home}")
+            except OSError:
+                pass
     HISTORY_BASE.mkdir(parents=True, exist_ok=True)
     migrate_legacy_session(session)
     return HISTORY_BASE / f"history_{session}.json"
@@ -4859,7 +4869,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ("llm --run", "직전 응답의 스크립트 실행"),
         ("llm --view", "대화 내용 보기 (마크다운)"),
         ("llm --summarize", "현재 대화를 요약·백업 (강제)"),
-        ("llm --sync-history", "대화 기록만 커밋·push (다른 PC에서 이어가기)"),
+        ("llm --sync-history", "이 세션 기록·요약만 커밋·push (다른 PC에서 이어가기)"),
         ("llm --clear", "현재 세션 내용 비우기"),
         ("llm --delete", "현재 세션 파일 삭제"),
         ("llm --allow-list", "셸 자동 허용 목록 보기"),

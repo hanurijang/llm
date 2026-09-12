@@ -49,9 +49,10 @@
   홈**에 둔다. 대화 기록 위치 변경과 무관하다.
 - 홈에만 있던 기록은 그 폴더에서 처음 실행할 때 `.llm/`으로 **한 번** 옮기고,
   양쪽에 있으면 더 긴 쪽을 채택하며 홈 원본은 `*.migrated`로 남긴다.
-- 다른 PC로 옮길 때는 `llm --sync-history`(기록만 커밋 → `pull --rebase
-  --autostash` → `push`)를 쓴다. `.llm/`이 `.gitignore`에 있으면 에러로
-  안내하고 중단한다.
+- 다른 PC로 옮길 때는 `llm --sync-history`(이 세션 기록·요약만 커밋 →
+  `pull --rebase --autostash` → `push`)를 쓴다. `.llm/`이 `.gitignore`에 있으면
+  에러로 안내하고 중단한다.
+- `LLM_HISTORY=home`으로 되돌리면 홈의 `*.migrated` 기록을 다시 꺼내 온다.
 - 이 동작을 바꿀 때는 `agent.py`의 `HISTORY_*`/`REPO_HISTORY_DIR_NAME`/
   `history_scope_dir`/`set_history_base`/`find_history_file`/
   `migrate_legacy_session`/`cmd_sync_history`와 README 「대화 기록 동기화」·

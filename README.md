@@ -275,7 +275,7 @@ llm --allow-clear
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
-| `--sync-history` | 대화 기록만 커밋 → `git pull --rebase --autostash` → `push` (다른 PC에서 이어가기) |
+| `--sync-history` | 이 세션의 대화 기록·요약만 커밋 → `git pull --rebase --autostash` → `push` (다른 PC에서 이어가기) |
 | `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |
 | `--view` | 세션 대화 내용 보기 (Markdown) |
 | `--clear` | 현재 세션 내용만 비우기 |
@@ -347,7 +347,7 @@ llm --delete
 `git pull`(또는 clone) 후 같은 세션으로 그대로 이어집니다.**
 
 ```bash
-llm --sync-history        # 기록만 커밋 → git pull --rebase --autostash → push
+llm --sync-history        # 이 세션 기록·요약만 커밋 → git pull --rebase --autostash → push
 ```
 
 - **이 세션의 기록 파일**(`.llm/history_<세션>.json`)과 **요약 백업**
@@ -362,6 +362,8 @@ llm --sync-history        # 기록만 커밋 → git pull --rebase --autostash �
   `history_*.json`을 직접 복사).
 - 홈에만 있던 기존 기록은 **그 폴더에서 처음 실행할 때 `.llm/`으로 한 번
   옮겨집니다**(양쪽에 있으면 더 긴 쪽 채택, 홈 원본은 `*.migrated`로 개명).
+  `LLM_HISTORY=home`으로 되돌리면 그 `*.migrated`를 다시 꺼내 옵니다
+  (백업은 그대로 남음).
 - 요약 백업(`.llm/summaries/`)도 함께 동기화됩니다. 기록이 요약으로 압축된
   뒤에도 원본 대화가 다른 PC에 남습니다(용량이 커지면 `git rm -r --cached
   .llm/summaries` 로 직접 정리해도 됩니다).
