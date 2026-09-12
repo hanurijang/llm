@@ -15,6 +15,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import time
 import unicodedata
 import urllib.error
 import urllib.request
@@ -80,9 +81,10 @@ TODO_STAMP_RE = re.compile(r"<!--\s*llm-todo:(.*?)\s*-->", re.S)
 MOVE_CANDIDATE_LIMIT = 5
 MOVE_SIMILARITY_MIN = 0.3  # 부모 경로만 같아도(+0.3) 후보로 올린다.
 
-# 잔액 환산에 쓰는 가정 환율(API 가 환율을 주지 않아 고정값으로 계산한다).
+# 잔액 환산에 쓰는 환율.
 # 계정 잔액은 화폐별로 존재할 수 있고(예: CNY, USD), 환산해 보여주는 화폐는
-# 원화(KRW) 하나다. 즉 아래 표는 "1 단위 화폐 = 몇 원"인지다.
+# 원화(KRW) 하나다. 즉 아래 표는 "1 단위 화폐 = 몇 원"인지이며,
+# **실시간 환율을 못 가져왔을 때만** 쓰는 가정(고정) 환율이다.
 KRW_PER_CNY = 220.0
 KRW_PER_USD = 1350.0
 CURRENCY_KRW_RATE = {"CNY": KRW_PER_CNY, "USD": KRW_PER_USD}
@@ -90,6 +92,14 @@ CURRENCY_LABELS = {"CNY": "위안화", "USD": "미국달러"}
 # 환산해 함께 보여줄 표시 화폐(원화)의 이름/코드.
 DISPLAY_CURRENCY_LABEL = "원화"
 DISPLAY_CURRENCY = "KRW"
+# 실시간 환율(참고용): 공개 환율 API 에서 1 USD 기준 전 화폐 시세를 받아
+# "1 화폐 = 몇 원"으로 바꾼다. 실패하거나 `--no-rates`/`LLM_RATES=0` 이면
+# 위 가정 환율로 되돌아간다. 결과는 RATE_CACHE_TTL 초 동안 파일로 캐시한다.
+RATE_URL = "https://open.er-api.com/v6/latest/USD"
+RATE_SOURCE = "open.er-api.com (exchangerate-api)"
+RATE_CACHE_FILE = HISTORY_DIR / "rates.json"
+RATE_CACHE_TTL = 12 * 3600
+RATE_CACHE_VERSION = 1
 IGNORE_DIRS = {
     ".git",
     "node_modules",
@@ -3278,6 +3288,13 @@ USAGE_KEYS = (
 # 에이전트 시작 시점에 조회한 잔액 (화폐별 잔액, 원화 환산 합계).
 # 종료 시 소요 비용(시작 - 종료)을 계산하는 데 쓴다.
 START_BALANCE: tuple[dict[str, str], float | None] | None = None
+# 활성 환율(1 화폐 = 몇 원). 가정 환율로 시작해 실시간 조회로 갱신된다.
+KRW_RATES: dict[str, float] = dict(CURRENCY_KRW_RATE)
+# 환율 출처 표시(예: `2026-09-12 00:02 · open.er-api.com`). 가정 환율이면 빈 값.
+RATES_INFO = ""
+# 실시간 환율을 쓸 수 있는지(성공 여부)와, 조회를 끄는 스위치(`--no-rates`).
+RATES_LIVE = False
+RATES_OFFLINE = False
 
 
 def reset_usage() -> None:
@@ -3295,6 +3312,147 @@ def record_usage(usage: Any) -> None:
     USAGE_TOTAL["calls"] = USAGE_TOTAL.get("calls", 0) + 1
 
 
+def http_get_json(url: str, timeout: int = 15) -> Any:
+    """인증 헤더 없이 JSON 을 받아온다(공개 환율 API 등 제3자 요청용).
+
+    DeepSeek 키를 제3자에게 보내지 않도록 `http_json` 과 달리 Authorization
+    헤더를 붙이지 않는다.
+    """
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            body = resp.read().decode("utf-8")
+    except urllib.error.HTTPError as exc:
+        raise RuntimeError(f"HTTP {exc.code}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"네트워크 오류: {exc.reason}") from exc
+    except OSError as exc:  # 타임아웃 등
+        raise RuntimeError(f"네트워크 오류: {exc}") from exc
+    try:
+        return json.loads(body)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("JSON 파싱 실패") from exc
+
+
+def rates_enabled() -> bool:
+    """실시간 환율 조회를 쓸지. `--no-rates` 또는 `LLM_RATES=0` 이면 끈다."""
+    if RATES_OFFLINE:
+        return False
+    return os.environ.get("LLM_RATES", "").strip() not in ("0", "false", "no", "off")
+
+
+def krw_rate(cur: str) -> float | None:
+    """1 단위 화폐가 몇 원인지(모르면 None). 실시간 시세가 있으면 그 값을 쓴다."""
+    rate = KRW_RATES.get(cur)
+    return float(rate) if isinstance(rate, (int, float)) else None
+
+
+def rates_from_usd(rates: dict[str, Any]) -> dict[str, float]:
+    """`1 USD` 기준 시세표를 `1 화폐 = 몇 원` 표로 바꾼다(원화 기준 교차 환산)."""
+    try:
+        krw_per_usd = float(rates["KRW"])
+    except (KeyError, TypeError, ValueError):
+        return {}
+    out: dict[str, float] = {"USD": krw_per_usd, "KRW": 1.0}
+    for cur, value in rates.items():
+        if cur in ("USD", "KRW"):
+            continue
+        try:
+            per_usd = float(value)
+        except (TypeError, ValueError):
+            continue
+        if per_usd > 0:
+            out[str(cur).upper()] = krw_per_usd / per_usd
+    return out
+
+
+def read_rate_cache() -> tuple[dict[str, float], str, bool] | None:
+    """환율 캐시 파일을 읽는다. (환율, 기준시각 표시, 최신 여부). 없으면 None."""
+    try:
+        data = json.loads(RATE_CACHE_FILE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    if not isinstance(data, dict) or data.get("version") != RATE_CACHE_VERSION:
+        return None
+    raw = data.get("krw")
+    if not isinstance(raw, dict) or not raw:
+        return None
+    rates: dict[str, float] = {}
+    for cur, value in raw.items():
+        try:
+            rates[str(cur).upper()] = float(value)
+        except (TypeError, ValueError):
+            continue
+    if "USD" not in rates:
+        return None
+    try:
+        age = time.time() - float(data.get("fetched_at") or 0)
+    except (TypeError, ValueError):
+        age = RATE_CACHE_TTL + 1
+    return rates, str(data.get("at") or ""), age <= RATE_CACHE_TTL
+
+
+def write_rate_cache(rates: dict[str, float], at: str) -> None:
+    """환율을 캐시 파일에 저장한다(실패해도 조용히 넘어간다)."""
+    try:
+        RATE_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
+        RATE_CACHE_FILE.write_text(
+            json.dumps(
+                {
+                    "version": RATE_CACHE_VERSION,
+                    "fetched_at": time.time(),
+                    "at": at,
+                    "source": RATE_SOURCE,
+                    "krw": rates,
+                },
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+    except OSError:
+        pass
+
+
+def load_rates(force: bool = False) -> None:
+    """적용 환율(`KRW_RATES`)을 준비한다. 실패하면 가정 환율을 그대로 쓴다.
+
+    캐시가 신선하면 그대로 쓰고, 아니면 공개 환율 API 를 조회한다. 조회도
+    실패하면 오래된 캐시 → 가정 환율 순으로 되돌아간다.
+    """
+    global RATES_INFO, RATES_LIVE
+    if not rates_enabled():
+        RATES_INFO = ""
+        RATES_LIVE = False
+        return
+    cached = read_rate_cache()
+    if cached and cached[2] and not force:
+        RATES_INFO = cached[1]
+        RATES_LIVE = True
+        KRW_RATES.update(cached[0])
+        return
+    try:
+        data = http_get_json(RATE_URL)
+        if not isinstance(data, dict) or data.get("result") not in (None, "success"):
+            raise RuntimeError(str(data.get("error-type") or "응답 형식 오류"))
+        rates = rates_from_usd(data.get("rates") or {})
+        if "USD" not in rates:
+            raise RuntimeError("환율 응답에 USD 가 없습니다")
+        at = str(data.get("time_last_update_utc") or datetime.now().strftime("%Y-%m-%d %H:%M"))
+        KRW_RATES.update(rates)
+        RATES_INFO = at
+        RATES_LIVE = True
+        write_rate_cache(rates, at)
+        return
+    except (Exception, SystemExit) as exc:  # 네트워크/JSON 오류 등
+        if cached:
+            KRW_RATES.update(cached[0])
+            RATES_INFO = f"{cached[1]} (오래된 시세, 갱신 실패: {exc})"
+            RATES_LIVE = True
+            return
+        RATES_INFO = f"가정 환율 (실시간 조회 실패: {exc})"
+        RATES_LIVE = False
+
+
 def ordered_currencies(amounts: dict[str, str]) -> list[str]:
     """화폐 표시 순서: 아는 화폐(CNY·USD…) 먼저, 나머지는 이름순."""
     known = [cur for cur in CURRENCY_LABELS if cur in amounts]
@@ -3306,7 +3464,7 @@ def amounts_krw(amounts: dict[str, str]) -> float | None:
     """화폐별 잔액을 원화로 환산한 합계. 환율을 모르거나 숫자가 아니면 None."""
     total = 0.0
     for cur, value in amounts.items():
-        rate = CURRENCY_KRW_RATE.get(cur)
+        rate = krw_rate(cur)
         if rate is None:
             return None
         try:
@@ -3332,7 +3490,8 @@ def fetch_balance() -> tuple[dict[str, str], float | None]:
 
     DeepSeek 계정 잔액은 화폐별로 존재할 수 있다(예: CNY, USD). API 가 준
     화폐별 금액을 그대로 담고(지어내지 않는다), 표시용으로 원화 환산 합계만
-    가정 환율(`CURRENCY_KRW_RATE`)로 계산한다. 잔액 정보가 없으면 `({}, None)`.
+    활성 환율(`KRW_RATES`, 실시간 시세 또는 가정 환율)로 계산한다.
+    잔액 정보가 없으면 `({}, None)`.
     """
     data = http_json(BALANCE_URL)
     amounts: dict[str, str] = {}
@@ -3356,7 +3515,7 @@ def print_balance_block(
     for cur in order:
         label = CURRENCY_LABELS.get(cur)
         name = f"{C.dim}{pad(label, 4)}{C.reset} " if label else ""
-        note = "" if cur in CURRENCY_KRW_RATE else f"  {C.dim}(환율 미지정){C.reset}"
+        note = "" if krw_rate(cur) is not None else f"  {C.dim}(환율 미지정){C.reset}"
         print(
             f"  {name}{C.dim}({cur}){C.reset}"
             f"  {C.bold}{amounts[cur]}{C.reset} {cur}{note}"
@@ -3367,41 +3526,42 @@ def print_balance_block(
     )
     print(f"{C.dim}{rule()}{C.reset}")
     rates = " · ".join(
-        f"1 {cur} = {CURRENCY_KRW_RATE[cur]:,.0f} KRW" for cur in order if cur in CURRENCY_KRW_RATE
+        f"1 {cur} = {krw_rate(cur):,.2f} KRW" for cur in order if krw_rate(cur) is not None
     )
     if rates:
-        print(f"  {C.dim}적용 환율(가정): {rates}{C.reset}")
+        kind = "실시간" if RATES_LIVE else "가정"
+        info = f"   {C.dim}({RATES_INFO}){C.reset}" if RATES_INFO else ""
+        print(f"  {C.dim}적용 환율({kind}): {rates}{C.reset}{info}")
     for line in extras or []:
         print(f"  {line}")
 
 
 def cmd_balance() -> int:
     print_info("DeepSeek 계정 잔액을 조회합니다...")
+    load_rates()
     amounts, krw = fetch_balance()
     print_balance_block(amounts, krw)
     return 0
 
 
 def prefetch_balance() -> None:
-    """에이전트 시작 전 잔액을 미리 조회해 캐시한다(`--balance`와 같은 조회).
+    """에이전트 시작 전 잔액과 적용 환율을 미리 조회해 캐시한다.
 
-    종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 실패해도
-    경고만 출력하고 흐름은 막지 않는다.
+    종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 시작 잔액은
+    화면에 출력하지 않고(종료 시 시작→종료로만 보여준다) 조용히 캐시만 한다.
+    실패해도 경고만 출력하고 흐름은 막지 않는다.
     """
     global START_BALANCE
     START_BALANCE = None
     if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
         return
+    load_rates()
     try:
         amounts, krw = fetch_balance()
     except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
         print_warn(f"시작 잔액을 조회하지 못했습니다: {exc}", stream=True)
         return
     START_BALANCE = (amounts, krw)
-    print_info(
-        f"시작 잔액: {C.bold}{format_amounts(amounts)}{C.reset}"
-        f" ({C.bold}{format_krw(krw)}{C.reset} 원)"
-    )
 
 
 def balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:
@@ -3424,7 +3584,7 @@ def cost_krw(costs: dict[str, float]) -> float | None:
     """화폐별 소모액을 원화로 환산한 합계. 환율을 모르는 화폐가 있으면 None."""
     total = 0.0
     for cur, value in costs.items():
-        rate = CURRENCY_KRW_RATE.get(cur)
+        rate = krw_rate(cur)
         if rate is None:
             return None
         total += value * rate
@@ -3435,11 +3595,14 @@ def cost_negligible(costs: dict[str, float]) -> bool:
     """소모액이 화폐 최소 단위(0.01) 미만이라 구분할 수 없는지.
 
     잔액은 화폐마다 소수 2자리로만 오므로, 반올림 단위(0.01)의 절반에
-    환산한 값보다 작으면 실제 소모인지 알 수 없다.
+    환산한 값보다 작으면 실제 소모인지 알 수 없다. 환율을 모르는 화폐가 있으면
+    판단할 수 없으니 구분 불가(`0.01 미만`)라고 하지 않는다.
     """
-    steps = [0.005 * rate for cur, rate in CURRENCY_KRW_RATE.items() if cur in costs]
-    if not steps:
+    if not costs:
         return True
+    steps = [0.005 * rate for cur in costs if (rate := krw_rate(cur)) is not None]
+    if len(steps) != len(costs):
+        return False
     krw = cost_krw(costs)
     if krw is None:
         return False
@@ -3462,7 +3625,7 @@ def cost_text(costs: dict[str, float]) -> str:
     items = [
         (cur, value)
         for cur, value in costs.items()
-        if cur in CURRENCY_KRW_RATE and abs(value) >= 0.005
+        if krw_rate(cur) is not None and abs(value) >= 0.005
     ]
     if len(items) == 1:
         cur, value = items[0]
@@ -3712,6 +3875,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ("llm --allow-clear", "셸 자동 허용 목록 비우기"),
         ("llm --balance", "API 잔액 조회 (화폐별 + 원화 환산)"),
         ("llm --no-balance", "에이전트 종료 후 잔액 표시 생략"),
+        ("llm --no-rates", "실시간 환율 조회 끄기 (가정 환율로 환산)"),
     ]
     width = max(display_width(cmd) for cmd, _ in usage)
     for cmd, desc in usage:
@@ -4008,6 +4172,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="에이전트 종료 후 잔액 표시 생략",
     )
+    parser.add_argument(
+        "--no-rates",
+        action="store_true",
+        help="실시간 환율 조회를 끄고 가정 환율로 환산 (LLM_RATES=0과 동일)",
+    )
     parser.add_argument("--no-thinking", action="store_true", help="사고(thinking) 비활성화 (더 빠른 응답)")
     parser.add_argument(
         "--show-thinking",
@@ -4043,6 +4212,9 @@ def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     init_color()
     args = parse_args(argv if argv is not None else sys.argv[1:])
+
+    global RATES_OFFLINE
+    RATES_OFFLINE = bool(args.no_rates)
 
     if args.balance:
         return cmd_balance()

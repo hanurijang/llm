@@ -170,6 +170,7 @@ llm --allow-clear
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 50). 한도에 도달하면 종료하지 않고 **이어서 N회 더 진행할지 `[y/N]`으로 확인** |
 | `--no-stream` | 스트리밍 비활성화 |
 | `--no-balance` | 시작 잔액 조회 및 종료 시 잔액·소요 비용·토큰 사용량 표시 생략 |
+| `--no-rates` | 실시간 환율 조회를 끄고 가정 환율로 환산 (`LLM_RATES=0`과 동일) |
 | `--no-thinking` | 사고(thinking) 비활성화 (더 빠른 응답, `--chat`에서 유용) |
 | `--show-thinking` | 사고 과정 원문을 회색으로 실시간 출력 (기본은 글자 수만 표시) |
 | `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (모든 셸 명령 확인, 다른 모드보다 우선) |
@@ -408,18 +409,18 @@ llm --delete
 
 ### 잔액·소요 비용 표시 (`--no-balance`)
 
-에이전트 모드는 **시작할 때 잔액을 먼저 조회해 캐시**하고
-(`ℹ️ 시작 잔액: 2.95 CNY (649.00 원)`), 정상 종료하면(`작업 완료 (N단계)`)
-**최종 답변 직전에** 아래를 `--balance`와 같은 형식으로 보여줍니다.
+에이전트 모드는 **시작할 때 잔액을 조용히 조회해 캐시**하고(화면에는 표시하지
+않음. 실패하면 경고만), 정상 종료하면(`작업 완료 (N단계)`) **최종 답변 직전에**
+아래를 `--balance`와 같은 형식으로 보여줍니다.
 
 ```text
 ──────────────────────── 💵 DeepSeek 잔액 정보 ────────────────────────
   위안화 (CNY)  2.95 CNY
-  미국달러 (USD)  0.41 USD
-  원화 (KRW)  1,202.50 원  (환산)
+  미국달러 (USD)  0.99 USD
+  원화 (KRW)  1,916.25 원  (환산)
 ────────────────────────────────────────────────────────────────────────
-  적용 환율(가정): 1 CNY = 220 KRW · 1 USD = 1,350 KRW
-  소요 비용: 24.50 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 종료 2.95 CNY · 0.99 USD)
+  적용 환율(실시간): 1 CNY = 199.43 KRW · 1 USD = 1,341.35 KRW   (Sat, 12 Sep 2026 00:02:31 +0000)
+  소요 비용: 23.38 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 종료 2.95 CNY · 0.99 USD)
   토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회
 ```
 
@@ -429,10 +430,22 @@ llm --delete
 - **환산해 보여주는 화폐는 원화(KRW) 하나**입니다. `원화 (KRW)` 줄이 화폐별
   잔액을 원화로 환산한 합계이고(옆에 `(환산)` 표시), 화폐별 금액은 각 줄에
   그대로 나옵니다.
-- 환산에는 **가정 환율**을 씁니다: `CURRENCY_KRW_RATE` = `1 CNY = 220 KRW`
-  (`KRW_PER_CNY`) · `1 USD = 1,350 KRW` (`KRW_PER_USD`). 실제 환율과 다를 수
-  있으니 참고용으로만 쓰세요. 환율을 모르는 화폐가 섞이면 그 줄에
-  `(환율 미지정)`을 붙이고 원화 합계는 `?`가 됩니다.
+- **환율은 실시간으로 조회**합니다(참고용): `RATE_URL`
+  (`https://open.er-api.com/v6/latest/USD`, 키 불필요)에서 `1 USD` 기준 전 화폐
+  시세를 받아 교차 환산해 `1 화폐 = 몇 원`을 만들고, 화면에는 `적용
+  환율(실시간): …`과 **갱신 시각**을 함께 보여줍니다. 받은 시세는
+  `RATE_CACHE_TTL`(12시간) 동안 `~/.local/share/llm/rates.json`에 캐시해
+  재조회를 아낍니다.
+  - 조회에 실패하면 (1) 캐시된 오래된 시세가 있으면 `(오래된 시세, 갱신 실패: …)`
+    표시와 함께 그 값을 쓰고, (2) 없으면 **가정 환율**로 되돌아갑니다
+    (`적용 환율(가정): …   (가정 환율 (실시간 조회 실패: …))`). 가정 환율은
+    `CURRENCY_KRW_RATE` = `1 CNY = 220 KRW`(`KRW_PER_CNY`) · `1 USD = 1,350 KRW`
+    (`KRW_PER_USD`)입니다.
+  - `--no-rates`(또는 `LLM_RATES=0`)로 실시간 조회를 끄면 항상 가정 환율을
+    씁니다(오프라인/고정값 선호 시).
+  - 실시간 시세가 있으면 가정 환율에 없던 화폐(예: `JPY`)도 환산됩니다. 그래도
+    모르는 화폐가 섞이면 그 줄에 `(환율 미지정)`을 붙이고 원화 합계는 `?`가
+    됩니다.
 - **소요 비용** = 시작 잔액 − 종료 잔액(화폐별로 계산해 원화로 환산).
   - 계정에 화폐가 하나뿐이면 그 화폐로도 보여줍니다: `0.05 CNY (11.00 원)`,
     `0.01 USD (13.50 원)`. 여러 화폐면 원화 합계를 앞세우고 화폐별 내역을
@@ -724,6 +737,7 @@ llm --rules
 | `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(glow)을 끄고 원문 출력, 도구 결과 제자리 갱신도 끔(로그로 출력) |
 | `LLM_ALLOW_ALL` | (미설정) | `1`/`true`/`yes`/`on` 이면 `--allow-all`(기본값과 동일) |
 | `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐 |
+| `LLM_RATES` | (미설정) | `0`/`false`/`no`/`off` 이면 실시간 환율 조회를 끄고 가정 환율로 환산 (`--no-rates`와 동일) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
 `/etc/env/.env` 파일이 있으면 시작 시 로드됩니다(이미 설정된 환경변수는
@@ -740,6 +754,7 @@ llm --rules
 | `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |
 | `~/.local/share/llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 |
 | `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답) |
+| `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
 
 대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로
@@ -785,8 +800,10 @@ llm (bash)  →  agent.py (python)
 - **비용/UI**: `prefetch_balance`/`balance_cost`(화폐별 소모액)/`cost_krw`/
   `cost_negligible`/`cost_text`/`show_balance_footer`(시작 잔액 캐시 → 종료 시
   소요 비용·토큰 표시), `fetch_balance`/`amounts_krw`(API가 준 화폐별 잔액 + 원화
-  환산, 가정 환율 `CURRENCY_KRW_RATE` = `KRW_PER_CNY`/`KRW_PER_USD`)/
-  `ordered_currencies`/`format_amounts`/`format_krw`/`print_balance_block`,
+  환산)/`ordered_currencies`/`format_amounts`/`format_krw`/`print_balance_block`,
+  `load_rates`/`rates_enabled`/`rates_from_usd`/`read_rate_cache`/`write_rate_cache`/
+  `krw_rate`(실시간 환율 조회·캐시, 실패 시 가정 환율 `CURRENCY_KRW_RATE` =
+  `KRW_PER_CNY`/`KRW_PER_USD` 폴백), `http_get_json`(키 없는 제3자 API 조회),
   `StepPanel`/`PANEL`(도구 결과
   제자리 갱신), `render_markdown`(glow), `print_title`/`print_info`/`print_ok`/
   `print_warn`/`print_error`, `rule`(구분선, 한글 폭 고려)
@@ -797,7 +814,8 @@ llm (bash)  →  agent.py (python)
    폴더의 매핑(고아)이 있으면 이어받을 후보를 보여주고 확인받는다
    (`apply_move_binding` → 이후 세션 안내). 조회/정리 명령도 같은 후보를 안내한다.
 1. 사용자 프롬프트를 세션 기록에 추가하고 저장
-2. (잔액 표시가 켜져 있으면) 시작 잔액을 조회해 캐시
+2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시
+   (화면에는 출력하지 않음)
 3. 시스템 프롬프트(워크스페이스 정보 + 세션 규칙) 구성. 요약문에 남은 작업
    계획 스냅샷이 있으면 복원해(`restore_todo`) **같은 계획을 이어감**
 4. 모델 호출 → (사고/작성 진행 상태 한 줄) → 텍스트 또는 도구 호출 수신
