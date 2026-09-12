@@ -180,7 +180,8 @@ llm "이 폴더 요약해줘"   # 도구까지 확인
   목록·환율 캐시)는 첫 실행 때 만들어집니다. 따로 만들 필요가 없습니다.
 - **대화 기록은 저장소와 함께 옵니다**: 기록이 `<작업폴더>/.llm/`에 있어
   `git pull`(또는 clone)만 하면 이전 PC의 대화가 그대로 이어집니다.
-  다른 PC에서 마친 작업은 이쪽에서 `llm --sync-history`로 올려 두세요.
+  이쪽 대화도 **매 턴 끝에 자동으로 커밋·push**됩니다(`LLM_AUTO_SYNC=0`이면
+  꺼지고, 그때는 `llm --sync-history`로 직접 올립니다).
 - **저장소 폴더 이름을 같게 유지**하세요(README의 설치 경로 그대로면 자동).
   세션 이름이 폴더 이름에서 만들어지므로, 이름이 다르면 `llm -s <이름>`으로
   지정하거나 `llm --view`가 알려주는 `-s` 안내를 따르면 됩니다.
@@ -276,7 +277,7 @@ llm --allow-clear
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
-| `--sync-history` | 이 세션의 대화 기록·요약만 커밋 → `git pull --rebase --autostash` → `push` (다른 PC에서 이어가기) |
+| `--sync-history` | 이 세션의 대화 기록·요약만 커밋 → `git pull --rebase --autostash` → `push` (다른 PC에서 이어가기). 실행 종료 시에는 자동으로 수행됨(`LLM_AUTO_SYNC=0`이면 꺼짐) |
 | `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |
 | `--view` | 세션 대화 내용 보기 (Markdown) |
 | `--clear` | 현재 세션 내용만 비우기 |
@@ -348,13 +349,25 @@ llm --delete
 `git pull`(또는 clone) 후 같은 세션으로 그대로 이어집니다.**
 
 ```bash
-llm --sync-history        # 이 세션 기록·요약만 커밋 → git pull --rebase --autostash → push
+llm "다음 작업 해줘"       # 실행이 끝나면 기록을 자동으로 커밋 → pull --rebase → push
+llm --sync-history        # 방금/지난 대화를 지금 올리고 싶을 때 (자동과 같은 동작)
 ```
 
-- **이 세션의 기록 파일**(`.llm/history_<세션>.json`)과 **요약 백업**
-  (`.llm/summaries/<세션>/`)만 스테이징합니다. 소스 코드·규칙 파일 등 나머지
-  변경은 건드리지 않으므로 평소처럼 직접 커밋하세요.
+- **에이전트 실행(프롬프트 한 턴)이 끝날 때마다 자동으로** 이 세션의 기록을
+  커밋하고 `git pull --rebase --autostash` 후 `push` 합니다(화면에
+  `🔄 대화 기록 동기화` 블록이 뜸). 그래서 **최종 답변까지 포함해 매 턴 원격에
+  올라가고**, 다음 PC에서는 `git pull`만 하면 이어집니다.
+- 끄려면 `LLM_AUTO_SYNC=0`(또는 `false`/`no`/`off`)으로 실행하거나 `.env`에
+  넣습니다. 이때는 `llm --sync-history`로 직접 올리세요.
+- `LLM_HISTORY=home`(홈 저장)이거나 git 저장소가 아니거나 기록에 변경이 없으면
+  아무 것도 하지 않습니다. upstream(`@{u}`)이 없으면 커밋만 하고 push는
+  건너뜁니다.
+- `--sync-history`는 **이 세션의 기록 파일**(`.llm/history_<세션>.json`)과
+  **요약 백업**(`.llm/summaries/<세션>/`)만 스테이징합니다. 소스 코드·규칙 파일
+  등 나머지 변경은 건드리지 않으므로 평소처럼 직접 커밋하세요.
 - 커밋 메시지는 `llm: 대화 기록 동기화 (session=<세션>)` 형식입니다.
+- 실행 시작 때 아직 못 올린 변경이 남아 있으면(이전 턴의 push 실패 등) 그
+  사실을 알려주고, 실행이 끝날 때 다시 자동 시도합니다.
 - 원격에 새 커밋이 있으면 `--rebase --autostash`로 먼저 받아옵니다.
 - `.llm/`이 `.gitignore`에 있으면 push가 되지 않으므로, 그 줄을 지우라는
   안내와 함께 중단합니다.
@@ -989,6 +1002,7 @@ llm --rules
 | `LLM_RATES` | (미설정) | `0`/`false`/`no`/`off` 이면 실시간 환율 조회를 끄고 가정 환율로 환산 (`--no-rates`와 동일) |
 | `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 파일 경로를 직접 지정 (아래 조회 순서에서 가장 먼저) |
 | `LLM_HISTORY` | (미설정) | 대화 기록 저장 위치. `home` 이면 예전처럼 `~/.local/share/llm/`(동기화 안 됨), 그 외/미설정이면 작업 폴더 `.llm/` |
+| `LLM_AUTO_SYNC` | `1`(켜짐) | `0`/`false`/`no`/`off` 이면 실행 종료 시 자동 커밋·push를 끔(직접 `--sync-history`로 올림) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
 `.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는
@@ -1072,7 +1086,8 @@ llm (bash)  →  agent.py (python)
   `migrate_legacy_session`(홈 → `.llm` 1회 이전, 더 긴 쪽 채택, 홈 원본은
   `*.migrated`), `history_sync_paths`/`git_run`/`cmd_sync_history`
   (`--sync-history`: 기록만 커밋 → `pull --rebase --autostash` → `push`),
-  `print_history_sync_hint`, `repo_history_sessions`/`hint_repo_history`
+  `auto_sync_enabled`/`auto_sync_history`(실행 종료 시 자동 동기화, 기본 켜짐·
+  `LLM_AUTO_SYNC=0`으로 끔), `print_history_sync_hint`, `repo_history_sessions`/`hint_repo_history`
   (매핑 없이 `.llm/`에 기록만 있으면 `llm -s <이름>` 안내)
 - **작업 계획(todo)**: `tool_todo`/`render_todo`(목표 + 번호 매긴 항목 + 항목별
   하위 작업 로그를 화면에 그리기), `todo_block_lines`/`refresh_todo_block`
@@ -1158,9 +1173,9 @@ llm (bash)  →  agent.py (python)
 
 ### 다른 PC에서 대화가 안 보임
 
-- 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있습니다. 이쪽에서
-  `llm --sync-history`로 올리고, 다른 PC에서 `git pull` 후 **같은 폴더**에서
-  실행하세요.
+- 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있고, **매 턴 끝에 자동으로
+  커밋·push**됩니다(끄려면 `LLM_AUTO_SYNC=0`). 다른 PC에서 `git pull` 후
+  **같은 폴더**에서 실행하세요. 지난 대화를 지금 올리려면 `llm --sync-history`.
 - `.llm/`이 `.gitignore`에 있으면 push가 안 됩니다. 그 줄을 지우세요
   (`.llm/rules.md`는 저장소에, 기록은 다른 PC로 — 둘 다 `.llm/` 안입니다).
 - `LLM_HISTORY=home`으로 실행하면 기록이 홈에 남아 동기화되지 않습니다.
@@ -1195,8 +1210,9 @@ llm (bash)  →  agent.py (python)
 7. 편집 후에는 가능한 범위에서 검증합니다(문법 검사, 실행 확인 등).
 8. **코드 수정 전 `git pull --rebase --autostash`, 검증 통과 후 커밋·`git push`**
    를 수행합니다. 검증 실패·중단 시에는 되돌리고 push하지 않습니다.
-   대화만 한 세션의 기록은 `llm --sync-history`로 옮깁니다(절차 원본:
-   [`.llm/rules.md`](.llm/rules.md)).
+   **대화 기록도 매 턴 끝에 자동으로 커밋·push**됩니다(`LLM_AUTO_SYNC=0`이면
+   `llm --sync-history`로 직접 올림). 절차 원본:
+   [`.llm/rules.md`](.llm/rules.md).
 
 세션 규칙 원본은 [`.llm/rules.md`](.llm/rules.md)에서 관리됩니다.
 

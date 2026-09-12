@@ -49,13 +49,17 @@
   홈**에 둔다. 대화 기록 위치 변경과 무관하다.
 - 홈에만 있던 기록은 그 폴더에서 처음 실행할 때 `.llm/`으로 **한 번** 옮기고,
   양쪽에 있으면 더 긴 쪽을 채택하며 홈 원본은 `*.migrated`로 남긴다.
-- 다른 PC로 옮길 때는 `llm --sync-history`(이 세션 기록·요약만 커밋 →
-  `pull --rebase --autostash` → `push`)를 쓴다. `.llm/`이 `.gitignore`에 있으면
-  에러로 안내하고 중단한다.
+- **대화 기록도 매 턴 끝에 자동으로 커밋·push 한다**(에이전트 실행이 끝나면
+  `auto_sync_history`가 기록·요약만 커밋 → `pull --rebase --autostash` → `push`).
+  "다음 턴에 올리자"고 미루지 않는다. `LLM_AUTO_SYNC=0`(false/no/off)이면 꺼지고,
+  그때는 `llm --sync-history`(이 세션 기록·요약만 커밋 → `pull --rebase
+  --autostash` → `push`)로 직접 올린다.
+- `.llm/`이 `.gitignore`에 있으면 에러로 안내하고 중단한다.
 - `LLM_HISTORY=home`으로 되돌리면 홈의 `*.migrated` 기록을 다시 꺼내 온다.
 - 이 동작을 바꿀 때는 `agent.py`의 `HISTORY_*`/`REPO_HISTORY_DIR_NAME`/
   `history_scope_dir`/`set_history_base`/`find_history_file`/
-  `migrate_legacy_session`/`cmd_sync_history`와 README 「대화 기록 동기화」·
+  `migrate_legacy_session`/`cmd_sync_history`/`auto_sync_enabled`/
+  `auto_sync_history`/`AUTO_SYNC_ENV`와 README 「대화 기록 동기화」·
   「파일/데이터 위치」·「설정과 환경변수」 표를 함께 갱신한다.
 
 ## README 갱신 (필수)
@@ -87,9 +91,9 @@
   `git restore agent.py`(또는 작업한 파일).
 - 되돌린 뒤에는 사용자에게 **어떤 파일을 왜 되돌렸는지** 알린다.
 - `agent.py`는 편집 대상이자 실행 대상이므로, 문법 오류 상태로 남기지 않는다.
-- 코드 변경 없이 대화만 한 세션은 push 트리거가 없으므로, 기록을 옮길 때는
-  `llm --sync-history`(이 세션 기록·요약만 커밋 → `pull --rebase` → `push`)를
-  쓴다.
+- 대화 기록은 위 "대화 기록 위치와 동기화"대로 **매 턴 자동 커밋·push**되므로,
+  코드 변경 없이 대화만 한 세션도 별도 절차 없이 원격에 올라간다(자동이
+  실패했을 때만 `llm --sync-history`로 보완).
 - 커밋 메시지는 무엇을 바꿨는지 한 줄로 요약한다.
 
 ## 셀프테스트 잔여 파일 (삭제 상시 허용)

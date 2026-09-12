@@ -42,6 +42,9 @@ HISTORY_DIR = Path.home() / ".local/share/llm"
 HISTORY_SCOPE_ENV = "LLM_HISTORY"
 REPO_HISTORY_DIR_NAME = ".llm"
 HISTORY_SCOPE_HOME = "home"
+# 실행이 끝나면 대화 기록을 자동으로 커밋·push 할지 정하는 환경변수(기본 켜짐).
+# `LLM_AUTO_SYNC=0`(false/no/off)이면 끄고 `--sync-history`로 직접 올린다.
+AUTO_SYNC_ENV = "LLM_AUTO_SYNC"
 # 실행 시 `set_history_base()`가 정한다. 기본값은 홈(폴더를 알기 전 폴백).
 HISTORY_BASE = HISTORY_DIR
 DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-flash")
@@ -4753,10 +4756,39 @@ def print_history_sync_hint(root: Path, history_file: Path) -> None:
         return  # git 저장소가 아니면 안내하지 않는다.
     if not out:
         return
+    if auto_sync_enabled():
+        print_info(
+            "대화 기록에 아직 올리지 못한 변경이 있습니다 — 실행이 끝나면 다시"
+            f" 커밋·push 를 시도합니다 (끄려면 {AUTO_SYNC_ENV}=0)."
+        )
+        return
     print_info(
         "대화 기록이 아직 커밋되지 않았습니다 — llm --sync-history 로 올리면"
         " 다른 PC에서 이어집니다."
     )
+
+
+def auto_sync_enabled() -> bool:
+    """실행 종료 시 기록 자동 동기화 여부(기본 켜짐, `LLM_AUTO_SYNC=0`이면 끔)."""
+    val = os.environ.get(AUTO_SYNC_ENV, "").strip().lower()
+    return val not in {"0", "false", "no", "off"}
+
+
+def auto_sync_history(root: Path, session: str) -> None:
+    """실행이 끝나면 대화 기록을 자동으로 커밋·push 한다(실패해도 실행 결과는 그대로)."""
+    if not auto_sync_enabled() or not history_scope_is_repo():
+        return
+    paths = history_sync_paths(root, session)
+    if not paths:
+        return
+    # 기록에 변경이 없거나 git 저장소가 아니면 조용히 넘어간다.
+    code, out = git_run(root, "status", "--porcelain", "--untracked-files=all", "--", *paths)
+    if code != 0 or not out:
+        return
+    print(f"{C.dim}{rule()}{C.reset}")
+    print_title("🔄 대화 기록 동기화")
+    if cmd_sync_history(root, session) != 0:
+        print_info(f"자동 동기화를 끄려면 {AUTO_SYNC_ENV}=0 으로 실행하세요.")
 
 
 def cmd_sync_history(root: Path, session: str) -> int:
@@ -5380,7 +5412,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.run:
         return cmd_run(session, history_file)
     if args.summarize:
-        return cmd_summarize(session, history_file, args.model, force=True)
+        rc = cmd_summarize(session, history_file, args.model, force=True)
+        auto_sync_history(root, session)
+        return rc
     if args.allow_list or args.allow_clear:
         return cmd_allow(session, clear=args.allow_clear, root=root)
     if args.delete:
@@ -5392,11 +5426,13 @@ def main(argv: list[str] | None = None) -> int:
             print_ok(f"[{session}] 세션 파일을 완전히 삭제했습니다.")
         else:
             print_ok(f"[{session}] 폴더 매핑을 해제했습니다.")
+        auto_sync_history(root, session)
         return 0
     if args.clear:
         if history_file.is_file():
             save_history(history_file, [])
             print_ok(f"[{session}] 세션 내용을 비웠습니다 (초기화).")
+            auto_sync_history(root, session)
             return 0
         print_error(f"[{session}] 세션 파일이 존재하지 않습니다.")
         return 1
@@ -5409,6 +5445,7 @@ def main(argv: list[str] | None = None) -> int:
         names = ", ".join(n.strip() for n in args.ref if n.strip())
         print_ok(f"[{session}]에 참고 맥락을 주입했습니다: {names}")
         if not prompt:
+            auto_sync_history(root, session)
             return 0
 
     if not prompt:
@@ -5418,7 +5455,7 @@ def main(argv: list[str] | None = None) -> int:
     # 셸 확인 범위: 명시 옵션이 환경변수보다 우선한다.
     auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
 
-    return cmd_agent(
+    rc = cmd_agent(
         prompt=prompt,
         session=session,
         history_file=history_file,
@@ -5437,6 +5474,9 @@ def main(argv: list[str] | None = None) -> int:
         ask_source=ask_source,
         no_balance=args.no_balance,
     )
+    # 실행이 끝나면 대화 기록을 자동으로 커밋·push 한다(다음 턴으로 미루지 않는다).
+    auto_sync_history(root, session)
+    return rc
 
 
 if __name__ == "__main__":
