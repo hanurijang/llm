@@ -24,6 +24,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+# 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
+VERSION = "0.1.0"
+
 API_URL = "https://api.deepseek.com/chat/completions"
 BALANCE_URL = "https://api.deepseek.com/user/balance"
 HISTORY_DIR = Path.home() / ".local/share/llm"
@@ -3947,6 +3950,7 @@ def print_banner(
         confirm = f"  {C.dim}확인={C.reset}{label}"
     print(
         f"{C.dim}──{C.reset} {mode_color}{C.bold}{mode}{C.reset}"
+        f" {C.dim}v{VERSION}{C.reset}"
         f"  {C.dim}session={C.reset}{session}"
         f"  {C.dim}root={C.reset}{root}"
         f"  {C.dim}rules={C.reset}{rules}{confirm}"
@@ -4549,7 +4553,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
     names = sorted(set(files) | set(folders.values()))
     mapped = folders.get(canonical_folder(root))
 
-    print_title("💡 DeepSeek LLM CLI")
+    print_title(f"💡 DeepSeek LLM CLI v{VERSION}")
     print(f"  {C.dim}📂 작업 폴더{C.reset}  {root}")
     mapped_txt = mapped if mapped else f"{C.yellow}(없음 — 다음 대화 때 생성){C.reset}"
     print(f"  {C.dim}🔗 매핑 세션{C.reset}  {mapped_txt}")

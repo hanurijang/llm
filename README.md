@@ -193,9 +193,13 @@ llm --allow-clear
 경우에는 그 사실과 해제 방법을 함께 안내합니다.
 
 ```text
-── 에이전트  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
+── 에이전트 v0.1.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
 ℹ️  환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다 (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다.
 ```
+
+시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.1.0`)이
+표시됩니다. 인자 없이 `llm`만 실행했을 때의 머리말과 세션 목록 상단에도 같은
+버전이 나옵니다. 버전 값은 `agent.py`의 `VERSION` 상수 하나로 관리합니다.
 
 ### 사용 예
 
@@ -888,7 +892,8 @@ llm (bash)  →  agent.py (python)
 
 `agent.py`의 주요 구성:
 
-- **진입/CLI**: `main`, `parse_args`, `canonical_folder`
+- **진입/CLI**: `main`, `parse_args`, `canonical_folder`, `VERSION`(시작 배너·머리말에
+  표시하는 버전 문자열), `print_banner`(모드·버전·세션·폴더·규칙·확인 모드 한 줄)
 - **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행 → 결과 피드백 반복
 - **API 계층**: `http_json`, `stream_chat`, `complete` (SSE 스트리밍, 비스트림
   폴백, `StreamInterrupted`로 부분 응답 보존, `on_delta`/`make_stream_progress`
