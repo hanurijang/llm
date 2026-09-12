@@ -1390,5 +1390,153 @@
   {
     "role": "assistant",
     "content": "실제 API로 임시 저장소(`/tmp/llmreal`, 로컬 bare remote)에서 llm을 돌려 4가지를 모두 확인했습니다. 전부 통과입니다.\n\n## 테스트 결과\n1. **동기화 줄(새 규칙) 실제 동작** — 실제 실행 답변 마지막 줄:\n   `🔁 동기화: 코드 push 완료 · b754144 \"add hello.txt with 'hi'\" · hello.txt +1 · 대화 기록(.llm/)은 턴 종료 시 자동 커밋·push` → 커밋 해시·제목·변경 파일까지 나왔습니다.\n2. **커밋/푸시 동작** — `git push`까지 정상, 이어서 자동 기록 동기화(`llm: 대화 기록 동기화 (session=ztest_sync)`)도 성공.\n3. **todo 버그 수정(끝난 계획 미부활)** — 완료된 계획 뒤 새 요청(run2)에서 `🎯 README.md에 'second task'…`만 표시되고, 옛 `hello.txt` 목표·\"이어가는 작업 계획\"은 **0건**. 저장된 기록 헤드에도 계획 블록·스탬프가 없음.\n4. **진행 중 계획은 계속 이어짐** — `in_progress` 항목이 있는 기록으로 실행 시 `ℹ️ 이어가는 작업 계획: 전체 2개 (완료 1개)` + 옛 목표 복원 확인.\n5. **시스템 프롬프트 주입** — 캡처 프롬프트에 새 규칙(`답변 마무리 — 동기화 상태 표시`, \"짧은 해시 + 제목\") 포함, 옛 문구는 제거됨.\n\n## 정리\n- 셀프테스트 잔여물 삭제: `/tmp/llmreal` 통째로, `bindings.json`의 `/tmp/llmreal/ws` 매핑. ztest 기록·요약·허용목록 파일은 애초에 홈에 생성되지 않았습니다.\n\n🔁 동기화: 변경 없음(원격과 동일, 앞선 로컬 커밋 0 · 코드/규칙 변경 없이 대화 기록만 턴 종료 시 자동 push)"
+  },
+  {
+    "role": "user",
+    "content": "마지막대화 뭐야? 요약"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_T2veIIw1iPlLR65AGPwQ7969",
+        "type": "function",
+        "function": {
+          "name": "todo",
+          "arguments": "{\"goal\": \"최근 대화(마지막 턴들)의 내용을 기록 파일에서 읽어 요약해 보여준다.\", \"items\": [{\"content\": \"history_llm.json 마지막 메시지·요약본 확인\", \"status\": \"in_progress\"}, {\"content\": \"마지막 대화 요약 정리해 보고\", \"status\": \"pending\"}]}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_T2veIIw1iPlLR65AGPwQ7969",
+    "name": "todo",
+    "content": "📋 작업 계획 갱신: 총 2개, 완료 0개 · 진행 중: history_llm.json 마지막 메시지·요약본 확인 · 목표 유지: 최근 대화(마지막 턴들)의 내용을 기록 파일에서 읽어 요약해 보여준다."
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_yDuefKZyltzAC5H3X0sp9150",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/rasp/codespace/userscript/llm\\nls -la .llm/ | head; echo \\\"=== 요약본 목록 ===\\\"; ls -la .llm/summaries/llm/ | tail -5\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_yDuefKZyltzAC5H3X0sp9150",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n합계 188\ndrwxrwxr-x 3 jang jang   4096  9월 12 17:17 .\ndrwxrwxr-x 5 jang jang   4096  9월 12 17:17 ..\n-rw-rw-r-- 1 jang jang 167881  9월 12 17:17 history_llm.json\n-rw-rw-r-- 1 jang jang  10826  9월 12 17:17 rules.md\ndrwxrwxr-x 3 jang jang   4096  9월 12 16:32 summaries\n=== 요약본 목록 ===\n-rw-rw-r-- 1 jang jang 305339  9월 12 17:17 2026-09-12T17-03-19.json\n-rw-rw-r-- 1 jang jang   3882  9월 12 17:17 2026-09-12T17-03-19.md\n-rw-rw-r-- 1 jang jang 297078  9월 12 17:17 2026-09-12T17-09-43.json\n-rw-rw-r-- 1 jang jang   3520  9월 12 17:17 2026-09-12T17-09-43.md\n-rw-rw-r-- 1 jang jang 106022  9월 12 17:17 index.json\n\n--- stderr ---\n/bin/bash: 행 1번: cd: /home/rasp/codespace/userscript/llm: 그런 파일이나 디렉터리가 없습니다\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_9RlEVsq0RR8I6niCryOj0718",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"pwd; ls; echo \\\"---\\\"; ls /home/ 2>/dev/null\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_9RlEVsq0RR8I6niCryOj0718",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n/home/jang/codespace/userscript/llm\nREADME.md\n__pycache__\nagent.py\nllm\n---\njang\nlost+found\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_qEE93qaia2HiFS9WNiGA4625",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm\\npython3 - <<'PY'\\nimport json\\nh = json.load(open(\\\".llm/history_llm.json\\\"))\\nprint(\\\"메시지 수:\\\", len(h))\\nprint(\\\"=== 마지막 8개 메시지 (요약) ===\\\")\\nfor m in h[-8:]:\\n    role = m.get(\\\"role\\\")\\n    c = m.get(\\\"content\\\")\\n    if isinstance(c, list):\\n        c = json.dumps(c, ensure_ascii=False)[:120]\\n    if not isinstance(c, str):\\n        c = str(c)[:120]\\n    tc = m.get(\\\"tool_calls\\\")\\n    extra = f\\\" [tool_calls={len(tc)}]\\\" if tc else \\\"\\\"\\n    print(f\\\"--- {role}{extra} ---\\\")\\n    print(c[:800].replace(\\\"\\\\n\\\", \\\"\\\\n\\\"))\\nPY\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_qEE93qaia2HiFS9WNiGA4625",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n메시지 수: 151\n=== 마지막 8개 메시지 (요약) ===\n--- assistant ---\n실제 API로 임시 저장소(`/tmp/llmreal`, 로컬 bare remote)에서 llm을 돌려 4가지를 모두 확인했습니다. 전부 통과입니다.\n\n## 테스트 결과\n1. **동기화 줄(새 규칙) 실제 동작** — 실제 실행 답변 마지막 줄:\n   `🔁 동기화: 코드 push 완료 · b754144 \"add hello.txt with 'hi'\" · hello.txt +1 · 대화 기록(.llm/)은 턴 종료 시 자동 커밋·push` → 커밋 해시·제목·변경 파일까지 나왔습니다.\n2. **커밋/푸시 동작** — `git push`까지 정상, 이어서 자동 기록 동기화(`llm: 대화 기록 동기화 (session=ztest_sync)`)도 성공.\n3. **todo 버그 수정(끝난 계획 미부활)** — 완료된 계획 뒤 새 요청(run2)에서 `🎯 README.md에 'second task'…`만 표시되고, 옛 `hello.txt` 목표·\"이어가는 작업 계획\"은 **0건**. 저장된 기록 헤드에도 계획 블록·스탬프가 없음.\n4. **진행 중 계획은 계속 이어짐** — `in_progress` 항목이 있는 기록으로 실행 시 `ℹ️ 이어가는 작업 계획: 전체 2개 (완료 1개)` + 옛 목표 복원 확인.\n5. **시스템 프롬프트 주입** — 캡처 프롬프트에 새 규칙(`답변 마무리 — 동기화 상태 표시`, \"짧은 해시 + 제목\") 포함, 옛 문구는 제거됨.\n\n## 정리\n- 셀프테스트 잔여물 삭제: `/tmp/llmreal` 통째로, `bindings.json`의 `/tmp/llmreal/ws` 매핑. ztest 기록·요약\n--- user ---\n마지막대화 뭐야? 요약\n--- assistant [tool_calls=1] ---\n\n--- tool ---\n📋 작업 계획 갱신: 총 2개, 완료 0개 · 진행 중: history_llm.json 마지막 메시지·요약본 확인 · 목표 유지: 최근 대화(마지막 턴들)의 내용을 기록 파일에서 읽어 요약해 보여준다.\n--- assistant [tool_calls=1] ---\n\n--- tool ---\nexit 0\n--- stdout ---\n합계 188\ndrwxrwxr-x 3 jang jang   4096  9월 12 17:17 .\ndrwxrwxr-x 5 jang jang   4096  9월 12 17:17 ..\n-rw-rw-r-- 1 jang jang 167881  9월 12 17:17 history_llm.json\n-rw-rw-r-- 1 jang jang  10826  9월 12 17:17 rules.md\ndrwxrwxr-x 3 jang jang   4096  9월 12 16:32 summaries\n=== 요약본 목록 ===\n-rw-rw-r-- 1 jang jang 305339  9월 12 17:17 2026-09-12T17-03-19.json\n-rw-rw-r-- 1 jang jang   3882  9월 12 17:17 2026-09-12T17-03-19.md\n-rw-rw-r-- 1 jang jang 297078  9월 12 17:17 2026-09-12T17-09-43.json\n-rw-rw-r-- 1 jang jang   3520  9월 12 17:17 2026-09-12T17-09-43.md\n-rw-rw-r-- 1 jang jang 106022  9월 12 17:17 index.json\n\n--- stderr ---\n/bin/bash: 행 1번: cd: /home/rasp/codespace/userscript/llm: 그런 파일이나 디렉터리가 없습니다\n\n--- assistant [tool_calls=1] ---\n\n--- tool ---\nexit 0\n--- stdout ---\n/home/jang/codespace/userscript/llm\nREADME.md\n__pycache__\nagent.py\nllm\n---\njang\nlost+found\n\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_NH1QEjDgukAYt08dcOR08472",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm\\npython3 - <<'PY'\\nimport json\\nh = json.load(open(\\\".llm/history_llm.json\\\"))\\nturns = []\\nfor m in h:\\n    role = m.get(\\\"role\\\")\\n    if role == \\\"user\\\" and isinstance(m.get(\\\"content\\\"), str):\\n        turns.append((\\\"USER\\\", m[\\\"content\\\"]))\\n    elif role == \\\"assistant\\\" and isinstance(m.get(\\\"content\\\"), str) and m[\\\"content\\\"].strip():\\n        turns.append((\\\"ASSISTANT\\\", m[\\\"content\\\"]))\\nprint(\\\"총 턴(요약 헤드 제외):\\\", len(turns))\\nprint(\\\"=\\\"*70)\\nfor role, c in turns[-12:]:\\n    print(f\\\"### {role}\\\")\\n    print(c[:500].strip())\\n    print(\\\"-\\\"*70)\\nPY\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_NH1QEjDgukAYt08dcOR08472",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n총 턴(요약 헤드 제외): 10\n======================================================================\n### USER\n[이전 대화 요약] 아래는 이전 대화의 요약입니다. 이후 대화의 맥락으로 사용하세요.\n\n# 대화 요약\n\n## 사용자 목표/요청\n- **버그 지적**: \"왜 자꾸 `.env`를 검증하는 것이 목표(goal)로 자동설정되는거야? 코드에 오류가 있는 것 같아.\" → 세션마다 todo 목표가 옛 `.env 검증` 작업으로 되살아나는 원인을 코드에서 찾아 고칠 것.\n\n## 배경 (이전 흐름)\n- `.env` 로드 우선순위(`LLM_ENV_FILE > 저장소 .env > /etc/env/.env`) 구현·검증 완료, `v0.4.0` 커밋 `d70a359` push됨.\n- `maybe_auto_pull`(질의 전 원격 기록 자동 수신)에 **안전장치 추가**: 기록이 dirty면 수신 건너뜀, pull 후 `diff --diff-filter=U`로 autostash 충돌 감지 경고(JSON 깨져 대화 소실 방지). README·`.llm/rules.md` 반영.\n\n## 원인 분석 (재현 3건)\n----------------------------------------------------------------------\n### ASSISTANT\nNow README의 해당 섹션을 갱신합니다.\n----------------------------------------------------------------------\n### ASSISTANT\n원인을 찾아 고치고 검증·커밋·push까지 마쳤습니다(`aeff65e`).\n\n## 원인\n- 요약 헤드(대화 0번 메시지)에 심은 **옛 계획 스냅샷/계획 블록이 그대로 남아** 있었습니다. 스냅샷은 압축 시점에만 심겨서, 그 뒤 계획이 끝나도 헤드에는 `🎯 저장소 .env …`가 계속 남았고, 그 블록이 \"새로 만들지 말고 이 계획을 이어서 갱신하세요\"라고 지시하니 매 실행의 목표처럼 되살아났습니다.\n- 부수적으로 ① 전부 완료된 계획까지 `restore_todo`가 복원했고, ② 도구 출력에 섞인 파싱 불가 스탬프 모양 문자열이 더 뒤에 있으면 멀쩡한 계획을 잃었으며, ③ 이전 계획이 끝난 뒤 `goal` 없이 새 항목을 보내면 옛 목표를 물려받았습니다.\n\n## 변경 (agent.py)\n- `todo_active()` 신설: 미완료 항목이 없으면(모두 done) **끝난 계획**으로 간주 → `todo_plan_text()`/`todo_stamp()`가 빈 문자열.\n- `refre\n----------------------------------------------------------------------\n### USER\n답변 마지막에는 gitpush여부를 포함해서 동기화 상태를 보여줘\n----------------------------------------------------------------------\n### ASSISTANT\n앞으로 매 답변 마지막 줄에 git 동기화 상태를 표시하도록 `.llm/rules.md`에 규칙을 추가하고, 그 규칙 변경분을 커밋·push했습니다.\n\n## 변경\n- `.llm/rules.md`: `## 답변 마무리 — 동기화 상태 표시 (필수)` 섹션 신설 — 답변 직전 실제 상태(`git status --short`, `git log origin/main..HEAD`)를 확인해 push 여부 + 대화 기록 동기화 상태를 한 줄로 표시, 실패하면 이유까지 명시(우회 push 금지).\n- 코드/CLI 변경이 아니라 답변 형식 규칙이라 `agent.py`·README는 그대로(README의 \"폴더별로 다른 형식은 `.llm/rules.md`에 적습니다\" 설명과 일치).\n\n## 검증\n- `git log origin/main..HEAD` = 0, 커밋 `d721695` push 완료(원격 `main`과 동일).\n- 워킹트리는 `.llm/history_llm.json`만 변경됨(이번 턴 대\n----------------------------------------------------------------------\n### USER\n푸시할때 코드가 있지 않아? 같이 보여주면 좋겠는데?\n----------------------------------------------------------------------\n### ASSISTANT\n동기화 줄에 push한 **커밋(해시·제목)**과 그 커밋이 바꾼 **파일 목록(코드)**을 함께 적도록 규칙을 갱신했습니다.\n\n## 변경\n- `.llm/rules.md`: `git show --stat --oneline <해시>`까지 확인해, push 여부 + 커밋 해시/제목 + 변경 파일 목록을 표시하도록 명시(코드 변경과 대화 기록만 바뀐 경우를 구분, 예시 4종 추가).\n- `README.md` 「응답 표시와 사고 과정」: 답변 골격 설명에 동기화 줄(`🔁 동기화: …`) 항목 추가.\n\n## 검증\n- `python3 -m py_compile agent.py` 통과(코드 변경 없음, 확인용).\n- 규칙/문서 변경분 커밋 `95a48f8` push 완료(`.llm/rules.md` 21줄, `README.md` +5), 원격 대비 앞선 커밋 0.\n\n🔁 동기화: 규칙·문서 push 완료 · `95a48f8 \"rules: 동기화 줄에 push 커밋 해시·제목과 변경 파일(코드) 목록\n----------------------------------------------------------------------\n### USER\n테스트해봐\n----------------------------------------------------------------------\n### ASSISTANT\n실제 API로 임시 저장소(`/tmp/llmreal`, 로컬 bare remote)에서 llm을 돌려 4가지를 모두 확인했습니다. 전부 통과입니다.\n\n## 테스트 결과\n1. **동기화 줄(새 규칙) 실제 동작** — 실제 실행 답변 마지막 줄:\n   `🔁 동기화: 코드 push 완료 · b754144 \"add hello.txt with 'hi'\" · hello.txt +1 · 대화 기록(.llm/)은 턴 종료 시 자동 커밋·push` → 커밋 해시·제목·변경 파일까지 나왔습니다.\n2. **커밋/푸시 동작** — `git push`까지 정상, 이어서 자동 기록 동기화(`llm: 대화 기록 동기화 (session=ztest_sync)`)도 성공.\n3. **todo 버그 수정(끝난 계획 미부활)** — 완료된 계획 뒤 새 요청(run2)에서 `🎯 README.md에 'second task'…`만 표시되고, 옛 `hello.txt` 목표·\"이어가는 작업 계획\"은 **0건**. 저장된 기록\n----------------------------------------------------------------------\n### USER\n마지막대화 뭐야? 요약\n----------------------------------------------------------------------\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_SptTomYgJlJ3UfB30baP3426",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm\\necho \\\"=== git ===\\\"; git rev-parse --abbrev-ref HEAD 2>&1; git remote -v 2>&1 | head -2\\ngit status --short 2>&1 | head; echo \\\"원격 대비 앞선 커밋: $(git rev-list --count origin/main..HEAD 2>/dev/null)\\\"\\ngit log --oneline -3 2>&1\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_SptTomYgJlJ3UfB30baP3426",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n=== git ===\nmain\norigin\tgit@github-hanurijang:hanurijang/llm.git (fetch)\norigin\tgit@github-hanurijang:hanurijang/llm.git (push)\n M .llm/history_llm.json\n원격 대비 앞선 커밋: 0\n638713c llm: 대화 기록 동기화 (session=llm)\n97d0c3c llm: 대화 기록 동기화 (session=llm)\n95a48f8 rules: 동기화 줄에 push 커밋 해시·제목과 변경 파일(코드) 목록 표시\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_8IP0G3Na9GkUmuQK5jYY5829",
+        "type": "function",
+        "function": {
+          "name": "todo",
+          "arguments": "{\"items\": [{\"content\": \"history_llm.json 마지막 메시지·요약본 확인\", \"status\": \"done\"}, {\"content\": \"마지막 대화 요약 정리해 보고\", \"status\": \"done\"}]}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_8IP0G3Na9GkUmuQK5jYY5829",
+    "name": "todo",
+    "content": "📋 작업 계획 갱신: 총 2개, 완료 2개 · 목표 유지: 최근 대화(마지막 턴들)의 내용을 기록 파일에서 읽어 요약해 보여준다."
+  },
+  {
+    "role": "assistant",
+    "content": "`.llm/history_llm.json`(현재 세션, 메시지 151개)을 읽어 **마지막 대화 흐름**을 요약했습니다. 최근 5턴이 전부 \"todo 버그 수정 → 답변 동기화 줄 규칙 → 실제 테스트\"입니다.\n\n## 마지막 대화 요약 (최근 순)\n\n| # | 사용자 요청 | 한 일 | 결과 |\n|---|---|---|---|\n| 1 | \"왜 자꾸 `.env` 검증이 goal로 자동설정돼? 코드 오류 같아\" | 요약 헤드에 남은 옛 계획 블록/스냅샷이 원인 → `todo_active()`·`refresh_todo_snapshot()` 추가, 완료 계획은 복원·표시 제외 | 커밋 `aeff65e` |\n| 2 | \"답변 마지막에 git push 여부(동기화 상태) 보여줘\" | `.llm/rules.md`에 「답변 마무리 — 동기화 상태 표시」 규칙 신설 | 커밋 `d721695` |\n| 3 | \"푸시할 때 코드도 같이 보여주면 좋겠는데?\" | 규칙 확장: push 커밋 해시·제목 + 변경 파일 목록까지 표시, README 답변 골격 설명 보강 | 커밋 `95a48f8` |\n| 4 | \"테스트해봐\" | 실제 API로 임시 저장소에서 e2e 실행 — 동기화 줄 출력, push 동작, 옛 goal 미부활, 진행 중 계획 복원, 시스템 프롬프트 주입 5종 모두 통과 | 셀프테스트 잔여물 정리 |\n\n## 지금 상태\n- 현재 세션 기록: `.llm/history_llm.json` (메시지 151개, 요약본 `.llm/summaries/llm/` 2개).\n- 이 PC는 `/home/jang/codespace/userscript/llm`, 원격은 `git@github-hanurijang:hanurijang/llm.git` — 이전 턴들이 `/home/rasp` PC에서 진행돼 이 세션은 **PC 간 이어가기**로 동기화된 기록입니다.\n\n🔁 동기화: 변경 없음(원격과 동일 · 앞선 로컬 커밋 0 · 코드 변경 없이 대화 기록만 턴 종료 시 자동 push)"
   }
 ]
