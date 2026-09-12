@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.2.0"
+VERSION = "0.3.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -35,6 +35,15 @@ SYSTEM_ENV_FILE = Path("/etc/env/.env")
 API_URL = "https://api.deepseek.com/chat/completions"
 BALANCE_URL = "https://api.deepseek.com/user/balance"
 HISTORY_DIR = Path.home() / ".local/share/llm"
+# 대화 기록(history·summaries)을 어디에 둘지 정하는 환경변수와 기본 위치.
+# 기본은 "세션 폴더 안"(`<작업폴더>/.llm/`)이라 프로젝트 저장소와 함께 push/pull 되어
+# 다른 PC에서도 같은 대화를 이어갈 수 있다. `LLM_HISTORY=home`이면 예전처럼 홈에만 둔다.
+# (기기 로컬 정보인 bindings.json·rates.json·shell_allow_*.json은 항상 홈에 남는다.)
+HISTORY_SCOPE_ENV = "LLM_HISTORY"
+REPO_HISTORY_DIR_NAME = ".llm"
+HISTORY_SCOPE_HOME = "home"
+# 실행 시 `set_history_base()`가 정한다. 기본값은 홈(폴더를 알기 전 폴백).
+HISTORY_BASE = HISTORY_DIR
 DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-flash")
 # 에이전트 루프 기본 최대 단계. 한도에 도달하면 이어서 진행할지 묻고,
 # y면 같은 값만큼 한도를 늘려 계속한다.
@@ -1227,9 +1236,111 @@ def api_key() -> str:
     return key
 
 
+def history_scope_dir(root: Path) -> Path:
+    """대화 기록(history·summaries)을 둘 폴더를 정한다.
+
+    기본은 세션 폴더 안(`<작업폴더>/.llm`) — 프로젝트 저장소와 함께 push/pull 되어
+    다른 PC에서도 대화를 이어갈 수 있다. `LLM_HISTORY=home`이면 홈(예전 방식).
+    """
+    mode = os.environ.get(HISTORY_SCOPE_ENV, "").strip().lower()
+    if mode in {HISTORY_SCOPE_HOME, "local"}:
+        return HISTORY_DIR
+    return root / REPO_HISTORY_DIR_NAME
+
+
+def set_history_base(path: Path) -> None:
+    """이번 실행에서 쓸 기록 폴더를 확정한다(main 에서 폴더가 정해진 뒤 호출)."""
+    global HISTORY_BASE
+    HISTORY_BASE = path
+    HISTORY_BASE.mkdir(parents=True, exist_ok=True)
+
+
+def history_scope_is_repo() -> bool:
+    return HISTORY_BASE != HISTORY_DIR
+
+
+def _history_len(path: Path) -> int:
+    """기록 파일의 메시지 수(읽을 수 없으면 -1)."""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return -1
+    return len(data) if isinstance(data, list) else -1
+
+
+def migrate_legacy_session(session: str) -> Path | None:
+    """예전 홈 기록을 저장소 폴더로 1회 옮긴다(복사 후 홈 파일은 `.migrated`로 개명).
+
+    이미 옮긴 세션은 다시 복사하지 않는다(지운 기록이 되살아나지 않도록).
+    다만 옮기기 전에 시작해 둔 실행이 마지막 턴을 예전 경로에 저장했을 수 있으므로,
+    예전 파일이 더 길면 그 내용을 반영한다(기록은 덧붙이기만 하므로 긴 쪽이 최신).
+    """
+    if not history_scope_is_repo():
+        return None
+    src = HISTORY_DIR / f"history_{session}.json"
+    if not src.is_file():
+        return None
+    dst = HISTORY_BASE / f"history_{session}.json"
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if not dst.exists():
+        shutil.copy2(src, dst)
+        # 홈 요약 백업도 함께 복사(있으면).
+        src_sum = HISTORY_DIR / SUMMARY_DIR_NAME / sanitize_session_name(session)
+        dst_sum = HISTORY_BASE / SUMMARY_DIR_NAME / sanitize_session_name(session)
+        if src_sum.is_dir() and not dst_sum.exists():
+            shutil.copytree(src_sum, dst_sum)
+        print_info(
+            f"[{session}] 대화 기록을 저장소 폴더로 옮겼습니다(복사): {dst}"
+        )
+        print_info(
+            "이제 이 폴더를 커밋·push 하면 다른 PC에서도 대화가 이어집니다"
+            " (llm --sync-history)."
+        )
+    elif _history_len(src) > _history_len(dst):
+        shutil.copy2(src, dst)
+        print_info(f"[{session}] 옮기기 전 실행이 남긴 최신 기록을 반영했습니다: {dst}")
+    try:
+        src.rename(src.with_name(src.name + ".migrated"))
+    except OSError:
+        pass
+    return dst
+
+
 def history_file_for(session: str) -> Path:
-    HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    return HISTORY_DIR / f"history_{session}.json"
+    HISTORY_BASE.mkdir(parents=True, exist_ok=True)
+    migrate_legacy_session(session)
+    return HISTORY_BASE / f"history_{session}.json"
+
+
+def history_file_of_folder(folder: Path | str, session: str) -> Path:
+    """다른 세션(다른 폴더에 묶인)의 기록 파일 경로를 추정한다(--ref 등)."""
+    mode = os.environ.get(HISTORY_SCOPE_ENV, "").strip().lower()
+    if mode in {HISTORY_SCOPE_HOME, "local"}:
+        return HISTORY_DIR / f"history_{session}.json"
+    return Path(folder) / REPO_HISTORY_DIR_NAME / f"history_{session}.json"
+
+
+def find_history_file(session: str, folders: dict[str, str] | None = None) -> Path:
+    """세션 기록 파일을 찾는다: 현재 기록 폴더 → 소유 폴더 → 홈(예전 기록).
+
+    남의 세션을 찾을 때는 복사(마이그레이션)를 하지 않는다.
+    """
+    if folders is None:
+        folders = load_bindings()
+    candidates: list[Path] = []
+    if history_scope_is_repo():
+        candidates.append(HISTORY_BASE / f"history_{session}.json")
+    owner = folder_for_session(folders, session)
+    if owner:
+        candidates.append(history_file_of_folder(owner, session))
+    candidates.append(HISTORY_DIR / f"history_{session}.json")
+    for cand in candidates:
+        try:
+            if cand.is_file():
+                return cand
+        except OSError:
+            continue
+    return candidates[0]
 
 
 def canonical_folder(path: Path | str) -> str:
@@ -1475,7 +1586,8 @@ def prompt_move_binding(root: Path, new_session: str | None = None) -> str | Non
 
 
 def summaries_dir(session: str) -> Path:
-    return HISTORY_DIR / SUMMARY_DIR_NAME / sanitize_session_name(session)
+    migrate_legacy_session(session)
+    return HISTORY_BASE / SUMMARY_DIR_NAME / sanitize_session_name(session)
 
 
 def history_chars(messages: list[dict[str, Any]]) -> int:
@@ -1892,6 +2004,10 @@ def load_history(path: Path) -> list[dict[str, Any]]:
         )
 
     except (OSError, json.JSONDecodeError):
+        print_warn(f"대화 기록을 읽지 못했습니다(JSON 손상/권한): {path}")
+        print_info(
+            "git 병합 충돌이면 git status 로 확인하세요. 백업은 .llm/summaries/ 안에 있습니다."
+        )
         return []
 
     if not isinstance(data, list):
@@ -4498,7 +4614,7 @@ def build_ref_context(sessions: list[str], model: str) -> str | None:
         name = (raw or "").strip()
         if not name:
             continue
-        messages = load_history(history_file_for(name))
+        messages = load_history(find_history_file(name))
         if not messages:
             print_warn(f"참고 세션 '{name}'에 대화 기록이 없어 건너뜁니다.")
             continue
@@ -4556,6 +4672,127 @@ def extract_bash_block(text: str) -> str | None:
     return m.group(1).strip()
 
 
+def git_run(root: Path, *args: str) -> tuple[int, str]:
+    """작업 폴더에서 git 을 실행한다(표준출력+오류를 합쳐 돌려준다)."""
+    try:
+        proc = subprocess.run(
+            ["git", *args],
+            cwd=str(root),
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+    except OSError as exc:
+        return 1, str(exc)
+    out = (proc.stdout or "") + (proc.stderr or "")
+    return proc.returncode, out.strip()
+
+
+def history_sync_paths(root: Path, session: str) -> list[str]:
+    """커밋 대상(이 세션의 대화 기록·요약)만 추린다. 다른 변경은 건드리지 않는다."""
+    paths: list[str] = []
+    try:
+        rel_hist = os.path.relpath(history_file_for(session), root)
+    except ValueError:
+        return []
+    if rel_hist.startswith(".."):
+        return []
+    paths.append(rel_hist)
+    summaries = summaries_dir(session)
+    rel_summaries = os.path.relpath(summaries, root)
+    if not rel_summaries.startswith("..") and summaries.is_dir():
+        paths.append(rel_summaries)
+    return paths
+
+
+def print_history_sync_hint(root: Path, history_file: Path) -> None:
+    """기록이 아직 커밋되지 않았으면 동기화 방법을 알려준다(조용히 넘어감)."""
+    if not history_scope_is_repo() or not history_file.is_file():
+        return
+    code, out = git_run(root, "status", "--porcelain", "--untracked-files=all", "--", os.path.relpath(history_file, root))
+    if code != 0:
+        return  # git 저장소가 아니면 안내하지 않는다.
+    if not out:
+        return
+    print_info(
+        "대화 기록이 아직 커밋되지 않았습니다 — llm --sync-history 로 올리면"
+        " 다른 PC에서 이어집니다."
+    )
+
+
+def cmd_sync_history(root: Path, session: str) -> int:
+    """대화 기록(.llm/)만 커밋하고 pull --rebase 후 push 한다."""
+    if not history_scope_is_repo():
+        print_error(
+            f"{HISTORY_SCOPE_ENV}={HISTORY_SCOPE_HOME} 라서 기록이 홈에 있습니다"
+            f" ({HISTORY_DIR})."
+        )
+        print_info("동기화하려면 이 변수를 지우고 실행하세요 (기본값 = 세션 폴더).")
+        return 1
+    if not (root / ".git").exists() and git_run(root, "rev-parse", "--git-dir")[0] != 0:
+        print_error(f"git 저장소가 아닙니다: {root}")
+        return 1
+
+    paths = history_sync_paths(root, session)
+    if not paths:
+        print_error(f"동기화할 기록 경로를 찾지 못했습니다 (기록 폴더: {HISTORY_BASE}).")
+        return 1
+    rel = os.path.relpath(HISTORY_BASE, root)
+    # 이미 추적 중인 파일이어도 패턴을 반영해 알려주려면 --no-index 가 필요하다.
+    code, out = git_run(root, "check-ignore", "--no-index", rel)
+    if code == 0:
+        print_error(f"{rel} 이 .gitignore 로 제외되어 있어 push 되지 않습니다.")
+        print_info(f".gitignore 에서 '{rel}' 관련 줄을 지운 뒤 다시 실행하세요.")
+        return 1
+
+    # 1) 원격 변경을 먼저 받아 둔다(내 변경은 autostash 로 잠시 보관).
+    has_upstream = git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] == 0
+    if has_upstream:
+        print_info("원격 변경을 받아오는 중… (git pull --rebase --autostash)")
+        code, out = git_run(root, "pull", "--rebase", "--autostash")
+        if code != 0:
+            print_error("pull 실패 — 충돌을 해결한 뒤 다시 실행하세요.")
+            for line in out.splitlines()[:6]:
+                print_info(f"  {line}")
+            return 1
+    else:
+        print_warn("upstream(@{u})이 없어 pull/push 는 건너뜁니다 (기록만 커밋).")
+
+    # 2) 대화 기록만 스테이징해서 커밋.
+    code, out = git_run(root, "add", "-A", "--", *paths)
+    if code != 0:
+        if "ignored" in out:
+            print_error(f"{rel} 이 .gitignore 로 제외되어 있어 push 되지 않습니다.")
+            print_info(f".gitignore 에서 '{rel}' 관련 줄을 지운 뒤 다시 실행하세요.")
+        else:
+            print_error(f"git add 실패: {out.splitlines()[0] if out else '알 수 없는 오류'}")
+        return 1
+    staged = git_run(root, "diff", "--cached", "--name-only", "--", *paths)[1]
+    if staged:
+        msg = f"llm: 대화 기록 동기화 (session={session})"
+        code, out = git_run(root, "commit", "-q", "-m", msg, "--", *paths)
+        if code != 0:
+            print_error(f"커밋 실패: {out.splitlines()[0] if out else '알 수 없는 오류'}")
+            return 1
+        print_ok(f"기록 커밋: {msg}")
+        for line in staged.splitlines()[:8]:
+            print_info(f"  {line}")
+    else:
+        print_info("커밋할 기록 변경이 없습니다.")
+
+    # 3) 올린다.
+    if not has_upstream:
+        return 0
+    code, out = git_run(root, "push")
+    if code != 0:
+        print_error("push 실패 — 인증·원격 상태를 확인하세요.")
+        for line in out.splitlines()[:6]:
+            print_info(f"  {line}")
+        return 1
+    print_ok("push 완료 — 다른 PC에서 git pull 하면 이 대화가 이어집니다.")
+    return 0
+
+
 def cmd_run(session: str, history_file: Path) -> int:
     if not history_file.is_file():
         print_error("대화 기록이 없습니다.")
@@ -4587,7 +4824,13 @@ def cmd_run(session: str, history_file: Path) -> int:
 
 
 def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> None:
-    files = {f.name[len("history_") : -len(".json")]: f for f in HISTORY_DIR.glob("history_*.json")}
+    files: dict[str, Path] = {}
+    # 현재 기록 폴더(기본: 세션 폴더 안) 우선, 예전 홈 기록도 함께 보여준다.
+    for base in (HISTORY_BASE, HISTORY_DIR):
+        if not base.is_dir():
+            continue
+        for f in base.glob("history_*.json"):
+            files.setdefault(f.name[len("history_") : -len(".json")], f)
     names = sorted(set(files) | set(folders.values()))
     mapped = folders.get(canonical_folder(root))
 
@@ -4616,6 +4859,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
         ("llm --run", "직전 응답의 스크립트 실행"),
         ("llm --view", "대화 내용 보기 (마크다운)"),
         ("llm --summarize", "현재 대화를 요약·백업 (강제)"),
+        ("llm --sync-history", "대화 기록만 커밋·push (다른 PC에서 이어가기)"),
         ("llm --clear", "현재 세션 내용 비우기"),
         ("llm --delete", "현재 세션 파일 삭제"),
         ("llm --allow-list", "셸 자동 허용 목록 보기"),
@@ -4628,7 +4872,12 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
     for cmd, desc in usage:
         print(f"   {C.cyan}{pad(cmd, width)}{C.reset}  {C.dim}{desc}{C.reset}")
 
-    print_section(f"저장된 세션  ({HISTORY_DIR})")
+    print_section(f"저장된 세션  ({HISTORY_BASE})")
+    if history_scope_is_repo():
+        print(
+            f"   {C.dim}기록이 이 폴더 안(.llm/)에 있어 push/pull 하면 다른 PC에서 그대로"
+            f" 이어집니다  →  llm --sync-history{C.reset}"
+        )
     if not names:
         print(f"   {C.dim}(저장된 세션이 없습니다){C.reset}")
         print(f"{C.dim}{rule()}{C.reset}")
@@ -4686,6 +4935,7 @@ def cmd_agent(
     no_balance: bool = False,
 ) -> int:
     print_banner(session, root, chat_only, ask_mode=ask_mode, ask_source=ask_source)
+    print_history_sync_hint(root, history_file)
 
     stripped = prompt.strip().lower()
     if stripped in {"/summary", "/summarize", "/요약"}:
@@ -4961,6 +5211,11 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
     parser.add_argument("--rules", action="store_true", help="이 폴더의 세션 규칙 보기")
     parser.add_argument("--summarize", action="store_true", help="현재 대화를 지금 요약·백업 (강제)")
+    parser.add_argument(
+        "--sync-history",
+        action="store_true",
+        help="대화 기록(.llm/)만 커밋하고 pull --rebase 후 push (다른 PC에서 이어가기)",
+    )
     parser.add_argument("--balance", action="store_true")
     parser.add_argument("--view", action="store_true")
     parser.add_argument("--run", action="store_true")
@@ -4988,7 +5243,12 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     folder_key = canonical_folder(root)
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
+    # 대화 기록을 둘 폴더를 확정한다(기본: 이 폴더 안 .llm/ — push 하면 다른 PC에서 이어짐).
+    set_history_base(history_scope_dir(root))
     folders = load_bindings()
+
+    if args.sync_history:
+        return cmd_sync_history(root, folders.get(folder_key) or root.name)
 
     if args.init_rules:
         rc = cmd_init_rules(root)

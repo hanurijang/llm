@@ -168,7 +168,7 @@ source ~/.bashrc
 
 ```bash
 which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.2.0) 표시 (API 호출 없음)
+llm                 # 상태 + 버전(v0.3.0) 표시 (API 호출 없음)
 llm --balance       # 키·네트워크 확인
 llm --chat "안녕"   # 모델 응답 확인
 llm "이 폴더 요약해줘"   # 도구까지 확인
@@ -178,11 +178,14 @@ llm "이 폴더 요약해줘"   # 도구까지 확인
 
 - **기록 폴더는 자동 생성**: `~/.local/share/llm/`와 세션 파일이 첫 실행 때
   만들어집니다. 따로 만들 필요가 없습니다.
+- **대화 기록은 저장소와 함께 옵니다**: 기록이 `<작업폴더>/.llm/`에 있어
+  `git pull`(또는 clone)만 하면 이전 PC의 대화가 그대로 이어집니다.
+  다른 PC에서 마친 작업은 이쪽에서 `llm --sync-history`로 올려 두세요.
 - **세션은 이 PC의 경로 기준으로 새로 시작**합니다. 이름을 직접 정하려면
   `llm -s <이름>`.
 - **`bindings.json`은 복사하지 마세요.** 예전 PC의 절대 경로가 들어 있어
-  "다른 폴더에 바인딩됨" 경고가 납니다. 대화를 옮기고 싶으면
-  `history_*.json`만 복사하세요.
+  "다른 폴더에 바인딩됨" 경고가 납니다. `mv`로 폴더를 옮긴 경우에는 실행 시
+  이어받을 후보를 물어봅니다.
 - `.llm/rules.md`(세션 규칙)는 저장소에 들어 있어 clone하면 함께 옵니다.
 
 ### 준비물 체크
@@ -272,6 +275,7 @@ llm --allow-clear
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
+| `--sync-history` | 대화 기록만 커밋 → `git pull --rebase --autostash` → `push` (다른 PC에서 이어가기) |
 | `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |
 | `--view` | 세션 대화 내용 보기 (Markdown) |
 | `--clear` | 현재 세션 내용만 비우기 |
@@ -287,11 +291,11 @@ llm --allow-clear
 경우에는 그 사실과 해제 방법을 함께 안내합니다.
 
 ```text
-── 에이전트 v0.2.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
+── 에이전트 v0.3.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
 ℹ️  환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다 (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다.
 ```
 
-시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.2.0`)이
+시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.3.0`)이
 표시됩니다. 인자 없이 `llm`만 실행했을 때의 머리말과 세션 목록 상단에도 같은
 버전이 나옵니다. 버전 값은 `agent.py`의 `VERSION` 상수 하나로 관리합니다.
 
@@ -324,8 +328,10 @@ llm --delete
 
 - **작업 폴더는 항상 지금 있는 폴더(`cwd`)입니다.** 경로를 지정하는
   `--root`는 없습니다.
-- 하나의 **세션 이름**은 하나의 **폴더**에만 연결됩니다. 대화 기록은
-  `~/.local/share/llm/history_<세션>.json`에 저장됩니다.
+- 하나의 **세션 이름**은 하나의 **폴더**에만 연결됩니다. 대화 기록은 기본적으로
+  **작업 폴더 안 `<작업폴더>/.llm/history_<세션>.json`**에 저장됩니다(저장소와
+  함께 `git push`/`pull` 되어 다른 PC에서 이어감). `LLM_HISTORY=home`으로
+  실행하면 예전처럼 `~/.local/share/llm/history_<세션>.json`에 저장됩니다.
 - 폴더-세션 매핑은 `~/.local/share/llm/bindings.json`에 저장되며, 경로 키는
   로드·저장 시 **정규화**됩니다(심볼릭 링크 해소, 뒤쪽 구분자 제거,
   macOS/Windows 대소문자 통일). `a`, `a/`, `a/.`, 심볼릭 링크 경로는 모두
@@ -334,6 +340,31 @@ llm --delete
   생성**됩니다. (예: `~/work/api` → 세션 `api`; 이름 충돌 시 해시 접미사 추가)
   폴더를 옮겨 온 흔적(고아 매핑)이 있으면 새 세션 대신 **이어받을지 먼저
   확인**합니다([폴더를 옮기거나 이름을 바꾼 경우](#폴더를-옮기거나-이름을-바꾼-경우-mv) 참고).
+
+### 대화 기록 동기화 (다른 PC에서 이어가기)
+
+대화 기록이 작업 폴더 안 `.llm/`에 있으므로, **커밋·push만 하면 다른 PC에서
+`git pull`(또는 clone) 후 같은 세션으로 그대로 이어집니다.**
+
+```bash
+llm --sync-history        # 기록만 커밋 → git pull --rebase --autostash → push
+```
+
+- **이 세션의 기록 파일**(`.llm/history_<세션>.json`)과 **요약 백업**
+  (`.llm/summaries/<세션>/`)만 스테이징합니다. 소스 코드·규칙 파일 등 나머지
+  변경은 건드리지 않으므로 평소처럼 직접 커밋하세요.
+- 커밋 메시지는 `llm: 대화 기록 동기화 (session=<세션>)` 형식입니다.
+- 원격에 새 커밋이 있으면 `--rebase --autostash`로 먼저 받아옵니다.
+- `.llm/`이 `.gitignore`에 있으면 push가 되지 않으므로, 그 줄을 지우라는
+  안내와 함께 중단합니다.
+- 기본값이 세션 폴더 저장이므로, 예전처럼 홈(`~/.local/share/llm/`)에 두고
+  싶다면 `LLM_HISTORY=home`으로 실행하세요(그때는 `--sync-history` 대신 예전처럼
+  `history_*.json`을 직접 복사).
+- 홈에만 있던 기존 기록은 **그 폴더에서 처음 실행할 때 `.llm/`으로 한 번
+  옮겨집니다**(양쪽에 있으면 더 긴 쪽 채택, 홈 원본은 `*.migrated`로 개명).
+- 요약 백업(`.llm/summaries/`)도 함께 동기화됩니다. 기록이 요약으로 압축된
+  뒤에도 원본 대화가 다른 PC에 남습니다(용량이 커지면 `git rm -r --cached
+  .llm/summaries` 로 직접 정리해도 됩니다).
 
 ### 소유와 권한
 
@@ -434,7 +465,8 @@ llm --delete
 - 수동 실행: `/summary`, `/summarize`, `/요약` 슬래시 명령 또는
   `llm --summarize`(강제).
 - 백업(요약본 `.md` + 원본 스냅샷 `.json`)은
-  `~/.local/share/llm/summaries/<세션>/`에 저장됩니다.
+  `<작업폴더>/.llm/summaries/<세션>/`(기본) 또는 `~/.local/share/llm/summaries/<세션>/`
+  (`LLM_HISTORY=home`)에 저장됩니다.
 
 ---
 
@@ -949,6 +981,7 @@ llm --rules
 | `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐. 직접 준 CLI 옵션이 우선. 두 변수가 모두 있으면 `LLM_ALLOW_ALL`이 우선 |
 | `LLM_RATES` | (미설정) | `0`/`false`/`no`/`off` 이면 실시간 환율 조회를 끄고 가정 환율로 환산 (`--no-rates`와 동일) |
 | `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 파일 경로를 직접 지정 (아래 조회 순서에서 가장 먼저) |
+| `LLM_HISTORY` | (미설정) | 대화 기록 저장 위치. `home` 이면 예전처럼 `~/.local/share/llm/`(동기화 안 됨), 그 외/미설정이면 작업 폴더 `.llm/` |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
 `.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는
@@ -972,12 +1005,17 @@ llm --rules
 |------|------|
 | `<저장소>/.env` | API 키 등 환경변수 (자동 로드, `.gitignore` 제외 대상) |
 | `/etc/env/.env` | API 키 등 환경변수 (자동 로드, 시스템 공용 폴백) |
-| `~/.local/share/llm/history_<세션>.json` | 세션별 대화 기록 |
-| `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |
-| `~/.local/share/llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 |
-| `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답) |
-| `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효) |
+| `<작업폴더>/.llm/history_<세션>.json` | 세션별 대화 기록 (**기본**, 저장소에 커밋해 다른 PC와 동기화) |
+| `<작업폴더>/.llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 (기본, `--sync-history` 커밋 대상) |
+| `~/.local/share/llm/history_<세션>.json` | 대화 기록 (예전 위치, `LLM_HISTORY=home`일 때만. 옮기면 `*.migrated`로 남음) |
+| `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (기기 로컬, 경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |
+| `~/.local/share/llm/summaries/<세션>/` | 요약 백업 (`LLM_HISTORY=home`일 때만) |
+| `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답, 기기 로컬) |
+| `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효, 기기 로컬) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
+
+> **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`rates.json`)는 대화
+> 기록 위치와 무관하게 항상 홈에 저장됩니다(경로·환율 같은 이 PC 전용 정보).
 
 대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로
 처리됩니다. 중간에 끊긴(도구 호출만 있고 결과가 없는) 턴은 로드 시 자동
@@ -1021,6 +1059,13 @@ llm (bash)  →  agent.py (python)
   이후 세션 안내)
 - **요약/백업**: `should_summarize`, `summarize_messages`, `backup_conversation`,
   `apply_summary`, `maybe_summarize`, `cmd_summarize`
+- **기록 저장 위치/동기화**: `history_scope_dir`/`history_scope_is_repo`/
+  `set_history_base`/`HISTORY_BASE`(기본 `<작업폴더>/.llm`, `LLM_HISTORY=home`
+  이면 홈), `history_file_of_folder`/`find_history_file`,
+  `migrate_legacy_session`(홈 → `.llm` 1회 이전, 더 긴 쪽 채택, 홈 원본은
+  `*.migrated`), `history_sync_paths`/`git_run`/`cmd_sync_history`
+  (`--sync-history`: 기록만 커밋 → `pull --rebase --autostash` → `push`),
+  `print_history_sync_hint`
 - **작업 계획(todo)**: `tool_todo`/`render_todo`(목표 + 번호 매긴 항목 + 항목별
   하위 작업 로그를 화면에 그리기), `todo_block_lines`/`refresh_todo_block`
   (블록 구성·다시 그리기), `todo_log_open`/`todo_log_close`/`tool_line_open`/
@@ -1102,6 +1147,26 @@ llm (bash)  →  agent.py (python)
   환경변수」). `llm --allow-all`로 이번 실행만 기본 모드로 돌릴 수 있습니다.
 - 같은 폴더에서 반복 작업이 많으면 확인 프롬프트에서 `a`를 골라 그 폴더를
   기억시키거나, `llm --allow-list`로 지금까지 허용된 범위를 확인하세요.
+
+### 다른 PC에서 대화가 안 보임
+
+- 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있습니다. 이쪽에서
+  `llm --sync-history`로 올리고, 다른 PC에서 `git pull` 후 **같은 폴더**에서
+  실행하세요.
+- `.llm/`이 `.gitignore`에 있으면 push가 안 됩니다. 그 줄을 지우세요
+  (`.llm/rules.md`는 저장소에, 기록은 다른 PC로 — 둘 다 `.llm/` 안입니다).
+- `LLM_HISTORY=home`으로 실행하면 기록이 홈에 남아 동기화되지 않습니다.
+  변수를 지우고 실행하면 `.llm/`으로 한 번 옮겨집니다.
+- 세션 이름이 다르면 다른 대화가 열립니다. `llm`(인자 없음)의 세션 목록에서
+  이름을 확인하거나 `llm -s <이름>`으로 지정하세요.
+
+### 기록 병합 충돌(`.llm/history_*.json`)
+
+- 두 PC가 같은 세션을 동시에 진행하면 `git pull`에서 충돌이 날 수 있습니다.
+  이때는 기록을 읽지 못한다는 경고가 뜨고 **빈 대화로 시작하지 않도록** 다시
+  확인하세요: `git status`로 충돌 파일을 확인하고, `.llm/summaries/<세션>/`의
+  백업 스냅샷을 참고해 한쪽을 고르거나 수동 병합한 뒤
+  `git add`/`git rebase --continue` 하고 `llm --sync-history`로 다시 올리면 됩니다.
 
 ---
 

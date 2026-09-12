@@ -40,6 +40,23 @@
   `todo_plan_text`/`todo_stamp`/`restore_todo`와 README 「작업 계획(todo) 표시」
   섹션을 함께 갱신한다.
 
+## 대화 기록 위치와 동기화 (필수)
+
+- 대화 기록은 **작업 폴더 안 `<작업폴더>/.llm/history_<세션>.json`**(기본)에
+  저장한다. `LLM_HISTORY=home`이면 예전처럼 `~/.local/share/llm/`에 저장한다
+  (이 폴백은 유지한다).
+- **기기 로컬 정보(`bindings.json`, `shell_allow_*.json`, `rates.json`)는 항상
+  홈**에 둔다. 대화 기록 위치 변경과 무관하다.
+- 홈에만 있던 기록은 그 폴더에서 처음 실행할 때 `.llm/`으로 **한 번** 옮기고,
+  양쪽에 있으면 더 긴 쪽을 채택하며 홈 원본은 `*.migrated`로 남긴다.
+- 다른 PC로 옮길 때는 `llm --sync-history`(기록만 커밋 → `pull --rebase
+  --autostash` → `push`)를 쓴다. `.llm/`이 `.gitignore`에 있으면 에러로
+  안내하고 중단한다.
+- 이 동작을 바꿀 때는 `agent.py`의 `HISTORY_*`/`REPO_HISTORY_DIR_NAME`/
+  `history_scope_dir`/`set_history_base`/`find_history_file`/
+  `migrate_legacy_session`/`cmd_sync_history`와 README 「대화 기록 동기화」·
+  「파일/데이터 위치」·「설정과 환경변수」 표를 함께 갱신한다.
+
 ## README 갱신 (필수)
 
 - **`agent.py`/`llm`의 기능, CLI 옵션, 기본값, 동작, 파일/데이터 위치가
@@ -76,6 +93,9 @@
   - `bindings.json`의 해당 폴더 ↔ 세션 매핑(폴더가 사라진 항목 포함)
 - 단, **현재 실행 중인 세션**(`current_session` 값)의 파일은 아직 지우지 않는다
   (다음 저장 때 다시 생성됨). 세션이 끝난 뒤 정리한다.
+- 기본 저장 위치가 `.llm/`이므로 **시험용 작업 폴더 안의
+  `.llm/history_<세션>.json`·`.llm/summaries/<세션>/`도 같은 패턴이면 대상**이다
+  (`/tmp/...` 하네스 폴더는 통째로 지우면 된다).
 - 삭제 전 대상 목록을 한 번 보여주고, 삭제 후 무엇을 지웠는지 요약해 보고한다.
 - 허용 범위는 위 self-test 패턴뿐이다. 그 밖의 `~/.local/share/llm/` 파일
   (실사용 세션 기록·요약)은 이 규칙으로 지우지 않는다.
