@@ -54,14 +54,31 @@
 
 ### 1. API 키 설정
 
-`agent.py`는 시작 시 `/etc/env/.env`를 자동으로 읽습니다. 아래 형식으로
-키를 저장하세요.
+`agent.py`와 `llm` 래퍼는 시작 시 아래 순서로 `.env`를 자동으로 읽습니다
+(**앞이 우선**, 이미 설정된 환경변수는 덮어쓰지 않음).
+
+1. `LLM_ENV_FILE`로 지정한 경로
+2. **저장소 폴더의 `.env`** — `llm`/`agent.py`가 있는 폴더 (권장)
+3. `/etc/env/.env` — 시스템 공용(예전 방식)
+
+가장 간단한 방법은 저장소 폴더에 `.env`를 만드는 것입니다.
+
+```bash
+cd ~/codespace/userscript/llm
+printf 'DEEPSEEK_API_KEY=sk-...\n' > .env
+chmod 600 .env
+```
 
 ```dotenv
+# .env 형식
 DEEPSEEK_API_KEY=sk-...
 ```
 
-`/etc/env/.env`가 없으면 일반 환경변수로 지정해도 됩니다.
+> `.gitignore`에 `.env`가 들어 있어 **커밋·push 되지 않습니다**(키 유출 방지).
+> 저장소를 복사해도 `.env`는 따라가지 않으므로 새 PC에서는 한 번 다시
+> 만들어야 합니다.
+
+`.env` 파일이 없으면 일반 환경변수로 지정해도 됩니다.
 
 ```bash
 export DEEPSEEK_API_KEY=sk-...
@@ -129,11 +146,14 @@ chmod +x ~/codespace/userscript/llm/llm
 ### ② API 키 넣기
 
 ```bash
-echo 'export DEEPSEEK_API_KEY=sk-여기에-본인-키' >> ~/.bashrc
-source ~/.bashrc
+cd ~/codespace/userscript/llm
+printf 'DEEPSEEK_API_KEY=sk-여기에-본인-키\n' > .env
+chmod 600 .env
 ```
 
-> sudo 없이 됩니다. 예전처럼 `/etc/env/.env`에 넣어도 똑같이 인식합니다.
+> sudo 없이 됩니다. `.env`는 `.gitignore`에 있어 커밋되지 않습니다.
+> 저장소 폴더의 `.env`(권장)나 `/etc/env/.env`, `~/.bashrc` export 어느
+> 쪽이든 인식합니다(앞이 우선).
 
 ### ③ 전역 명령 등록
 
@@ -148,7 +168,7 @@ source ~/.bashrc
 
 ```bash
 which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.1.0) 표시 (API 호출 없음)
+llm                 # 상태 + 버전(v0.2.0) 표시 (API 호출 없음)
 llm --balance       # 키·네트워크 확인
 llm --chat "안녕"   # 모델 응답 확인
 llm "이 폴더 요약해줘"   # 도구까지 확인
@@ -260,17 +280,18 @@ llm --allow-clear
 
 셸 실행 범위 우선순위: `--confirm-all` > `--allow-all` > `--auto-workspace` >
 `LLM_ALLOW_ALL` > `LLM_AUTO_WORKSPACE` > 기본(허용 모드). **직접 준 CLI 옵션이
-환경변수를 이깁니다.** 그래서 `/etc/env/.env`에 `LLM_AUTO_WORKSPACE=1`이 남아
-있어도 `--allow-all`로 실행하면 이번 실행은 기본(허용) 모드입니다. 현재 어떤
+환경변수를 이깁니다.** 그래서 `.env`(저장소 폴더 또는 `/etc/env/.env`)에
+`LLM_AUTO_WORKSPACE=1`이 남아 있어도 `--allow-all`로 실행하면 이번 실행은
+기본(허용) 모드입니다. 현재 어떤
 모드로 도는지는 시작 배너의 `확인=...`에 표시되고, 모드가 환경변수에서 온
 경우에는 그 사실과 해제 방법을 함께 안내합니다.
 
 ```text
-── 에이전트 v0.1.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
+── 에이전트 v0.2.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
 ℹ️  환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다 (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다.
 ```
 
-시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.1.0`)이
+시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.2.0`)이
 표시됩니다. 인자 없이 `llm`만 실행했을 때의 머리말과 세션 목록 상단에도 같은
 버전이 나옵니다. 버전 값은 `agent.py`의 `VERSION` 상수 하나로 관리합니다.
 
@@ -872,8 +893,9 @@ llm --rules
     `LD_PRELOAD=...`, `PYTHONPATH=...` (일반 지정 `FOO=1 cmd`는 프로그램 기준
     으로 판단)
 - `--confirm-all`과 함께 쓰면 `--auto-workspace`는 무시됩니다(모두 확인).
-- 매번 플래그를 치기 번거로우면 `/etc/env/.env`에 `LLM_AUTO_WORKSPACE=1`을
-  넣어 기본으로 켜 둘 수 있습니다(`--confirm-all`이 항상 우선).
+- 매번 플래그를 치기 번거로우면 저장소 폴더의 `.env`(또는 `/etc/env/.env`)에
+  `LLM_AUTO_WORKSPACE=1`을 넣어 기본으로 켜 둘 수 있습니다(`--confirm-all`이
+  항상 우선).
 - `--yes`처럼 확인 자체를 없애지는 않으므로, 위험한 명령은 그대로
   `[y/N/a]` 프롬프트를 거칩니다.
 
@@ -926,15 +948,21 @@ llm --rules
 | `LLM_ALLOW_ALL` | (미설정) | `1`/`true`/`yes`/`on` 이면 `--allow-all`(기본값과 동일). 직접 준 CLI 옵션이 우선 |
 | `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐. 직접 준 CLI 옵션이 우선. 두 변수가 모두 있으면 `LLM_ALLOW_ALL`이 우선 |
 | `LLM_RATES` | (미설정) | `0`/`false`/`no`/`off` 이면 실시간 환율 조회를 끄고 가정 환율로 환산 (`--no-rates`와 동일) |
+| `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 파일 경로를 직접 지정 (아래 조회 순서에서 가장 먼저) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
-`/etc/env/.env` 파일이 있으면 시작 시 로드됩니다(이미 설정된 환경변수는
+`.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는
 덮어쓰지 않음).
 
-`LLM_AUTO_WORKSPACE=1`이 남아 있어 확인(`y/N`)이 자주 뜬다면 `/etc/env/.env`에서
-그 줄을 지우거나 `0`으로 바꾸세요. 이번 실행만 바꾸려면 `llm --allow-all`(기본
-허용 모드)이나 `llm --confirm-all`처럼 **CLI 옵션을 직접 주면 환경변수를 이깁니다**.
-현재 모드는 시작 배너의 `확인=...`에서 바로 확인할 수 있습니다.
+1. `LLM_ENV_FILE`로 지정한 경로
+2. 저장소 폴더의 `.env` (`llm`/`agent.py`가 있는 폴더)
+3. `/etc/env/.env` (시스템 공용 폴백)
+
+`LLM_AUTO_WORKSPACE=1`이 남아 있어 확인(`y/N`)이 자주 뜬다면 저장소 폴더의
+`.env`(또는 `/etc/env/.env`)에서 그 줄을 지우거나 `0`으로 바꾸세요. 이번 실행만
+바꾸려면 `llm --allow-all`(기본 허용 모드)이나 `llm --confirm-all`처럼
+**CLI 옵션을 직접 주면 환경변수를 이깁니다**. 현재 모드는 시작 배너의
+`확인=...`에서 바로 확인할 수 있습니다.
 
 ---
 
@@ -942,7 +970,8 @@ llm --rules
 
 | 경로 | 용도 |
 |------|------|
-| `/etc/env/.env` | API 키 등 환경변수 (자동 로드) |
+| `<저장소>/.env` | API 키 등 환경변수 (자동 로드, `.gitignore` 제외 대상) |
+| `/etc/env/.env` | API 키 등 환경변수 (자동 로드, 시스템 공용 폴백) |
 | `~/.local/share/llm/history_<세션>.json` | 세션별 대화 기록 |
 | `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |
 | `~/.local/share/llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 |
@@ -966,7 +995,8 @@ llm (bash)  →  agent.py (python)
 `agent.py`의 주요 구성:
 
 - **진입/CLI**: `main`, `parse_args`, `canonical_folder`, `VERSION`(시작 배너·머리말에
-  표시하는 버전 문자열), `print_banner`(모드·버전·세션·폴더·규칙·확인 모드 한 줄)
+  표시하는 버전 문자열), `load_dotenv`(`LLM_ENV_FILE` → 저장소 `.env` →
+  `/etc/env/.env` 순서로 로드, 앞이 우선), `print_banner`(모드·버전·세션·폴더·규칙·확인 모드 한 줄)
 - **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행 → 결과 피드백 반복
 - **API 계층**: `http_json`, `stream_chat`, `complete` (SSE 스트리밍, 비스트림
   폴백, `StreamInterrupted`로 부분 응답 보존, `on_delta`/`make_stream_progress`
@@ -1053,7 +1083,7 @@ llm (bash)  →  agent.py (python)
 
 ### `DEEPSEEK_API_KEY가 없습니다`
 
-- `/etc/env/.env` 또는 환경변수에 키가 있는지 확인하세요.
+- 저장소 폴더의 `.env`, `/etc/env/.env`, 환경변수 중 하나에 키가 있는지 확인하세요. (`.env` 위치 예: `~/codespace/userscript/llm/.env`)
 
 ### 답변이 Markdown 원문으로 보임
 
@@ -1068,7 +1098,7 @@ llm (bash)  →  agent.py (python)
 - 기본(허용) 모드에서도 `sudo`·설치·폴더 밖 삭제는 확인을 받습니다.
   자동화에서는 `--yes`를 쓰거나 해당 항목을 `a`로 한 번 허용하세요.
 - 예상보다 자주 묻는다면 배너의 `확인=` 값을 보세요. `outside`로 떠 있으면
-  `/etc/env/.env`의 `LLM_AUTO_WORKSPACE=1`이 원인일 수 있습니다(위 「설정과
+  `.env`의 `LLM_AUTO_WORKSPACE=1`이 원인일 수 있습니다(위 「설정과
   환경변수」). `llm --allow-all`로 이번 실행만 기본 모드로 돌릴 수 있습니다.
 - 같은 폴더에서 반복 작업이 많으면 확인 프롬프트에서 `a`를 골라 그 폴더를
   기억시키거나, `llm --allow-list`로 지금까지 허용된 범위를 확인하세요.

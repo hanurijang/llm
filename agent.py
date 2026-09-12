@@ -25,7 +25,12 @@ from pathlib import Path
 from typing import Any, Callable
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.1.0"
+VERSION = "0.2.0"
+
+# 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
+# (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
+LOCAL_ENV_FILE = Path(__file__).resolve().parent / ".env"
+SYSTEM_ENV_FILE = Path("/etc/env/.env")
 
 API_URL = "https://api.deepseek.com/chat/completions"
 BALANCE_URL = "https://api.deepseek.com/user/balance"
@@ -1165,18 +1170,45 @@ def make_stream_progress(show_thinking: bool = False) -> Callable[[str, str], No
     return report
 
 
-def load_dotenv(path: Path = Path("/etc/env/.env")) -> None:
-    if not path.is_file():
-        return
-    for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
-        line = raw.strip()
-        if not line or line.startswith("#") or "=" not in line:
+def load_dotenv(*paths: Path) -> list[Path]:
+    """환경변수 파일(.env)을 앞에서부터 순서대로 읽는다.
+
+    조회 순서: `LLM_ENV_FILE`(지정 경로) → 저장소 폴더의 `.env` →
+    시스템 공용 `/etc/env/.env`. 이미 설정된 환경변수는 덮어쓰지 않으므로
+    **앞의 파일이 우선**한다(같은 키가 뒤 파일에 있어도 앞 값 유지).
+    실제로 읽은 파일 목록을 돌려준다(경로만, 값은 반환하지 않음).
+    """
+    candidates: list[Path] = []
+    override = os.environ.get("LLM_ENV_FILE", "").strip()
+    if override:
+        candidates.append(Path(override).expanduser())
+    candidates.extend(paths or (LOCAL_ENV_FILE, SYSTEM_ENV_FILE))
+
+    loaded: list[Path] = []
+    seen: set[Path] = set()
+    for cand in candidates:
+        try:
+            path = cand.resolve()
+        except OSError:
+            path = cand
+        if path in seen:
             continue
-        key, _, val = line.partition("=")
-        key = key.strip()
-        val = val.strip().strip("'").strip('"')
-        if key and key not in os.environ:
-            os.environ[key] = val
+        seen.add(path)
+        if not path.is_file():
+            continue
+        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+            line = raw.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            key, _, val = line.partition("=")
+            key = key.strip()
+            if key.startswith("export "):
+                key = key[len("export "):].strip()
+            val = val.strip().strip("'").strip('"')
+            if key and key not in os.environ:
+                os.environ[key] = val
+        loaded.append(path)
+    return loaded
 
 
 def env_flag(name: str) -> bool:
@@ -1187,7 +1219,10 @@ def env_flag(name: str) -> bool:
 def api_key() -> str:
     key = os.environ.get("DEEPSEEK_API_KEY", "").strip()
     if not key:
-        eprint("DEEPSEEK_API_KEY가 없습니다. /etc/env/.env 또는 환경변수를 확인하세요.")
+        eprint(
+            "DEEPSEEK_API_KEY가 없습니다. .env(저장소 폴더), /etc/env/.env "
+            "또는 환경변수를 확인하세요."
+        )
         sys.exit(1)
     return key
 
@@ -3956,7 +3991,10 @@ def print_banner(
         f"  {C.dim}rules={C.reset}{rules}{confirm}"
     )
     if ask_source:
-        print_info(SHELL_ASK_SOURCES[ask_source])
+        # 안내 문구는 모드가 "환경변수"에서 온 경우에만 있다(CLI 옵션은 배너의 `확인=`으로 충분).
+        info = SHELL_ASK_SOURCES.get(ask_source)
+        if info:
+            print_info(info)
 
 
 def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:

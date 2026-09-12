@@ -1,17 +1,38 @@
 #!/bin/bash
 # DeepSeek CLI agent 진입점. 실제 로직은 agent.py.
 
-if [ -f /etc/env/.env ]; then
-    set -a
-    # shellcheck disable=SC1091
-    . /etc/env/.env
-    set +a
-fi
-
 SOURCE="${BASH_SOURCE[0]}"
 if command -v readlink >/dev/null 2>&1; then
     SOURCE="$(readlink -f "$SOURCE" 2>/dev/null || echo "$SOURCE")"
 fi
 DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+# 환경변수 파일(.env) 로드: 1) $LLM_ENV_FILE 2) 저장소 폴더의 .env 3) /etc/env/.env
+# 이미 설정된 변수는 건드리지 않으므로 앞 파일이 우선한다(agent.py와 같은 규칙).
+load_env_file() {
+    local file="$1" line key val
+    [ -f "$file" ] || return 0
+    while IFS= read -r line || [ -n "$line" ]; do
+        line="${line#"${line%%[![:space:]]*}"}"   # 앞 공백 제거
+        case "$line" in ''|'#'*) continue ;; esac
+        case "$line" in *=*) ;; *) continue ;; esac
+        key="${line%%=*}"
+        val="${line#*=}"
+        key="${key%"${key##*[![:space:]]}"}"      # 키 뒤 공백 제거
+        case "$key" in export\ *) key="${key#export }";; esac
+        [[ "$key" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue
+        [ -n "${!key+x}" ] && continue            # 이미 있으면 유지(앞 파일 우선)
+        val="${val#"${val%%[![:space:]]*}"}"      # 값 앞 공백 제거
+        case "$val" in
+            \"*\") val="${val#\"}"; val="${val%\"}" ;;
+            \'*\') val="${val#\'}"; val="${val%\'}" ;;
+        esac
+        export "$key=$val"
+    done < "$file"
+}
+
+load_env_file "${LLM_ENV_FILE:-}"
+load_env_file "$DIR/.env"
+load_env_file /etc/env/.env
 
 exec python3 -u "$DIR/agent.py" "$@"
