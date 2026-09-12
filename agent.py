@@ -779,6 +779,18 @@ def pad(text: str, width: int) -> str:
     return text + " " * max(0, width - display_width(text))
 
 
+def duration_text(seconds: float) -> str:
+    """경과 시간을 `45s` / `1m 05s` / `1h 02m`처럼 짧게 적는다."""
+    total = int(max(0.0, seconds))
+    if total < 60:
+        return f"{total}s"
+    minutes, sec = divmod(total, 60)
+    if minutes < 60:
+        return f"{minutes}m {sec:02d}s"
+    hours, rest = divmod(minutes, 60)
+    return f"{hours}h {rest:02d}m"
+
+
 def rule(char: str = "─", label: str | None = None) -> str:
     """가로 구분선. label 이 있으면 중앙에 표시한다."""
     width = max(40, min(terminal_width(), 100))
@@ -2109,6 +2121,10 @@ def build_system_prompt(root: Path, session: str) -> str:
         "context — including a previous summary — continue that SAME plan, just update\n"
         "its statuses; never restart a new plan. If the list is folded in the terminal\n"
         "(over the display limit), keep going with the same single job.\n"
+        "Final answer format: lead with one or two sentences stating the outcome,\n"
+        "then short sections only when they apply (changed files, verification,\n"
+        "remaining work). Do not restate the plan — the todo panel already shows it —\n"
+        "and keep each bullet to a single line.\n"
         "Do not exfiltrate secrets. Never print API keys or .env contents.\n"
         "Reply in Korean unless the user writes in another language.\n"
         f"Session name: {session}\n"
@@ -4663,6 +4679,7 @@ def cmd_agent(
 
     step = 0
     step_limit = max_steps
+    started = time.monotonic()
     while True:
         step += 1
         if step > step_limit:
@@ -4833,11 +4850,14 @@ def cmd_agent(
             print()
             if not chat_only:
                 # 동작을 마친 뒤 처리 결과(답변)로 연결한다.
-                print_ok(f"작업 완료 ({step}단계)")
+                elapsed = duration_text(time.monotonic() - started)
+                print_ok(f"작업 완료 ({step}단계 · {elapsed})")
                 if not no_balance:
                     show_balance_footer()
             print_title("🤖 답변")
             render_markdown(content)
+            # 답변 블록의 끝을 표시해 다음 프롬프트와 섞이지 않게 한다.
+            print(f"{C.dim}{rule()}{C.reset}")
             return 0
 
         print_warn(f"빈 응답 (finish={finish})", stream=True)

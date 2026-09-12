@@ -383,6 +383,25 @@ llm --delete
 - **최종 답변**: 완료 후 `glow`(있으면)로 Markdown 렌더링하고, TTY가
   아니거나 `LLM_RAW` 설정 시 원문으로 출력합니다. 스트리밍 중에는 글자 수만
   표시합니다.
+  - 답변 앞 줄은 `✅ 작업 완료 (N단계 · 소요 시간)`이고, 답변 본문 뒤에는
+    회색 구분선을 그어 **답변 블록의 끝**을 표시합니다(다음 프롬프트와 섞이지 않게).
+  - 모델에는 **답변 골격**을 지시합니다: 결론을 한두 문장으로 먼저 쓰고, 해당될
+    때만 `변경한 파일`/`검증`/`남은 일` 같은 짧은 섹션을 붙입니다(빈 섹션은 생략,
+    계획을 되풀이하지 않음). 폴더별로 다른 형식을 쓰려면 `.llm/rules.md`에 적습니다.
+
+```text
+✅ 작업 완료 (7단계 · 1m 05s)
+──────────────────────────────── 🤖 답변 ────────────────────────────────
+## 요약
+
+- 확인 프롬프트 오탐을 제거했습니다.
+
+## 검증
+
+- `python3 -m py_compile agent.py` 통과
+─────────────────────────────────────────────────────────────────────────
+```
+
 - **비스트리밍/폴백**: `--no-stream`이거나 스트림이 실패하면 완료 후 결과를
   한 번에 출력합니다. 이때도 사고 과정 원문은 감추고 `사고 과정 N자 진행`
   안내만 보여줍니다(`--show-thinking`이면 원문 출력).
@@ -900,7 +919,7 @@ llm (bash)  →  agent.py (python)
   `tool_line_done`(도구 줄을 항목 하위 로그로 연결), `todo_rows`(상한 초과 시
   완료 항목부터 접기), `reset_todo`/`restore_todo`/
   `todo_plan_text`/`todo_stamp`(요약·다음 실행을 넘어 같은 계획 이어가기)
-- **비용/UI**: `prefetch_balance`/`balance_cost`(화폐별 소모액)/`cost_krw`/
+- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `prefetch_balance`/`balance_cost`(화폐별 소모액)/`cost_krw`/
   `cost_negligible`/`cost_text`/`show_balance_footer`(시작 잔액 캐시 → 종료 시
   소요 비용·토큰 표시), `fetch_balance`/`amounts_krw`(API가 준 화폐별 잔액 + 원화
   환산)/`ordered_currencies`/`format_amounts`/`format_krw`/`print_balance_block`,
