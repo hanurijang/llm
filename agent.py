@@ -583,31 +583,114 @@ def rule(char: str = "─", label: str | None = None) -> str:
     return char * side + text + char * right
 
 
+class StepPanel:
+    """한 단계에서 실행한 도구 결과를 **같은 자리에서** 갱신해 보여주는 패널.
+
+    도구를 실행할 때마다 이전 그림을 지우고 다시 그리므로, 결과 줄이 터미널에
+    계속 쌓이지 않는다. 진행 중인 단계의 도구 줄만 남고, 다음 단계가 시작되면
+    (`begin`) 그 자리를 새 단계가 이어받는다.
+
+    TTY 가 아니거나 `LLM_RAW` 가 설정되면 비활성화되고, 각 줄을 새 줄로 출력해
+    로그로 남긴다(기존 동작).
+    """
+
+    def __init__(self) -> None:
+        self.enabled = bool(sys.stdout.isatty() and not os.environ.get("LLM_RAW"))
+        self.header = ""            # 단계 머리말(그릴 도구 줄이 있을 때만 함께 그린다)
+        self.lines: list[str] = []  # 이번 단계의 도구 줄(논리 상태)
+        self.drawn: list[str] = []  # 화면에 실제로 그려 둔 줄
+
+    def begin(self, header: str = "") -> None:
+        """새 단계 시작: 이전 단계 그림을 지우고 상태를 초기화한다."""
+        self.suspend()
+        self.header = header
+        self.lines = []
+
+    def suspend(self) -> None:
+        """다른 출력(프롬프트/안내)이 끼어들기 전에 그림을 지운다."""
+        if not self.drawn:
+            return
+        self._erase()
+        self.drawn = []
+
+    def close(self) -> None:
+        """에이전트 종료 시 그림을 지운다."""
+        self.suspend()
+
+    def tool_open(self, text: str) -> int:
+        """도구 호출 줄을 추가한다(실행 전). 반환: 이번 단계에서의 줄 인덱스."""
+        idx = len(self.lines)
+        if self.enabled:
+            self.lines.append(text)
+            self._flush()
+        else:
+            print(text, flush=True)
+        return idx
+
+    def tool_done(self, idx: int, text: str) -> None:
+        """실행 결과(✓/✗)로 도구 줄을 갱신한다."""
+        if self.enabled:
+            if 0 <= idx < len(self.lines):
+                self.lines[idx] = f"{self.lines[idx]}  {text}"
+            self._flush()
+        else:
+            print(f"      {text}", flush=True)
+
+    def _erase(self) -> None:
+        sys.stdout.write(f"\033[{len(self.drawn)}A\033[J")
+        sys.stdout.flush()
+
+    def _flush(self) -> None:
+        drawn = ([self.header] if self.header and self.lines else []) + self.lines
+        if drawn == self.drawn:
+            return
+        if self.drawn:
+            self._erase()
+        self.drawn = drawn
+        if drawn:
+            sys.stdout.write("\n".join(drawn) + "\n")
+            sys.stdout.flush()
+
+
+PANEL = StepPanel()
+
+
+def suspend_panel() -> None:
+    """패널이 떠 있으면 지운다(다른 출력이 끼어들 때 호출)."""
+    PANEL.suspend()
+
+
 def print_title(label: str) -> None:
+    suspend_panel()
     line = rule("─", label)
     print(f"{C.bold}{C.cyan}{line}{C.reset}")
 
 
 def print_section(label: str) -> None:
+    suspend_panel()
     print()
     print(f"{C.bold}{label}{C.reset}")
     print(f"{C.dim}{rule()}{C.reset}")
 
 
 def print_info(message: str) -> None:
+    suspend_panel()
     print(f"{C.cyan}ℹ️  {message}{C.reset}")
 
 
 def print_ok(message: str) -> None:
+    suspend_panel()
     print(f"{C.green}✅ {message}{C.reset}")
 
 
 def print_warn(message: str, stream: bool = False) -> None:
+    suspend_panel()
     out = eprint if stream else print
     out(f"{C.yellow}⚠️  {message}{C.reset}")
 
 
 def print_error(message: str, stream: bool = True) -> None:
+    suspend_panel()
     out = eprint if stream else print
     out(f"{C.red}❌ {message}{C.reset}")
 
@@ -2542,6 +2625,7 @@ def confirm_shell(
         return True
 
     compound = len(segments) > 1
+    suspend_panel()  # 도구 결과 패널 위에 프롬프트가 겹치지 않게 지운다
     if compound:
         print(
             f"{C.yellow}❓ 확인이 필요합니다{C.reset} "
@@ -2763,10 +2847,12 @@ class StreamInterrupted(RuntimeError):
 def stream_chat(
     payload: dict[str, Any],
     on_delta: Callable[[str, str], None] | None = None,
-) -> tuple[str | None, list[dict[str, Any]], str | None, str | None]:
-    """content, tool_calls, finish_reason, reasoning_content
+) -> tuple[str | None, list[dict[str, Any]], str | None, str | None, Any]:
+    """content, tool_calls, finish_reason, reasoning_content, usage
 
     스트림이 중간에 끊기면 StreamInterrupted(부분 응답 보존)를 발생시킨다.
+    `stream_options.include_usage` 를 켜면 마지막 조각에 usage 가 실려 오므로
+    이를 모아 돌려준다(없으면 None).
     """
     headers = {
         "Authorization": f"Bearer {api_key()}",
@@ -2779,6 +2865,7 @@ def stream_chat(
     reasoning_parts: list[str] = []
     tools: dict[int, dict[str, str]] = {}
     finish: str | None = None
+    usage: Any = None
 
     def emit(kind: str, text: str) -> None:
         if on_delta is not None:
@@ -2803,6 +2890,10 @@ def stream_chat(
                     err = event["error"]
                     msg = err.get("message") if isinstance(err, dict) else str(err)
                     raise RuntimeError(msg)
+                chunk_usage = event.get("usage")
+                if isinstance(chunk_usage, dict):
+                    # usage 는 보통 선택지가 빈 마지막 조각에 실려 온다.
+                    usage = chunk_usage
                 choices = event.get("choices")
                 if not isinstance(choices, list) or not choices:
                     continue
@@ -2869,7 +2960,7 @@ def stream_chat(
                 "function": {"name": slot["name"], "arguments": slot["arguments"] or "{}"},
             }
         )
-    return content, tool_calls, finish, reasoning
+    return content, tool_calls, finish, reasoning, usage
 
 
 def complete(
@@ -2888,6 +2979,10 @@ def complete(
         "stream": stream,
     }
 
+    if stream:
+        # 스트림 마지막 조각으로 토큰 사용량(usage)을 받는다(종료 요약용).
+        payload["stream_options"] = {"include_usage": True}
+
     if not thinking:
         # thinking 은 기본 활성. 비활성 시 사고 과정 없이 바로 답한다.
         payload["thinking"] = {"type": "disabled"}
@@ -2898,7 +2993,11 @@ def complete(
 
     if stream:
         try:
-            return stream_chat(payload, on_delta=on_delta)
+            content, tool_calls, finish, reasoning, usage = stream_chat(
+                payload, on_delta=on_delta
+            )
+            record_usage(usage)
+            return content, tool_calls, finish, reasoning
         except StreamInterrupted as exc:
             if exc.partial:
                 print_warn(
@@ -2916,6 +3015,7 @@ def complete(
                 stream=True,
             )
         # 스트림이 아예 성립하지 않았으므로 일반 요청으로 재시도한다.
+        payload.pop("stream_options", None)
         payload["stream"] = False
 
     data = http_json(API_URL, payload)
@@ -2924,6 +3024,8 @@ def complete(
         err = data["error"]
         msg = err.get("message") if isinstance(err, dict) else str(err)
         raise RuntimeError(msg)
+
+    record_usage(data.get("usage"))
 
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") or {}
@@ -2970,6 +3072,35 @@ def print_banner(session: str, root: Path, chat_only: bool) -> None:
     )
 
 
+# 이번 실행에서 누적한 API 토큰 사용량(usage). 종료 요약에 쓴다.
+USAGE_TOTAL: dict[str, int] = {}
+# usage 응답에서 누적할 키(모델/버전에 따라 없는 키는 무시한다).
+USAGE_KEYS = (
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "prompt_cache_hit_tokens",
+    "prompt_cache_miss_tokens",
+)
+# 에이전트 시작 시점에 조회한 잔액 (CNY, KRW). 종료 시 소요 비용 계산에 쓴다.
+START_BALANCE: tuple[str, str] | None = None
+
+
+def reset_usage() -> None:
+    USAGE_TOTAL.clear()
+
+
+def record_usage(usage: Any) -> None:
+    """API 응답의 usage(토큰 사용량)를 누적한다. 없거나 형식이 다르면 무시."""
+    if not isinstance(usage, dict):
+        return
+    for key in USAGE_KEYS:
+        value = usage.get(key)
+        if isinstance(value, int) and value > 0:
+            USAGE_TOTAL[key] = USAGE_TOTAL.get(key, 0) + value
+    USAGE_TOTAL["calls"] = USAGE_TOTAL.get("calls", 0) + 1
+
+
 def fetch_balance() -> tuple[str, str]:
     """(CNY 잔액 문자열, KRW 환산 문자열) 을 돌려준다."""
     data = http_json(BALANCE_URL)
@@ -2986,12 +3117,14 @@ def fetch_balance() -> tuple[str, str]:
     return cny, krw_s
 
 
-def print_balance_block(cny: str, krw_s: str) -> None:
+def print_balance_block(cny: str, krw_s: str, extras: list[str] | None = None) -> None:
     print_title("💵 DeepSeek 잔액 정보")
     print(f"  {C.dim}위안화 (CNY){C.reset}  {C.bold}{cny}{C.reset} CNY")
     print(f"  {C.dim}원화   (KRW){C.reset}  {C.bold}{krw_s}{C.reset} 원")
     print(f"{C.dim}{rule()}{C.reset}")
     print(f"  {C.dim}적용 환율: 1 CNY = 220 KRW{C.reset}")
+    for line in extras or []:
+        print(f"  {line}")
 
 
 def cmd_balance() -> int:
@@ -3001,8 +3134,67 @@ def cmd_balance() -> int:
     return 0
 
 
+def prefetch_balance() -> None:
+    """에이전트 시작 전 잔액을 미리 조회해 캐시한다(`--balance`와 같은 조회).
+
+    종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 실패해도
+    경고만 출력하고 흐름은 막지 않는다.
+    """
+    global START_BALANCE
+    START_BALANCE = None
+    if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        return
+    try:
+        cny, krw_s = fetch_balance()
+    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
+        print_warn(f"시작 잔액을 조회하지 못했습니다: {exc}", stream=True)
+        return
+    START_BALANCE = (cny, krw_s)
+    print_info(f"시작 잔액: {C.bold}{cny}{C.reset} CNY ({krw_s} 원)")
+
+
+def balance_cost(end_cny: str) -> float | None:
+    """시작 잔액 대비 소모액(CNY, 양수면 소모). 계산할 수 없으면 None."""
+    if START_BALANCE is None:
+        return None
+    try:
+        return float(START_BALANCE[0]) - float(end_cny)
+    except (TypeError, ValueError):
+        return None
+
+
+def cost_text(cost: float) -> str:
+    """비용(CNY)을 `X.XX CNY (Y 원)` 로 표기한다.
+
+    잔액은 소수 2자리로만 오므로 0.01 미만 소모는 구분할 수 없다. 그때는
+    금액을 지어내지 않고 `0.01 미만`이라고만 표시한다.
+    """
+    amount = abs(cost)
+    if amount < 0.005:
+        return "0.01 미만"
+    return f"{amount:.2f} CNY ({amount * 220:,.2f} 원)"
+
+
+def usage_lines() -> list[str]:
+    """이번 실행에서 누적한 토큰 사용량 요약(usage 가 없으면 빈 목록)."""
+    prompt = int(USAGE_TOTAL.get("prompt_tokens", 0))
+    completion = int(USAGE_TOTAL.get("completion_tokens", 0))
+    if not prompt and not completion:
+        return []
+    total = int(USAGE_TOTAL.get("total_tokens", 0)) or (prompt + completion)
+    parts = [f"입력 {prompt:,}", f"출력 {completion:,}", f"합계 {total:,} 토큰"]
+    hit = int(USAGE_TOTAL.get("prompt_cache_hit_tokens", 0))
+    miss = int(USAGE_TOTAL.get("prompt_cache_miss_tokens", 0))
+    if hit or miss:
+        parts.append(f"캐시 적중 {hit:,} / 미적중 {miss:,}")
+    calls = int(USAGE_TOTAL.get("calls", 0))
+    if calls:
+        parts.append(f"API {calls}회")
+    return ["토큰 사용: " + " · ".join(parts)]
+
+
 def show_balance_footer() -> None:
-    """에이전트 종료 후 잔액을 보여준다. 실패해도 흐름을 막지 않는다."""
+    """에이전트 종료 후 잔액과 이번 실행의 소요 비용·토큰 사용량을 보여준다."""
     if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
         print_warn("API 키가 없어 잔액 표시를 건너뜁니다.", stream=True)
         return
@@ -3011,8 +3203,24 @@ def show_balance_footer() -> None:
     except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
         print_warn(f"잔액을 조회하지 못했습니다: {exc}", stream=True)
         return
+
+    extras: list[str] = []
+    cost = balance_cost(cny)
+    if cost is not None:
+        start_cny = START_BALANCE[0] if START_BALANCE else "?"
+        label = "소요 비용" if cost >= 0 else "잔액 증가"
+        extras.append(
+            f"{label}: {cost_text(cost)}"
+            f"   {C.dim}(시작 {start_cny} → 종료 {cny}){C.reset}"
+        )
+        if abs(cost) < 0.005:
+            extras.append(
+                f"{C.dim}잔액이 소수 2자리로 반올림되어 정확한 비용은 알 수 없습니다{C.reset}"
+            )
+    extras += usage_lines()
+
     print()
-    print_balance_block(cny, krw_s)
+    print_balance_block(cny, krw_s, extras=extras)
 
 
 def history_to_markdown(session: str, messages: list[dict[str, Any]]) -> str:
@@ -3270,6 +3478,11 @@ def cmd_agent(
     if stripped in {"/summary", "/summarize", "/요약"}:
         return cmd_summarize(session, history_file, model, force=True)
 
+    reset_usage()
+    if not chat_only and not no_balance:
+        # 종료 시 소요 비용을 계산할 수 있도록 시작 잔액을 먼저 조회해 캐시한다.
+        prefetch_balance()
+
     messages = load_history(history_file)
     messages.append({"role": "user", "content": prompt})
     save_history(history_file, messages)
@@ -3303,6 +3516,9 @@ def cmd_agent(
                 )
                 return 1
             step_limit += max_steps
+
+        # 이전 단계의 도구 결과 그림을 지우고 새 단계 자리를 마련한다.
+        PANEL.begin(f"{C.dim}⚙️ {step}단계{C.reset}")
 
         # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
 
@@ -3398,7 +3614,9 @@ def cmd_agent(
 
                 summary = summarize_args(name, raw_args)
                 counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
-                print(f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}")
+                slot = PANEL.tool_open(
+                    f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}"
+                )
 
                 result = run_tool(
                     name,
@@ -3412,9 +3630,9 @@ def cmd_agent(
                 )
                 preview = result.splitlines()[0][:120] if result else ""
                 if result.startswith("ERROR:"):
-                    print(f"      {C.red}✗ {preview}{C.reset}")
+                    PANEL.tool_done(slot, f"{C.red}✗ {preview}{C.reset}")
                 else:
-                    print(f"      {C.green}✓{C.reset} {C.dim}{preview}{C.reset}")
+                    PANEL.tool_done(slot, f"{C.green}✓{C.reset} {C.dim}{preview}{C.reset}")
 
                 messages.append(
                     {
@@ -3443,6 +3661,7 @@ def cmd_agent(
             save_history(history_file, messages)
 
             clear_status()
+            PANEL.close()
             print()
             if not chat_only:
                 # 동작을 마친 뒤 처리 결과(답변)로 연결한다.
