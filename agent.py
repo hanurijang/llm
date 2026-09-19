@@ -25,7 +25,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.4.0"
+VERSION = "0.6.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -42,8 +42,8 @@ HISTORY_DIR = Path.home() / ".local/share/llm"
 HISTORY_SCOPE_ENV = "LLM_HISTORY"
 REPO_HISTORY_DIR_NAME = ".llm"
 HISTORY_SCOPE_HOME = "home"
-# 실행이 끝나면 대화 기록을 자동으로 커밋·push 할지 정하는 환경변수(기본 켜짐).
-# `LLM_AUTO_SYNC=0`(false/no/off)이면 끄고 `--sync-history`로 직접 올린다.
+# 실행이 끝나면 대화 기록을 자동으로 커밋·push 할지 정하는 환경변수(기본 꺼짐).
+# `LLM_AUTO_SYNC=1`(true/yes/on)이면 켠다. 수동은 `llm --sync-history`.
 AUTO_SYNC_ENV = "LLM_AUTO_SYNC"
 # 질의 전에 원격의 최신 기록을 자동으로 받아올지 정하는 환경변수(기본 켜짐).
 # `LLM_AUTO_PULL=0`(false/no/off) 또는 `--no-pull` 로 끈다(실패해도 로컬로 계속).
@@ -98,14 +98,10 @@ TODO_BLOCK_MAX = 24
 # 계획 블록 들여쓰기: 항목 줄과 그 항목의 하위 로그 줄.
 TODO_ITEM_INDENT = "   "
 TODO_LOG_INDENT = "        "
-# 최초 턴에 계획을 세우지 않을 때 1회 주입하는 상기 메시지.
+# 여러 도구를 쓰는데 계획이 없을 때 1회만 안내(차단하지 않음).
 TODO_REMINDER = (
-    "작업을 시작하기 전에 먼저 `todo` 도구로 `goal`(이번 작업의 목표·결정한 조치를 "
-    "한두 문장으로 요약)과 전체 작업 계획(짧은 항목 목록)을 세워 사용자에게 보여주세요. "
-    "이후에는 계획을 새로 만들지 말고 **같은 계획**을 이어서 "
-    "status(pending/in_progress/done)만 갱신하세요. 대화가 요약(압축)된 뒤에도 요약에 "
-    "남은 기존 계획을 그대로 이어가고, 항목이 많아 일부가 접혀 보여도 하나의 작업으로 "
-    "계속 진행하세요."
+    "여러 단계 작업이면 `todo`로 goal과 짧은 계획을 보여 주면 진행이 더 잘 보입니다. "
+    "한 줄짜리 질문이면 생략해도 됩니다."
 )
 # 작업 계획의 목표/조치 요약(계획 상단에 표시). 요약(압축)을 넘어 유지된다.
 CURRENT_TODO_GOAL = ""
@@ -197,19 +193,23 @@ SHELL_ASK_PATTERNS = (
 SHELL_ASK_DELETE_HEADS = {"rm", "rmdir", "shred", "truncate", "dd"}
 # 셸 확인 범위(모드)와 배너에 보여줄 이름
 SHELL_ASK_LABELS = {
-    "all": "all (모든 명령)",
-    "risky": "risky (위험 명령만)",
-    "outside": "outside (폴더 밖 포함)",
-    "none": "none (확인 없음)",
+    "all": "확인=전부",
+    "risky": "확인=trust(위험만)",
+    "outside": "확인=safe(폴더 안)",
+    "none": "확인=없음",
 }
 # 모드가 CLI 옵션이 아니라 환경변수에서 온 경우의 안내 문구
 SHELL_ASK_SOURCES = {
     "LLM_AUTO_WORKSPACE": (
-        "환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다"
-        " (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다."
+        "환경변수 LLM_AUTO_WORKSPACE=1 → safe 모드"
+        " (작업 폴더 밖·설치 등은 확인). .env 에서 지워도 기본은 safe 입니다."
     ),
     "LLM_ALLOW_ALL": (
-        "환경변수 LLM_ALLOW_ALL=1 로 'risky' 모드입니다"
+        "환경변수 LLM_ALLOW_ALL=1 → trust 모드"
+        " (권한 상승·설치·폴더 밖 삭제만 확인)."
+    ),
+    "LLM_SHELL_TRUST": (
+        "환경변수 LLM_SHELL_TRUST=1 → trust 모드"
         " (권한 상승·설치·폴더 밖 삭제만 확인)."
     ),
 }
@@ -2289,20 +2289,16 @@ def build_system_prompt(root: Path, session: str) -> str:
     prompt = (
         "You are a coding CLI agent running on the user's machine.\n"
         "Use tools to inspect and modify files instead of guessing.\n"
-        "Prefer grep/glob/list_dir before reading large files.\n"
-        "Edit with str_replace when changing existing files; use write_file for new files.\n"
-        "Keep changes minimal and correct. After edits, sanity-check with read or tests if appropriate.\n"
-        "Work with a todo list: ALWAYS call the `todo` tool first to lay out a concise\n"
-        "plan with its `goal` (one or two sentences summarizing your intended approach),\n"
-        "then update each item's status (pending/in_progress/done) as you progress.\n"
-        "Keep ONE plan for the whole job: if a plan (or a goal) already exists in the\n"
-        "context — including a previous summary — continue that SAME plan, just update\n"
-        "its statuses; never restart a new plan. If the list is folded in the terminal\n"
-        "(over the display limit), keep going with the same single job.\n"
-        "Final answer format: lead with one or two sentences stating the outcome,\n"
-        "then short sections only when they apply (changed files, verification,\n"
-        "remaining work). Do not restate the plan — the todo panel already shows it —\n"
-        "and keep each bullet to a single line.\n"
+        "Tools (prefer these names):\n"
+        "- find: explore (mode=list|glob|grep)\n"
+        "- read: read a file (offset/limit for large files)\n"
+        "- edit: change files (action=replace|write|delete). Prefer replace for edits.\n"
+        "- shell: run bash (tests, git, builds). Do NOT use shell to read/edit files.\n"
+        "- todo: show a short plan for non-trivial work; skip for one-line Q&A.\n"
+        "Keep changes minimal and correct. After edits, sanity-check if needed.\n"
+        "For multi-step jobs call `todo` first with goal + items, then update statuses.\n"
+        "Keep ONE plan for the whole job; never restart a finished plan.\n"
+        "Final answer: lead with 1–2 sentences of outcome, then short bullets if useful.\n"
         "Do not exfiltrate secrets. Never print API keys or .env contents.\n"
         "Reply in Korean unless the user writes in another language.\n"
         f"Session name: {session}\n"
@@ -2360,30 +2356,22 @@ def tool_schemas() -> list[dict[str, Any]]:
     return [
         fn(
             "todo",
-            "작업 계획(todo)을 설정하거나 갱신한다. 에이전트는 작업을 시작할 때 "
-            "반드시 이것을 먼저 호출해 goal(목표·조치 요약)과 할 일 목록을 사용자에게 "
-            "보여주고, 진행에 따라 각 항목의 status 를 갱신한다. 호출할 때마다 전체 "
-            "목록을 다시 보낸다. 이미 계획이 있으면(요약을 넘어 유지됨) 새로 만들지 "
-            "말고 같은 계획을 이어서 갱신한다. goal 을 생략하면 이전 목표가 유지된다.",
+            "짧은 작업 계획. 여러 단계일 때만 먼저 호출. goal+items, 진행 시 status 갱신.",
             {
                 "goal": {
                     "type": "string",
-                    "description": (
-                        "이번 작업의 목표 또는 결정한 조치를 한두 문장으로 요약. "
-                        "목록 상단에 표시되며, 생략하면 이전 목표를 유지한다."
-                    ),
+                    "description": "목표 한두 문장(생략 시 이전 유지)",
                 },
                 "items": {
                     "type": "array",
-                    "description": "전체 할 일 목록(현재 상태 포함).",
+                    "description": "할 일 전체 목록",
                     "items": {
                         "type": "object",
                         "properties": {
-                            "content": {"type": "string", "description": "할 일 한 줄"},
+                            "content": {"type": "string"},
                             "status": {
                                 "type": "string",
                                 "enum": ["pending", "in_progress", "done"],
-                                "description": "진행 상태 (기본 pending)",
                             },
                         },
                         "required": ["content"],
@@ -2393,77 +2381,94 @@ def tool_schemas() -> list[dict[str, Any]]:
             ["items"],
         ),
         fn(
-            "read_file",
-            "Read a text file. 1-indexed line numbers are prefixed. Use offset/limit for large files.",
+            "read",
+            "파일 읽기. 큰 파일은 offset/limit 사용.",
             {
-                "path": {"type": "string", "description": "Path relative to workspace root"},
-                "offset": {"type": "integer", "description": "1-indexed start line"},
-                "limit": {"type": "integer", "description": "Max number of lines to return"},
+                "path": {"type": "string", "description": "워크스페이스 상대 경로"},
+                "offset": {"type": "integer", "description": "시작 줄(1부터)"},
+                "limit": {"type": "integer", "description": "최대 줄 수"},
             },
             ["path"],
         ),
         fn(
-            "write_file",
-            "Create or overwrite a text file with the given contents.",
+            "edit",
+            "파일 수정. action=replace(기존 치환)·write(생성/덮어쓰기)·delete.",
             {
+                "action": {
+                    "type": "string",
+                    "enum": ["replace", "write", "delete"],
+                    "description": "기본 replace",
+                },
                 "path": {"type": "string"},
-                "contents": {"type": "string"},
+                "old_string": {"type": "string", "description": "replace 시 찾을 문자열"},
+                "new_string": {"type": "string", "description": "replace 시 바꿀 문자열"},
+                "replace_all": {"type": "boolean"},
+                "contents": {"type": "string", "description": "write 시 전체 내용"},
             },
-            ["path", "contents"],
-        ),
-        fn(
-            "str_replace",
-            "Replace a unique old_string with new_string in a file. Fails if old_string is missing or not unique unless replace_all is true.",
-            {
-                "path": {"type": "string"},
-                "old_string": {"type": "string"},
-                "new_string": {"type": "string"},
-                "replace_all": {"type": "boolean", "description": "Replace every occurrence"},
-            },
-            ["path", "old_string", "new_string"],
-        ),
-        fn(
-            "delete_file",
-            "Delete a file inside the workspace.",
-            {"path": {"type": "string"}},
             ["path"],
         ),
         fn(
-            "list_dir",
-            "List files and directories at a path.",
-            {"path": {"type": "string", "description": "Directory relative to workspace; default ."}},
+            "find",
+            "탐색. mode=list(목록)·glob(파일명)·grep(내용).",
+            {
+                "mode": {
+                    "type": "string",
+                    "enum": ["list", "glob", "grep"],
+                    "description": "기본 list",
+                },
+                "path": {"type": "string", "description": "시작 경로(기본 .)"},
+                "pattern": {
+                    "type": "string",
+                    "description": "glob 패턴 또는 grep 정규식",
+                },
+                "glob": {"type": "string", "description": "grep 시 파일명 필터"},
+                "case_insensitive": {"type": "boolean"},
+            },
             [],
         ),
         fn(
-            "glob",
-            "Find files by glob pattern (e.g. **/*.py) under the workspace.",
-            {
-                "pattern": {"type": "string"},
-                "path": {"type": "string", "description": "Subdirectory to search from"},
-            },
-            ["pattern"],
-        ),
-        fn(
-            "grep",
-            "Search file contents with a regular expression.",
-            {
-                "pattern": {"type": "string", "description": "Python/regex pattern"},
-                "path": {"type": "string", "description": "File or directory to search"},
-                "glob": {"type": "string", "description": "Optional filename glob filter, e.g. *.py"},
-                "case_insensitive": {"type": "boolean"},
-            },
-            ["pattern"],
-        ),
-        fn(
             "shell",
-            "Run a bash command in the workspace root. Use for git, tests, builds, and inspection. Not for reading secrets.",
+            "bash 실행(테스트·git·빌드). 파일 읽기/수정에는 쓰지 말 것.",
             {
                 "command": {"type": "string"},
-                "timeout": {"type": "integer", "description": "Seconds, default 60, max 180"},
+                "timeout": {"type": "integer", "description": "초, 기본 60, 최대 180"},
             },
             ["command"],
         ),
     ]
+
+
+def tool_edit(root: Path, args: dict[str, Any]) -> str:
+    """통합 편집: replace / write / delete."""
+    action = str(args.get("action") or "replace").strip().lower()
+    if action in {"replace", "str_replace"}:
+        if "old_string" not in args or "new_string" not in args:
+            return "ERROR: replace 에는 old_string 과 new_string 이 필요합니다."
+        return tool_str_replace(root, args)
+    if action in {"write", "write_file", "create"}:
+        if "contents" not in args:
+            return "ERROR: write 에는 contents 가 필요합니다."
+        return tool_write_file(root, args)
+    if action in {"delete", "delete_file", "rm"}:
+        return tool_delete_file(root, args)
+    return f"ERROR: 알 수 없는 edit.action: {action} (replace|write|delete)"
+
+
+def tool_find(root: Path, args: dict[str, Any]) -> str:
+    """통합 탐색: list / glob / grep."""
+    mode = str(args.get("mode") or "list").strip().lower()
+    if mode in {"list", "list_dir", "ls"}:
+        return tool_list_dir(root, args)
+    if mode in {"glob", "files"}:
+        if not args.get("pattern"):
+            return "ERROR: glob 모드에는 pattern 이 필요합니다 (예: **/*.py)."
+        return tool_glob(root, args)
+    if mode in {"grep", "search"}:
+        if not args.get("pattern"):
+            return "ERROR: grep 모드에는 pattern(정규식)이 필요합니다."
+        return tool_grep(root, args)
+    return f"ERROR: 알 수 없는 find.mode: {mode} (list|glob|grep)"
+
 
 
 def is_secret_path(path: Path) -> bool:
@@ -3851,23 +3856,35 @@ def run_tool(
     args = parse_tool_args(raw_args)
     if "_error" in args:
         return f"ERROR: {args['_error']}"
+    # 구 도구명 alias → 통합 도구 (이전 대화/습관 호환)
+    if name == "read_file":
+        name = "read"
+    elif name in {"write_file", "str_replace", "delete_file"}:
+        mapped = {
+            "write_file": "write",
+            "str_replace": "replace",
+            "delete_file": "delete",
+        }[name]
+        args = {**args, "action": mapped}
+        name = "edit"
+    elif name == "list_dir":
+        args = {**args, "mode": "list"}
+        name = "find"
+    elif name == "glob":
+        args = {**args, "mode": "glob"}
+        name = "find"
+    elif name == "grep":
+        args = {**args, "mode": "grep"}
+        name = "find"
     try:
         if name == "todo":
             return tool_todo(args)
-        if name == "read_file":
+        if name == "read":
             return tool_read_file(root, args)
-        if name == "write_file":
-            return tool_write_file(root, args)
-        if name == "str_replace":
-            return tool_str_replace(root, args)
-        if name == "delete_file":
-            return tool_delete_file(root, args)
-        if name == "list_dir":
-            return tool_list_dir(root, args)
-        if name == "glob":
-            return tool_glob(root, args)
-        if name == "grep":
-            return tool_grep(root, args)
+        if name == "edit":
+            return tool_edit(root, args)
+        if name == "find":
+            return tool_find(root, args)
         if name == "shell":
             return tool_shell(
                 root, args, yes, auto_safe, approval, auto_workspace, allow_all
@@ -3902,8 +3919,29 @@ def summarize_args(name: str, raw_args: str) -> str:
             base = f"{len(items)}개 항목 ({done} 완료)"
             return f"{base} · {active}" if active else base
         return ""
-    if name == "str_replace":
-        return str(args.get("path", ""))
+    if name in {"edit", "str_replace", "write_file", "delete_file"}:
+        action = str(args.get("action") or (
+            "replace" if name == "str_replace"
+            else "write" if name == "write_file"
+            else "delete" if name == "delete_file"
+            else "replace"
+        ))
+        path = str(args.get("path") or "")
+        return f"{action} {path}".strip()
+    if name in {"find", "grep", "glob", "list_dir"}:
+        mode = str(args.get("mode") or (
+            "grep" if name == "grep"
+            else "glob" if name == "glob"
+            else "list"
+        ))
+        bits = [mode]
+        if args.get("pattern"):
+            bits.append(str(args["pattern"]))
+        if args.get("path"):
+            bits.append(str(args["path"]))
+        return " ".join(bits)[:120]
+    if name in {"read", "read_file"}:
+        return str(args.get("path") or "")
     if "path" in args:
         extra = []
         if args.get("pattern"):
@@ -4164,50 +4202,120 @@ def print_banner(
     session: str,
     root: Path,
     chat_only: bool,
-    ask_mode: str = "risky",
+    ask_mode: str = "outside",
     ask_source: str = "",
 ) -> None:
     mode = "채팅" if chat_only else "에이전트"
     mode_color = C.magenta if chat_only else C.cyan
     has_rules = bool(load_session_rules(root))
     rules = f"{C.green}on{C.reset}" if has_rules else f"{C.dim}off{C.reset}"
+    sync_on = auto_sync_enabled() and history_scope_is_repo()
+    sync = f"{C.green}on{C.reset}" if sync_on else f"{C.dim}off{C.reset}"
     confirm = ""
     if not chat_only:
         label = SHELL_ASK_LABELS.get(ask_mode, ask_mode)
-        confirm = f"  {C.dim}확인={C.reset}{label}"
+        confirm = f"  {C.dim}{label}{C.reset}"
     print(
         f"{C.dim}──{C.reset} {mode_color}{C.bold}{mode}{C.reset}"
         f" {C.dim}v{VERSION}{C.reset}"
         f"  {C.dim}session={C.reset}{session}"
         f"  {C.dim}root={C.reset}{root}"
-        f"  {C.dim}rules={C.reset}{rules}{confirm}"
+        f"  {C.dim}rules={C.reset}{rules}"
+        f"  {C.dim}sync={C.reset}{sync}"
+        f"{confirm}"
     )
     if ask_source:
-        # 안내 문구는 모드가 "환경변수"에서 온 경우에만 있다(CLI 옵션은 배너의 `확인=`으로 충분).
         info = SHELL_ASK_SOURCES.get(ask_source)
         if info:
             print_info(info)
 
 
-def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
-    """셸 확인 범위를 정한다. 반환: (auto_workspace, allow_all, 모드, 출처).
+def print_phase(label: str) -> None:
+    """진행 단계 한 줄(사용자가 지금 무엇이 돌아가는지 보이게)."""
+    print(f"{C.cyan}▸{C.reset} {label}")
 
-    명시한 CLI 옵션이 환경변수보다 우선한다. 그래야 `.env`에 남은 설정 때문에
-    의도와 다른 모드로 조용히 동작하는 일이 없다.
+
+def print_continue_status(root: Path, session: str, history_file: Path) -> None:
+    """이어가기 상태를 한 줄로 보여 준다(로컬/원격/막힘)."""
+    turns = 0
+    if history_file.is_file():
+        try:
+            msgs = load_history(history_file)
+            turns = sum(1 for m in msgs if m.get("role") == "user")
+        except OSError:
+            turns = 0
+    parts = [f"이어가기 · 로컬 {turns}턴"]
+    if not history_scope_is_repo():
+        parts.append("기록=홈(동기화 안 함)")
+        print_info(" · ".join(parts))
+        return
+    if not (root / ".git").exists() and git_run(root, "rev-parse", "--git-dir")[0] != 0:
+        parts.append("git 없음")
+        print_info(" · ".join(parts))
+        return
+    dirty = False
+    rel = ""
+    try:
+        rel = os.path.relpath(history_file, root)
+    except ValueError:
+        rel = ""
+    if rel and not rel.startswith(".."):
+        code, out = git_run(
+            root, "status", "--porcelain", "--untracked-files=all", "--", rel
+        )
+        dirty = code == 0 and bool(out)
+    if dirty:
+        parts.append(f"{C.yellow}로컬 기록 미커밋{C.reset}")
+        if auto_sync_enabled():
+            parts.append("끝나면 자동 sync")
+        else:
+            parts.append("필요 시 llm --sync-history")
+    ahead = behind = 0
+    if git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] == 0:
+        code, out = git_run(root, "rev-list", "--count", "HEAD..@{u}")
+        if code == 0 and out.isdigit():
+            behind = int(out)
+        code, out = git_run(root, "rev-list", "--count", "@{u}..HEAD")
+        if code == 0 and out.isdigit():
+            ahead = int(out)
+        if behind and dirty:
+            parts.append(f"{C.yellow}원격 +{behind} · 먼저 sync 권장{C.reset}")
+        elif behind:
+            parts.append(f"원격 +{behind} (곧 받아옴)")
+        elif ahead:
+            parts.append(f"로컬 +{ahead} (미 push)")
+        else:
+            parts.append("원격과 같음")
+    else:
+        parts.append("upstream 없음")
+    print_info(" · ".join(parts))
+
+
+def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
+    """셸 확인 범위. 반환: (auto_workspace, allow_all, 모드, 출처).
+
+    공개 모드: safe(기본) / trust / 전부확인 / 확인없음.
+    구 플래그(--auto-workspace/--allow-all)는 alias.
     """
     if args.confirm_all:
         return False, False, "all", "--confirm-all"
-    if args.allow_all:
-        return False, True, "risky", "--allow-all"
-    if args.auto_workspace:
-        return True, False, "outside", "--auto-workspace"
     if args.yes:
         return False, True, "none", "--yes"
-    if env_flag("LLM_ALLOW_ALL"):
-        return False, True, "risky", "LLM_ALLOW_ALL"
+    # trust = 구 allow-all
+    if getattr(args, "trust", False) or args.allow_all:
+        src = "--trust" if getattr(args, "trust", False) else "--allow-all"
+        return False, True, "risky", src
+    # safe = 구 auto-workspace
+    if getattr(args, "safe", False) or args.auto_workspace:
+        src = "--safe" if getattr(args, "safe", False) else "--auto-workspace"
+        return True, False, "outside", src
+    if env_flag("LLM_SHELL_TRUST") or env_flag("LLM_ALLOW_ALL"):
+        src = "LLM_SHELL_TRUST" if env_flag("LLM_SHELL_TRUST") else "LLM_ALLOW_ALL"
+        return False, True, "risky", src
     if env_flag("LLM_AUTO_WORKSPACE"):
         return True, False, "outside", "LLM_AUTO_WORKSPACE"
-    return False, True, "risky", ""
+    # 기본: safe (작업 폴더 안 명령은 자동, 밖·설치 등은 확인)
+    return True, False, "outside", ""
 
 
 # 이번 실행에서 누적한 API 토큰 사용량(usage). 종료 요약에 쓴다.
@@ -4810,6 +4918,33 @@ def hint_repo_history(root: Path) -> None:
         print_info("이 폴더(.llm/)에 대화 기록이 있습니다: " + ", ".join(names))
 
 
+def auto_bind_from_repo_history(
+    folders: dict[str, str], root: Path
+) -> tuple[dict[str, str], str | None]:
+    """clone 직후 `.llm/history_*` 가 있으면 폴더에 자동 바인딩.
+
+    - 폴더명과 같은 세션이 있으면 우선
+    - 기록이 하나뿐이면 그것
+    - 여러 개·이름 불일치면 None (사용자가 -s 로 고름)
+    """
+    if not history_scope_is_repo():
+        return folders, None
+    names = repo_history_sessions(root)
+    if not names:
+        return folders, None
+    preferred = sanitize_session_name(root.name)
+    if preferred in names:
+        pick = preferred
+    elif len(names) == 1:
+        pick = names[0]
+    else:
+        return folders, None
+    folders, err, _ = ensure_binding(folders, root, pick)
+    if err:
+        return folders, None
+    return folders, pick
+
+
 def print_history_sync_hint(root: Path, history_file: Path) -> None:
     """기록이 아직 커밋되지 않았으면 동기화 방법을 알려준다(조용히 넘어감)."""
     if not history_scope_is_repo() or not history_file.is_file():
@@ -4821,8 +4956,8 @@ def print_history_sync_hint(root: Path, history_file: Path) -> None:
         return
     if auto_sync_enabled():
         print_info(
-            "대화 기록에 아직 올리지 못한 변경이 있습니다 — 실행이 끝나면 다시"
-            f" 커밋·push 를 시도합니다 (끄려면 {AUTO_SYNC_ENV}=0)."
+            "대화 기록에 아직 올리지 못한 변경이 있습니다 — 실행이 끝나면"
+            f" 다시 커밋·push 를 시도합니다 (기본은 끔, 켜짐={AUTO_SYNC_ENV}=1)."
         )
         return
     print_info(
@@ -4832,9 +4967,11 @@ def print_history_sync_hint(root: Path, history_file: Path) -> None:
 
 
 def auto_sync_enabled() -> bool:
-    """실행 종료 시 기록 자동 동기화 여부(기본 켜짐, `LLM_AUTO_SYNC=0`이면 끔)."""
+    """실행 종료 시 기록 자동 동기화 여부(기본 꺼짐, `LLM_AUTO_SYNC=1`이면 켬)."""
     val = os.environ.get(AUTO_SYNC_ENV, "").strip().lower()
-    return val not in {"0", "false", "no", "off"}
+    if not val:
+        return False
+    return val in {"1", "true", "yes", "on"}
 
 
 def auto_sync_history(root: Path, session: str) -> None:
@@ -4849,9 +4986,9 @@ def auto_sync_history(root: Path, session: str) -> None:
     if code != 0 or not out:
         return
     print(f"{C.dim}{rule()}{C.reset}")
-    print_title("🔄 대화 기록 동기화")
+    print_phase("대화 기록 동기화 (auto)")
     if cmd_sync_history(root, session) != 0:
-        print_info(f"자동 동기화를 끄려면 {AUTO_SYNC_ENV}=0 으로 실행하세요.")
+        print_info(f"자동 동기화를 끄려면 {AUTO_SYNC_ENV} 를 비우거나 0 으로 두세요.")
 
 
 def auto_pull_enabled() -> bool:
@@ -4896,39 +5033,20 @@ def _mark_auto_pull(repo: str) -> None:
         pass
 
 
-def maybe_auto_pull(root: Path, *, enabled: bool = True) -> None:
-    """질의 전에 원격의 최신 대화 기록을 받아온다(다른 PC에서 이어가기).
+def history_receive_remote(root: Path, *, reason: str = "pull") -> str:
+    """원격 대화 기록을 fast-forward 로만 받는다(공통 정책).
 
-    - 원격에 새 커밋이 있을 때만 fast-forward 로 받는다(`git pull --ff-only --autostash`).
-      내려받은 기록은 이어지는 `load_history()`가 그대로 읽어 맥락이 이어진다.
-    - 커밋되지 않은 기록 변경이 있으면 받아오지 않는다(autostash 충돌로 기록이
-      깨지는 것을 막고 로컬 기록을 지킨다). 그때는 올리는 방법만 안내한다.
-    - 원격이 없거나 확인·수신에 실패하면 경고만 하고 **로컬 기록으로 계속**한다.
-      (로컬 커밋이 갈라져 fast-forward 가 안 되는 경우에도 임의로 rebase 하지 않는다.)
-    - 같은 폴더에서 `LLM_AUTO_PULL_TTL`(기본 120초) 안에는 다시 확인하지 않는다.
+    반환: ok | uptodate | no_upstream | dirty | diverged | fail
+    - rebase 는 쓰지 않는다(갈라지면 안내만).
+    - 기록(.llm)에 미커밋 변경이 있으면 받지 않는다.
     """
-    if not enabled or not auto_pull_enabled() or not history_scope_is_repo():
-        return
+    if not history_scope_is_repo():
+        return "no_upstream"
     if not (root / ".git").exists() and git_run(root, "rev-parse", "--git-dir")[0] != 0:
-        return
+        return "no_upstream"
     if git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] != 0:
-        return  # upstream 이 없으면 받아올 원격이 없다.
-    repo = canonical_folder(root)
-    if time.time() - _auto_pull_seen(repo) < auto_pull_interval():
-        return
-    _mark_auto_pull(repo)  # 수신에 실패해도 잠시 쉬도록 먼저 기록한다.
+        return "no_upstream"
 
-    code, out = git_run(root, "fetch", "--quiet")
-    if code != 0:
-        print_warn("원격 대화 기록을 확인하지 못했습니다 — 로컬 기록으로 계속합니다.")
-        return
-    code, out = git_run(root, "rev-list", "--count", "HEAD..@{u}")
-    behind = int(out) if code == 0 and out.isdigit() else 0
-    if behind <= 0:
-        return  # 원격이 앞서지 않았으면 조용히 넘어간다.
-    # 커밋되지 않은 기록 변경이 있으면 받아오지 않는다. (--autostash 는 충돌 시
-    # 충돌 표시가 든 파일을 남겨 JSON 기록을 깨뜨리고, 그러면 기록을 통째로
-    # 잃을 수 있다 — 로컬 기록을 그대로 두고 사용자가 직접 해결하게 한다.)
     rel_history = os.path.relpath(HISTORY_BASE, root)
     if not rel_history.startswith(".."):
         code, dirty = git_run(
@@ -4940,33 +5058,69 @@ def maybe_auto_pull(root: Path, *, enabled: bool = True) -> None:
             rel_history,
         )
         if code == 0 and dirty:
-            print_warn(
-                "커밋되지 않은 대화 기록 변경이 있어 자동 수신을 건너뜁니다"
-                " — 로컬 기록으로 계속합니다."
-            )
-            print_info(
-                "  `llm --sync-history` 로 먼저 올린 뒤 다시 실행하면 원격 기록을"
-                " 받아옵니다."
-            )
-            return
-    print_info(f"원격에 새 변경이 있습니다({behind}개 커밋) — 대화 기록을 받아오는 중…")
+            return "dirty"
+
+    code, out = git_run(root, "fetch", "--quiet")
+    if code != 0:
+        return "fail"
+    code, out = git_run(root, "rev-list", "--count", "HEAD..@{u}")
+    behind = int(out) if code == 0 and out.isdigit() else 0
+    if behind <= 0:
+        return "uptodate"
+
+    print_phase(f"원격 기록 수신 (+{behind} · {reason})")
     code, out = git_run(root, "pull", "--ff-only", "--autostash")
     if code != 0:
-        print_warn("원격 기록을 자동으로 받아오지 못했습니다 — 로컬 기록으로 계속합니다.")
-        print_info("  직접 `git pull --rebase --autostash` 로 받아온 뒤 다시 실행하세요.")
-        return
-    # pull 은 성공했는데 autostash 복원이 충돌하면 파일에 충돌 표시가 남는다.
+        # ff 불가 = 갈라짐 또는 기타 실패
+        code2, _ = git_run(root, "merge-base", "--is-ancestor", "HEAD", "@{u}")
+        if code2 != 0:
+            return "diverged"
+        return "fail"
     code, conflicted = git_run(root, "diff", "--name-only", "--diff-filter=U")
     if code == 0 and conflicted:
-        print_warn("원격 기록은 받아왔지만 내 변경과 충돌했습니다 — 확인이 필요합니다.")
-        print_info("  충돌 파일: " + ", ".join(conflicted.split()))
-        print_info("  내 변경은 autostash 에 남아 있습니다 — `git status` 로 해결하세요.")
+        print_warn("원격 기록은 받아왔지만 충돌 표시가 있습니다 — git status 로 확인하세요.")
+        print_info("  충돌: " + ", ".join(conflicted.split()))
+        return "diverged"
+    print_ok("원격의 최신 대화 기록을 받아왔습니다.")
+    return "ok"
+
+
+def explain_receive_status(status: str) -> None:
+    """history_receive_remote 결과를 사용자에게 짧게 안내."""
+    if status in {"ok", "uptodate"}:
         return
-    print_ok("원격의 최신 대화 기록을 받아왔습니다 — 이어서 진행합니다.")
+    if status == "no_upstream":
+        return
+    if status == "dirty":
+        print_warn(
+            "커밋되지 않은 대화 기록 변경이 있어 자동 수신을 건너뜁니다"
+            " — 로컬 기록으로 계속합니다."
+        )
+        print_info("  `llm sync` 로 먼저 올린 뒤 다시 실행하면 원격 기록을 받아옵니다.")
+        return
+    if status == "diverged":
+        print_warn("로컬과 원격 기록이 갈라져 fast-forward 할 수 없습니다.")
+        print_info("  로컬 기록으로 계속합니다. 필요하면 직접 git 상태를 확인하세요.")
+        return
+    if status == "fail":
+        print_warn("원격 대화 기록을 받지 못했습니다 — 로컬 기록으로 계속합니다.")
+        return
+
+
+def maybe_auto_pull(root: Path, *, enabled: bool = True) -> None:
+    """질의 전 원격 최신 기록을 ff-only 로 받는다(공통 history_receive_remote)."""
+    if not enabled or not auto_pull_enabled() or not history_scope_is_repo():
+        return
+    repo = canonical_folder(root)
+    if time.time() - _auto_pull_seen(repo) < auto_pull_interval():
+        return
+    _mark_auto_pull(repo)
+    status = history_receive_remote(root, reason="auto")
+    explain_receive_status(status)
 
 
 def cmd_sync_history(root: Path, session: str) -> int:
-    """대화 기록(.llm/)만 커밋하고 pull --rebase 후 push 한다."""
+    """대화 기록(.llm/)만 커밋하고 ff-only pull 후 push 한다(rebase 없음)."""
     if not history_scope_is_repo():
         print_error(
             f"{HISTORY_SCOPE_ENV}={HISTORY_SCOPE_HOME} 라서 기록이 홈에 있습니다"
@@ -4983,27 +5137,18 @@ def cmd_sync_history(root: Path, session: str) -> int:
         print_error(f"동기화할 기록 경로를 찾지 못했습니다 (기록 폴더: {HISTORY_BASE}).")
         return 1
     rel = os.path.relpath(HISTORY_BASE, root)
-    # 이미 추적 중인 파일이어도 패턴을 반영해 알려주려면 --no-index 가 필요하다.
     code, out = git_run(root, "check-ignore", "--no-index", rel)
     if code == 0:
         print_error(f"{rel} 이 .gitignore 로 제외되어 있어 push 되지 않습니다.")
         print_info(f".gitignore 에서 '{rel}' 관련 줄을 지운 뒤 다시 실행하세요.")
         return 1
 
-    # 1) 원격 변경을 먼저 받아 둔다(내 변경은 autostash 로 잠시 보관).
-    has_upstream = git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] == 0
-    if has_upstream:
-        print_info("원격 변경을 받아오는 중… (git pull --rebase --autostash)")
-        code, out = git_run(root, "pull", "--rebase", "--autostash")
-        if code != 0:
-            print_error("pull 실패 — 충돌을 해결한 뒤 다시 실행하세요.")
-            for line in out.splitlines()[:6]:
-                print_info(f"  {line}")
-            return 1
-    else:
-        print_warn("upstream(@{u})이 없어 pull/push 는 건너뜁니다 (기록만 커밋).")
+    print_phase("대화 기록 동기화")
+    has_upstream = (
+        git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] == 0
+    )
 
-    # 2) 대화 기록만 스테이징해서 커밋.
+    # 1) 로컬 기록 먼저 커밋(미커밋이면 pull 이 dirty 로 막힘)
     code, out = git_run(root, "add", "-A", "--", *paths)
     if code != 0:
         if "ignored" in out:
@@ -5025,9 +5170,25 @@ def cmd_sync_history(root: Path, session: str) -> int:
     else:
         print_info("커밋할 기록 변경이 없습니다.")
 
-    # 3) 올린다.
-    if not has_upstream:
+    # 2) 원격은 ff-only 만 (갈라지면 안내)
+    if has_upstream:
+        status = history_receive_remote(root, reason="sync")
+        if status == "diverged":
+            print_warn("기록이 갈라져 push 를 건너뜁니다 — 로컬 커밋은 유지됩니다.")
+            explain_receive_status(status)
+            return 1
+        if status == "fail":
+            explain_receive_status(status)
+            return 1
+        if status == "dirty":
+            # 커밋 직후인데 dirty 면 다른 파일이 .llm 에 있음
+            explain_receive_status(status)
+            return 1
+    else:
+        print_warn("upstream(@{u})이 없어 pull/push 는 건너뜁니다 (기록만 커밋).")
         return 0
+
+    # 3) push
     code, out = git_run(root, "push")
     if code != 0:
         print_error("push 실패 — 인증·원격 상태를 확인하세요.")
@@ -5093,25 +5254,17 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
     print_section("사용법")
     usage = [
         ('llm "질문"', "이 폴더 세션으로 에이전트 실행"),
-        ('llm --chat "질문"', "도구 없이 순수 채팅"),
-        ('llm --yes "질문"', "셸 명령 확인 생략"),
-        ('llm --auto-workspace "질문"', "폴더 안 명령은 자동 실행"),
-        ('llm --show-thinking "질문"', "사고 과정 원문까지 표시"),
-        ("llm -s <이름>", "이 폴더를 해당 세션에 매핑 (기존 매핑은 갈아탐)"),
-        ("llm --ref <이름>", "다른 세션 맥락을 이번 세션에 1회 주입"),
-        ("llm --init-rules", ".llm/rules.md 생성"),
-        ("llm --rules", "세션 규칙 보기"),
-        ("llm --run", "직전 응답의 스크립트 실행"),
-        ("llm --view", "대화 내용 보기 (마크다운)"),
-        ("llm --summarize", "현재 대화를 요약·백업 (강제)"),
-        ("llm --sync-history", "이 세션 기록·요약만 커밋·push (다른 PC에서 이어가기)"),
-        ("llm --clear", "현재 세션 내용 비우기"),
-        ("llm --delete", "현재 세션 파일 삭제"),
-        ("llm --allow-list", "셸 자동 허용 목록 보기"),
-        ("llm --allow-clear", "셸 자동 허용 목록 비우기"),
-        ("llm --balance", "API 잔액 조회 (화폐별 + 원화 환산)"),
-        ("llm --no-balance", "에이전트 종료 후 잔액 표시 생략"),
-        ("llm --no-rates", "실시간 환율 조회 끄기 (가정 환율로 환산)"),
+        ("llm -i · llm repl", "대화형 REPL (여러 턴)"),
+        ('llm ask "질문"', "에이전트 (서브커맨드)"),
+        ('llm chat "질문"', "도구 없이 순수 채팅"),
+        ("llm sync", "기록만 커밋·ff pull·push"),
+        ("llm session adopt", ".llm 기록을 이 폴더에 연결"),
+        ('llm --trust "질문"', "셸 관대(위험만 확인)"),
+        ('llm --confirm-all "질문"', "셸 전부 확인"),
+        ('llm --yes "질문"', "셸 확인 생략"),
+        ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
+        ("llm --view", "대화 내용 보기"),
+        ("llm --balance", "API 잔액 조회"),
     ]
     width = max(display_width(cmd) for cmd, _ in usage)
     for cmd, desc in usage:
@@ -5121,7 +5274,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
     if history_scope_is_repo():
         print(
             f"   {C.dim}기록이 이 폴더 안(.llm/)에 있어 push/pull 하면 다른 PC에서 그대로"
-            f" 이어집니다  →  llm --sync-history{C.reset}"
+            f" 이어집니다  →  llm sync{C.reset}"
         )
     if not names:
         print(f"   {C.dim}(저장된 세션이 없습니다){C.reset}")
@@ -5175,15 +5328,20 @@ def cmd_agent(
     auto_safe: bool = True,
     auto_workspace: bool = False,
     allow_all: bool = False,
-    ask_mode: str = "risky",
+    ask_mode: str = "outside",
     ask_source: str = "",
     no_balance: bool = False,
     auto_pull: bool = True,
+    startup: bool = True,
 ) -> int:
-    print_banner(session, root, chat_only, ask_mode=ask_mode, ask_source=ask_source)
-    # 다른 PC에서 올려 둔 최신 대화를 먼저 받아온다(아래 load_history 가 그대로 읽는다).
-    maybe_auto_pull(root, enabled=auto_pull)
-    print_history_sync_hint(root, history_file)
+    if startup:
+        print_banner(session, root, chat_only, ask_mode=ask_mode, ask_source=ask_source)
+        print_continue_status(root, session, history_file)
+        # 다른 PC에서 올려 둔 최신 대화를 먼저 받아온다(아래 load_history 가 그대로 읽는다).
+        if auto_pull and auto_pull_enabled() and history_scope_is_repo():
+            print_phase("원격 대화 기록 확인")
+        maybe_auto_pull(root, enabled=auto_pull)
+        print_history_sync_hint(root, history_file)
 
     stripped = prompt.strip().lower()
     if stripped in {"/summary", "/summarize", "/요약"}:
@@ -5308,14 +5466,14 @@ def cmd_agent(
             names = [(tc.get("function") or {}).get("name") for tc in tool_calls]
             if "todo" in names:
                 todo_seen = True
-            if not todo_seen and not todo_reminded:
-                # 아직 계획이 없다: 도구를 실행하지 않고 계획을 먼저 세우도록 1회 요청.
-                # (assistant 턴을 저장하지 않으므로 tool_calls/tool 짝도 깨지지 않는다.)
+            if (
+                not todo_seen
+                and not todo_reminded
+                and len([n for n in names if n != "todo"]) >= 2
+            ):
+                # 여러 도구를 쓰는데 계획이 없으면 안내만(차단하지 않음).
                 todo_reminded = True
-                print_warn("먼저 작업 계획(todo)을 세우도록 요청합니다.", stream=True)
-                messages.append({"role": "user", "content": TODO_REMINDER})
-                save_history(history_file, messages)
-                continue
+                print_info(TODO_REMINDER)
 
             assistant_message: dict[str, Any] = {
                 "role": "assistant",
@@ -5336,8 +5494,22 @@ def cmd_agent(
 
                 summary = summarize_args(name, raw_args)
                 counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
+                pretty = {
+                    "read": "읽기",
+                    "edit": "편집",
+                    "find": "탐색",
+                    "shell": "셸",
+                    "todo": "계획",
+                    "read_file": "읽기",
+                    "write_file": "쓰기",
+                    "str_replace": "치환",
+                    "delete_file": "삭제",
+                    "list_dir": "목록",
+                    "glob": "glob",
+                    "grep": "검색",
+                }.get(name, name)
                 slot = tool_line_open(
-                    f"{counter}{C.cyan}🔧 {name}{C.reset} {C.dim}{summary}{C.reset}"
+                    f"{counter}{C.cyan}🔧 {pretty}{C.reset} {C.dim}{summary}{C.reset}"
                 )
 
                 result = run_tool(
@@ -5404,11 +5576,143 @@ def cmd_agent(
         return 1
 
 
+def expand_cli_argv(argv: list[str]) -> list[str]:
+    """서브커맨드를 기존 플래그로 펼친다. 예: sync → --sync-history, -i → --interactive."""
+    if not argv:
+        return argv
+    head, rest = argv[0], argv[1:]
+    if head in {"sync"}:
+        return ["--sync-history", *rest]
+    if head == "ask":
+        return list(rest)
+    if head == "chat":
+        return ["--chat", *rest]
+    if head in {"repl", "i"}:
+        return ["--interactive", *rest]
+    if head == "session":
+        if not rest or rest[0] in {"ls", "list", "status"}:
+            return []  # 세션 목록(인자 없는 llm 과 동일)
+        if rest[0] == "adopt":
+            return ["--session-adopt", *rest[1:]]
+        print_error("사용법: llm session [ls|adopt]")
+        return ["--help"]
+    return argv
+
+
+def cmd_session_adopt(root: Path, folders: dict[str, str]) -> tuple[dict[str, str], str | None]:
+    """`.llm` 기록에서 세션을 골라 이 폴더에 연결한다."""
+    folders, bound = auto_bind_from_repo_history(folders, root)
+    if bound:
+        print_ok(f"기록에 연결했습니다 · session={bound}")
+        return folders, bound
+    names = repo_history_sessions(root) if history_scope_is_repo() else []
+    if not names:
+        print_error("이 폴더 .llm/ 에 연결할 대화 기록이 없습니다.")
+        return folders, None
+    print_title("연결할 세션")
+    for i, name in enumerate(names, 1):
+        print(f"  {C.dim}{i}.{C.reset} {name}")
+    if not sys.stdin.isatty():
+        print_info("TTY가 아닙니다. llm -s <이름> 으로 지정하세요.")
+        return folders, None
+    try:
+        raw = input(f"{C.cyan}번호 또는 이름{C.reset}: ").strip()
+    except (EOFError, KeyboardInterrupt):
+        eprint()
+        return folders, None
+    if not raw:
+        return folders, None
+    pick = names[int(raw) - 1] if raw.isdigit() and 1 <= int(raw) <= len(names) else raw
+    if pick not in names:
+        print_error(f"없는 세션: {pick}")
+        return folders, None
+    folders, err, detail = ensure_binding(folders, root, pick)
+    if err:
+        print_error(f"세션 '{pick}'은(는) 다른 폴더에 바인딩되어 있습니다: {detail}")
+        return folders, None
+    print_ok(f"기록에 연결했습니다 · session={pick}")
+    return folders, pick
+
+
+def cmd_repl(
+    session: str,
+    history_file: Path,
+    root: Path,
+    args: Any,
+) -> int:
+    """같은 프로세스에서 여러 턴 이어가기. 종료 시 1회 sync(켜져 있을 때)."""
+    auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
+    print_banner(session, root, args.chat, ask_mode=ask_mode, ask_source=ask_source)
+    print_continue_status(root, session, history_file)
+    print_phase("대화형 모드")
+    print_info("빈 줄·/exit 종료 · /sync 기록 올리기 · /chat|/agent 모드 전환")
+    if not args.no_pull:
+        maybe_auto_pull(root, enabled=True)
+
+    chat_only = bool(args.chat)
+    turn = 0
+    while True:
+        try:
+            mode_tag = "chat" if chat_only else "agent"
+            line = input(f"{C.cyan}llm:{mode_tag}>{C.reset} ").strip()
+        except (EOFError, KeyboardInterrupt):
+            eprint()
+            print_info("대화형 모드를 끝냅니다.")
+            break
+        if not line or line in {"/exit", "/quit", ":q"}:
+            print_info("대화형 모드를 끝냅니다.")
+            break
+        if line == "/sync":
+            cmd_sync_history(root, session)
+            continue
+        if line == "/chat":
+            chat_only = True
+            print_ok("채팅 모드")
+            continue
+        if line == "/agent":
+            chat_only = False
+            print_ok("에이전트 모드")
+            continue
+        if line.startswith("/"):
+            print_warn("알 수 없는 명령입니다. /exit /sync /chat /agent")
+            continue
+
+        turn += 1
+        print_phase(f"턴 {turn}")
+        rc = cmd_agent(
+            prompt=line,
+            session=session,
+            history_file=history_file,
+            root=root,
+            chat_only=chat_only,
+            yes=args.yes,
+            model=args.model,
+            max_steps=max(1, args.max_steps),
+            stream=not args.no_stream,
+            thinking=not args.no_thinking,
+            show_thinking=args.show_thinking,
+            auto_safe=not args.confirm_all,
+            auto_workspace=auto_workspace,
+            allow_all=allow_all,
+            ask_mode=ask_mode,
+            ask_source=ask_source,
+            no_balance=args.no_balance or turn > 1,
+            auto_pull=False,
+            startup=False,
+        )
+        if rc != 0:
+            print_warn(f"이 턴 종료 코드 {rc} — 다음 입력을 받을 수 있습니다.")
+
+    auto_sync_history(root, session)
+    return 0
+
+
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="llm",
         add_help=True,
         description="DeepSeek CLI 에이전트",
+        epilog="서브커맨드: ask | chat | sync | session [ls|adopt] | repl(-i)",
     )
     parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑, 기존 매핑은 갈아탐)")
     parser.add_argument(
@@ -5418,6 +5722,17 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         help="다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용)",
     )
     parser.add_argument("--chat", action="store_true", help="도구 없이 순수 채팅")
+    parser.add_argument(
+        "-i",
+        "--interactive",
+        action="store_true",
+        help="대화형 REPL (같은 세션에서 여러 턴)",
+    )
+    parser.add_argument(
+        "--session-adopt",
+        action="store_true",
+        help=".llm 기록을 이 폴더 세션으로 연결 (llm session adopt)",
+    )
     parser.add_argument("-y", "--yes", action="store_true", help="셸 명령 확인 생략")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"모델 (기본: {DEFAULT_MODEL})")
     parser.add_argument(
@@ -5443,16 +5758,26 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="모델의 사고 과정(reasoning) 원문을 회색으로 실시간 출력",
     )
-    parser.add_argument("--confirm-all", action="store_true", help="읽기 전용 명령도 확인 후 실행 (자동 실행 비활성)")
+    parser.add_argument("--confirm-all", action="store_true", help="모든 셸 명령 확인 (가장 엄격)")
+    parser.add_argument(
+        "--safe",
+        action="store_true",
+        help="작업 폴더 안 명령은 자동(기본과 동일). 밖·설치 등은 확인",
+    )
+    parser.add_argument(
+        "--trust",
+        action="store_true",
+        help="sudo·설치·폴더 밖 삭제만 확인(관대)",
+    )
     parser.add_argument(
         "--allow-all",
         action="store_true",
-        help="sudo·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (기본값, LLM_ALLOW_ALL=1과 동일)",
+        help="(--trust 와 동일, 구 옵션)",
     )
     parser.add_argument(
         "--auto-workspace",
         action="store_true",
-        help="작업 폴더 안에서 끝나는 명령은 확인 없이 실행 (폴더 밖·설치·이력 변경은 확인, LLM_AUTO_WORKSPACE=1이면 기본 활성)",
+        help="(--safe 와 동일, 구 옵션)",
     )
     parser.add_argument("--allow-list", action="store_true", help="이 세션의 셸 자동 허용 목록 보기")
     parser.add_argument("--allow-clear", action="store_true", help="이 세션의 셸 자동 허용 목록 비우기")
@@ -5462,7 +5787,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--sync-history",
         action="store_true",
-        help="대화 기록(.llm/)만 커밋하고 pull --rebase 후 push (다른 PC에서 이어가기)",
+        help="대화 기록만 커밋·ff-only pull·push (llm sync)",
     )
     parser.add_argument(
         "--no-pull",
@@ -5481,7 +5806,8 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
 def main(argv: list[str] | None = None) -> int:
     load_dotenv()
     init_color()
-    args = parse_args(argv if argv is not None else sys.argv[1:])
+    raw = list(argv if argv is not None else sys.argv[1:])
+    args = parse_args(expand_cli_argv(raw))
 
     global RATES_OFFLINE
     RATES_OFFLINE = bool(args.no_rates)
@@ -5499,6 +5825,10 @@ def main(argv: list[str] | None = None) -> int:
     # 대화 기록을 둘 폴더를 확정한다(기본: 이 폴더 안 .llm/ — push 하면 다른 PC에서 이어짐).
     set_history_base(history_scope_dir(root))
     folders = load_bindings()
+
+    if args.session_adopt:
+        folders, bound = cmd_session_adopt(root, folders)
+        return 0 if bound else 1
 
     if args.sync_history:
         return cmd_sync_history(root, folders.get(folder_key) or root.name)
@@ -5555,7 +5885,13 @@ def main(argv: list[str] | None = None) -> int:
     else:
         session = owned
         if session is None:
-            if prompt:
+            # clone 등으로 .llm 기록만 있는 경우 자동 연결
+            folders, bound = auto_bind_from_repo_history(folders, root)
+            if bound:
+                session = bound
+                print_ok(f"이 폴더 대화 기록에 연결했습니다 · session={session}")
+        if session is None:
+            if prompt or args.interactive:
                 session = auto_session_name(root, folders)
                 # 폴더를 옮겨 온 흔적(고아 바인딩)이 있으면, 새 세션을 만들기 전에
                 # 이전 세션을 이어받을지 확인한다(사용자 확인 후 적용).
@@ -5577,6 +5913,11 @@ def main(argv: list[str] | None = None) -> int:
                     if ok:
                         session = picked
                 if session is None:
+                    folders, bound = auto_bind_from_repo_history(folders, root)
+                    if bound:
+                        session = bound
+                        print_ok(f"이 폴더 대화 기록에 연결했습니다 · session={session}")
+                if session is None:
                     if not sys.stdin.isatty():
                         hint_move_candidates(root)  # 자동화/파이프: 안내만
                     print_error("이 폴더에 매핑된 세션이 없습니다.")
@@ -5588,6 +5929,9 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
     history_file = history_file_for(session)
+
+    if args.interactive:
+        return cmd_repl(session, history_file, root, args)
 
     if args.view:
         return cmd_view(session, history_file)

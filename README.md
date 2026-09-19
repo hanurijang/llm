@@ -4,12 +4,41 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
+**버전:** v0.6.0
+
+## 최소 사용법
+
+```bash
+# API 키(저장소 폴더 .env)
+printf 'DEEPSEEK_API_KEY=sk-...\n' > .env && chmod 600 .env
+
+# PATH (한 번)
+ln -sf "$(pwd)/llm" ~/bin/llm   # 또는 이 레포의 llm 경로
+export PATH="$HOME/bin:$PATH"
+
+# 작업할 프로젝트 폴더에서
+llm "이 프로젝트 구조 요약해줘"
+llm -i                          # 같은 세션에서 여러 턴
+llm sync                        # 대화 기록만 원격에
+```
+
+| 하고 싶은 일 | 명령 |
+|---|---|
+| 에이전트(도구) | `llm "질문"` · `llm ask "질문"` |
+| 대화형(여러 턴) | `llm -i` · `llm repl` |
+| 순수 채팅 | `llm chat "질문"` · `llm --chat` |
+| 셸을 더 관대하게 | `llm --trust "질문"` |
+| 셸 전부 확인 | `llm --confirm-all "질문"` |
+| 대화 기록만 원격에 | `llm sync` |
+| 기록 세션 연결 | `llm session adopt` |
+
+기본값: **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`.
+
 - **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수
 - **채팅 모드**: 도구 없이 순수 대화
 - **세션**: 폴더별로 대화 기록을 자동 연결·보존
 - **세션 규칙**: 프로젝트별 지침을 `.llm/rules.md`에 남겨 매 요청에 반영
-- **진행 표시 위주 출력**: 도구 호출만 보여주고, 사고 과정 원문은 기본으로 감춥니다(`--show-thinking`으로 확인)
-- **기본 허용 모드**: `sudo`·설치·폴더 밖 삭제만 확인하고 나머지 셸 명령은 바로 실행
+- **진행 표시**: 배너에 session/rules/sync/확인 모드 · 이어가기 상태 한 줄 · 단계 `▸`
 - **읽기 전용 셸 자동 실행**: `ls`, `cat`, `git status` 등 안전한 명령은 확인 없이 실행
 
 ---
@@ -64,7 +93,7 @@
 가장 간단한 방법은 저장소 폴더에 `.env`를 만드는 것입니다.
 
 ```bash
-cd ~/codespace/userscript/llm
+cd ~/codespace/llm   # 또는 ~/codespace/workbayNext/llm (WSL에서 WN 옆 클론)
 printf 'DEEPSEEK_API_KEY=sk-...\n' > .env
 chmod 600 .env
 ```
@@ -90,8 +119,10 @@ export DEEPSEEK_API_KEY=sk-...
 `llm` 래퍼는 자기 위치를 기준으로 `agent.py`를 찾습니다.
 
 ```bash
-# 저장소 위치
-/home/<user>/codespace/userscript/llm/
+# 저장소 위치 (환경에 따라 다름)
+~/codespace/llm/
+# 또는
+~/codespace/workbayNext/llm/
 ├── llm          # 실행 진입점 (bash)
 └── agent.py     # 실제 로직 (python)
 ```
@@ -103,7 +134,7 @@ export DEEPSEEK_API_KEY=sk-...
 
 ```bash
 mkdir -p ~/bin
-ln -sf /home/<user>/codespace/userscript/llm/llm ~/bin/llm
+ln -sf ~/codespace/llm/llm ~/bin/llm   # 실제 클론 경로로
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -132,9 +163,9 @@ llm                # 인자 없이 실행하면 상태/세션 목록 표시
 GitHub(비공개)에 있으므로 clone 하면 됩니다.
 
 ```bash
-mkdir -p ~/codespace/userscript
-git clone git@github.com:hanurijang/llm.git ~/codespace/userscript/llm
-chmod +x ~/codespace/userscript/llm/llm
+mkdir -p ~/codespace
+git clone git@github.com:hanurijang/llm.git ~/codespace/llm
+chmod +x ~/codespace/llm/llm
 ```
 
 > - `Permission denied (publickey)`가 나오면 새 PC의 SSH 공개키가 GitHub에
@@ -146,7 +177,7 @@ chmod +x ~/codespace/userscript/llm/llm
 ### ② API 키 넣기
 
 ```bash
-cd ~/codespace/userscript/llm
+cd ~/codespace/llm
 printf 'DEEPSEEK_API_KEY=sk-여기에-본인-키\n' > .env
 chmod 600 .env
 ```
@@ -159,7 +190,7 @@ chmod 600 .env
 
 ```bash
 mkdir -p ~/bin
-ln -sf ~/codespace/userscript/llm/llm ~/bin/llm
+ln -sf ~/codespace/llm/llm ~/bin/llm
 echo 'export PATH="$HOME/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
@@ -168,7 +199,7 @@ source ~/.bashrc
 
 ```bash
 which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.4.0) 표시 (API 호출 없음)
+llm                 # 상태 + 버전(v0.6.0) 표시 (API 호출 없음)
 llm --balance       # 키·네트워크 확인
 llm --chat "안녕"   # 모델 응답 확인
 llm "이 폴더 요약해줘"   # 도구까지 확인
@@ -181,9 +212,10 @@ llm "이 폴더 요약해줘"   # 도구까지 확인
 - **대화 기록은 저장소와 함께 옵니다**: 기록이 `<작업폴더>/.llm/`에 있어
   `git pull`(또는 clone)만 하면 이전 PC의 대화가 그대로 이어집니다.
   다른 PC에서 작업했다면 **첫 질의 때 원격 최신 기록을 자동으로 받아온 뒤**
-  이어가고(`LLM_AUTO_PULL=0`/`--no-pull`이면 끔), 이쪽 대화도 **매 턴 끝에
-  자동으로 커밋·push**됩니다(`LLM_AUTO_SYNC=0`이면 꺼지고, 그때는
-  `llm --sync-history`로 직접 올립니다).
+  이어가고(`LLM_AUTO_PULL=0`/`--no-pull`이면 끔). 대화 기록 **자동
+  커밋·push는 기본 꺼짐**입니다. 켤 때만 `LLM_AUTO_SYNC=1`, 수동은
+  `llm --sync-history`. clone 직후 `.llm/history_*` 가 하나이거나 폴더명과
+  같으면 **세션을 자동으로 연결**합니다.
 - **저장소 폴더 이름을 같게 유지**하세요(README의 설치 경로 그대로면 자동).
   세션 이름이 폴더 이름에서 만들어지므로, 이름이 다르면 `llm -s <이름>`으로
   지정하거나 `llm --view`가 알려주는 `-s` 안내를 따르면 됩니다.
@@ -218,14 +250,11 @@ llm --chat "파이썬에서 리스트와 튜플의 차이는?"
 # 셸 명령 확인 생략 (자동화/신뢰 환경)
 llm --yes "테스트 돌리고 실패하면 원인 요약해줘"
 
-# 기본값: sudo·설치·폴더 밖 삭제만 확인하고 나머지는 바로 실행
+# 기본값: 작업 폴더 안 명령은 확인 없이(safe). 밖·설치 등은 확인
 llm "테스트 돌리고 실패하면 원인 요약해줘"
 
-# 더 엄격하게: 작업 폴더 안에서 끝나는 명령만 확인 없이 실행
-llm --auto-workspace "빌드 정리하고 린트·포맷까지 돌려줘"
-
-# 사고 과정 없이 빠르게 답만 받기
-llm --no-thinking --chat "리스트와 튜플 차이는?"
+# 더 관대하게: sudo·설치·폴더 밖 삭제만 확인
+llm --trust "빌드 정리하고 린트·포맷까지 돌려줘"
 
 # 모델의 사고 과정 원문까지 보고 싶을 때 (기본은 도구 진행만 표시)
 llm --show-thinking "이 코드의 버그 원인을 추적해줘"
@@ -264,8 +293,10 @@ llm --allow-clear
 | `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |
-| `--allow-all` | `sudo`·설치·폴더 밖 삭제만 확인하고 나머지는 확인 없이 실행 (**기본값**, `LLM_ALLOW_ALL=1`과 동일, 명시 시 환경변수보다 우선) |
-| `--auto-workspace` | 작업 폴더 안에서 끝나는 명령만 확인 없이 실행 (기본보다 엄격, `LLM_AUTO_WORKSPACE=1`이면 기본 활성, 명시 시 환경변수보다 우선) |
+| `--safe` | 작업 폴더 안 명령 자동(**기본과 동일**). 구 `--auto-workspace` |
+| `--trust` | sudo·설치·폴더 밖 삭제만 확인(관대). 구 `--allow-all` |
+| `--allow-all` | `--trust` 와 동일(구 옵션) |
+| `--auto-workspace` | `--safe` 와 동일(구 옵션) |
 | `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 50). 한도에 도달하면 종료하지 않고 **이어서 N회 더 진행할지 `[y/N]`으로 확인** |
 | `--no-stream` | 스트리밍 비활성화 |
@@ -279,7 +310,7 @@ llm --allow-clear
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
-| `--sync-history` | 이 세션의 대화 기록·요약만 커밋 → `git pull --rebase --autostash` → `push` (다른 PC에서 이어가기). 실행 종료 시에는 자동으로 수행됨(`LLM_AUTO_SYNC=0`이면 꺼짐) |
+| `--sync-history` | 기록만 커밋 → **ff-only** pull → push (`llm sync`). 자동 sync 기본 끔 |
 | `--no-pull` | 이번 실행은 원격의 최신 대화 기록을 자동으로 받아오지 않음 (`LLM_AUTO_PULL=0`과 동일) |
 | `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |
 | `--view` | 세션 대화 내용 보기 (Markdown) |
@@ -287,22 +318,16 @@ llm --allow-clear
 | `--delete` | 현재 세션 파일 삭제 및 폴더 매핑 해제 |
 | `--balance` | DeepSeek API 잔액 조회 (화폐별 잔액 + 원화 환산) |
 
-셸 실행 범위 우선순위: `--confirm-all` > `--allow-all` > `--auto-workspace` >
-`LLM_ALLOW_ALL` > `LLM_AUTO_WORKSPACE` > 기본(허용 모드). **직접 준 CLI 옵션이
-환경변수를 이깁니다.** 그래서 `.env`(저장소 폴더 또는 `/etc/env/.env`)에
-`LLM_AUTO_WORKSPACE=1`이 남아 있어도 `--allow-all`로 실행하면 이번 실행은
-기본(허용) 모드입니다. 현재 어떤
-모드로 도는지는 시작 배너의 `확인=...`에 표시되고, 모드가 환경변수에서 온
-경우에는 그 사실과 해제 방법을 함께 안내합니다.
+셸 실행 범위 우선순위: `--confirm-all` > `--trust`/`--allow-all` > `--safe`/`--auto-workspace` >
+`LLM_SHELL_TRUST`/`LLM_ALLOW_ALL` > `LLM_AUTO_WORKSPACE` > **기본(safe)**. **직접 준 CLI 옵션이
+환경변수를 이깁니다.** 시작 배너에 `확인=safe|trust|…` · `sync=on|off` · 이어가기 상태 한 줄이
+표시됩니다.
 
 ```text
-── 에이전트 v0.4.0  session=llm  root=/home/rasp/proj  rules=on  확인=outside (폴더 밖 포함)
-ℹ️  환경변수 LLM_AUTO_WORKSPACE=1 로 'outside' 모드입니다 (조합 명령의 조각마다 확인). .env 에서 지우면 기본 'risky' 로 돌아갑니다.
+── 에이전트 v0.6.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
+ℹ️  이어가기 · 로컬 12턴 · 원격과 같음
+▸ 원격 대화 기록 확인
 ```
-
-시작 배너에는 모드·세션·폴더·규칙·확인 모드와 함께 **버전**(`v0.4.0`)이
-표시됩니다. 인자 없이 `llm`만 실행했을 때의 머리말과 세션 목록 상단에도 같은
-버전이 나옵니다. 버전 값은 `agent.py`의 `VERSION` 상수 하나로 관리합니다.
 
 ### 사용 예
 
@@ -354,33 +379,25 @@ llm --delete
 읽어 맥락을 이어갑니다(수동 `git pull` 없이도 됩니다).
 
 ```bash
-llm "이어서 작업 해줘"     # 시작 때 원격 최신 기록 자동 수신 → 끝나면 자동 커밋·push
-llm --no-pull "질문"       # 이번 실행은 자동 수신을 건너뜀 (LLM_AUTO_PULL=0과 동일)
-llm --sync-history        # 방금/지난 대화를 지금 올리고 싶을 때 (자동과 같은 동작)
+llm "이어서 작업 해줘"     # 시작 때 원격 최신 기록 자동 수신(가능하면) · sync는 기본 안 함
+llm -i                     # 같은 프로세스에서 여러 턴 · 끝낼 때 sync(켜져 있으면)
+llm --no-pull "질문"       # 이번 실행은 자동 수신을 건너뜀
+llm sync                   # 기록을 지금 올리고 싶을 때 (커밋 → ff-only pull → push)
+LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
 ```
 
-- **에이전트 실행(프롬프트 한 턴)이 끝날 때마다 자동으로** 이 세션의 기록을
-  커밋하고 `git pull --rebase --autostash` 후 `push` 합니다(화면에
-  `🔄 대화 기록 동기화` 블록이 뜸). 그래서 **최종 답변까지 포함해 매 턴 원격에
-  올라가고**, 다음 PC에서는 `git pull`만 하면 이어집니다.
-- **질의 전 자동 수신**: 실행을 시작할 때도 원격을 확인해, 새 커밋이 있으면
-  `git pull --ff-only --autostash`로 최신 대화를 받아옵니다(배너 뒤
-  `원격의 최신 대화 기록을 받아왔습니다` 안내). 내려받은 기록을 곧바로 읽어
-  맥락을 잇습니다.
-  - 원격이 앞서지 않았으면 아무 것도 하지 않고, **받아오기에 실패해도 경고만
-    하고 로컬 기록으로 계속**합니다(로컬 커밋이 갈라져 fast-forward가 안 되는
-    경우에도 임의로 rebase하지 않습니다).
-  - **커밋되지 않은 기록 변경이 있으면 받아오지 않고** 올리는 방법만 안내합니다.
-    (`--autostash`가 충돌하면 기록 파일에 충돌 표시가 남아 JSON이 깨지고, 그대로
-    덮어써지면 대화를 잃을 수 있어 로컬 기록을 지킵니다.) 코드 파일 등 원격과
-    충돌한 경우에는 받아온 뒤 충돌 파일을 알려 줍니다(내 변경은 autostash에 보존).
-  - 같은 폴더에서 `LLM_AUTO_PULL_TTL`(기본 120초) 안에는 다시 확인하지 않아
-    연달아 실행할 때 매번 네트워크를 타지 않습니다.
-  - 끄려면 `LLM_AUTO_PULL=0`(또는 `false`/`no`/`off`)이나 `--no-pull`을 씁니다.
-  - 마지막 확인 시각은 기기 로컬 파일 `~/.local/share/llm/autopull.json`에
-    적습니다(커밋·동기화 대상 아님).
-- 끄려면 `LLM_AUTO_SYNC=0`(또는 `false`/`no`/`off`)으로 실행하거나 `.env`에
-  넣습니다. 이때는 `llm --sync-history`로 직접 올리세요.
+- **자동 커밋·push는 기본 꺼짐.** `LLM_AUTO_SYNC=1`일 때만 실행 종료 시
+  기록·요약을 커밋하고 push 합니다(화면에 `▸ 대화 기록 동기화` 표시).
+- **질의 전·sync 공통 정책 = fast-forward only** (`history_receive_remote`).
+  rebase 하지 않으며, 갈라지면 안내만 하고 로컬로 계속합니다. 미커밋 `.llm`
+  변경이 있으면 수신을 건너뜁니다.
+- **질의 전 자동 수신**(`LLM_AUTO_PULL`, 기본 켜짐): 원격이 앞서면 ff-only로
+  받아 맥락을 잇습니다. 배너 아래 **이어가기** 한 줄로 로컬 턴 수·미커밋·원격
+  ahead/behind를 보여 줍니다.
+- **clone 직후**: `.llm/history_*`가 하나이거나 폴더명과 같으면 세션을
+  자동 바인딩합니다. 여러 개면 `llm session adopt` 또는 `llm -s <이름>`.
+- 끄려면 수신은 `LLM_AUTO_PULL=0`/`--no-pull`, 자동 업로드는 변수를 비우거나
+  `0`(기본이 이미 끔).
 - `LLM_HISTORY=home`(홈 저장)이거나 git 저장소가 아니거나 기록에 변경이 없으면
   아무 것도 하지 않습니다. upstream(`@{u}`)이 없으면 커밋만 하고 push는
   건너뜁니다.
@@ -390,7 +407,7 @@ llm --sync-history        # 방금/지난 대화를 지금 올리고 싶을 때 
 - 커밋 메시지는 `llm: 대화 기록 동기화 (session=<세션>)` 형식입니다.
 - 실행 시작 때 아직 못 올린 변경이 남아 있으면(이전 턴의 push 실패 등) 그
   사실을 알려주고, 실행이 끝날 때 다시 자동 시도합니다.
-- 원격에 새 커밋이 있으면 `--rebase --autostash`로 먼저 받아옵니다.
+- 원격에 새 커밋이 있으면 **ff-only**로 먼저 받아옵니다(갈라지면 안내만).
 - `.llm/`이 `.gitignore`에 있으면 push가 되지 않으므로, 그 줄을 지우라는
   안내와 함께 중단합니다.
 - 기본값이 세션 폴더 저장이므로, 예전처럼 홈(`~/.local/share/llm/`)에 두고
@@ -757,20 +774,17 @@ llm --rules
 
 ## 에이전트 도구
 
-에이전트 모드에서 모델이 사용할 수 있는 도구입니다. 모든 경로는 **작업
-루트(workspace) 안으로 제한**됩니다.
+에이전트 모드에서 모델이 쓰는 도구입니다(v0.5: **5개로 통합**). 경로는
+**워크스페이스 안**만. 예전 이름(`read_file`, `str_replace`, `grep` …)도
+alias로 동작합니다.
 
 | 도구 | 설명 | 주요 인자 |
 |------|------|-----------|
-| `todo` | 작업 계획(할 일 목록) 설정/갱신. 에이전트는 작업을 시작할 때 **먼저 이 도구로 목표(`goal`)와 계획을 보여주고**, 진행에 따라 각 항목의 상태를 갱신합니다. 이미 계획이 있으면(요약을 넘어 유지) 새로 만들지 않고 같은 계획을 이어서 갱신합니다. | `goal`(목표/조치 요약, 생략 시 이전 목표 유지), `items` (`content`, `status`: `pending`/`in_progress`/`done`) |
-| `read_file` | 텍스트 파일 읽기 (1-based 줄 번호 prefix) | `path`, `offset`, `limit` |
-| `write_file` | 파일 생성/덮어쓰기 | `path`, `contents` |
-| `str_replace` | 고유 문자열 치환 (기존 파일 편집) | `path`, `old_string`, `new_string`, `replace_all` |
-| `delete_file` | 워크스페이스 내 파일 삭제 | `path` |
-| `list_dir` | 디렉터리 목록 | `path` |
-| `glob` | 패턴으로 파일 찾기 (예: `**/*.py`) | `pattern`, `path` |
-| `grep` | 정규식으로 내용 검색 | `pattern`, `path`, `glob`, `case_insensitive` |
-| `shell` | bash 명령 실행 | `command`, `timeout` |
+| `todo` | 짧은 작업 계획(여러 단계일 때) | `goal`, `items` |
+| `read` | 파일 읽기 | `path`, `offset`, `limit` |
+| `edit` | 수정 · `action=replace\|write\|delete` | `path`, `old_string`/`new_string` 또는 `contents` |
+| `find` | 탐색 · `mode=list\|glob\|grep` | `path`, `pattern`, `glob` |
+| `shell` | bash (테스트·git·빌드). 파일 I/O에는 쓰지 말 것 | `command`, `timeout` |
 
 ### 제약
 
@@ -786,18 +800,13 @@ llm --rules
 
 `shell` 도구는 다음 안전장치를 가집니다.
 
-1. **자동 실행 범위(기본값 = 허용 모드)** — 기본은 **`sudo`·설치·폴더 밖 삭제만
-   확인**하고 나머지는 확인 없이 실행합니다(`--allow-all`, `LLM_ALLOW_ALL=1`과
-   동일). 더 엄격하게 쓰려면 `--auto-workspace`(작업 폴더 안 명령만 허용),
-   전부 확인하려면 `--confirm-all`을 씁니다.
-   - 확인 대상 1(권한 상승): `sudo`, `su`, `doas`, `pkexec`
-   - 확인 대상 2(설치·패키지 관리): `apt`/`dnf`/`pacman`/`brew` … `install`,
-     `pip install`, `python -m pip install`, `npm install`/`ci`, `yarn add`,
-     `uv pip install`, `poetry add`, `cargo`/`gem`/`go` `install`, `npx`,
-     `make install` 등
-   - 확인 대상 3(폴더 밖 삭제): `rm -rf ~/x`, `rm -rf ../x`, `rm -rf /tmp/x`처럼
-     작업 폴더 밖을 지우는 `rm`/`rmdir`/`shred`/`truncate`/`dd`
-   - 위험 패턴(`rm -rf /`, `mkfs.*`, …)은 어느 모드에서도 실행 자체가 차단됩니다.
+1. **자동 실행 범위(기본값 = safe)** — 작업 폴더 안에서 끝나는 명령은 확인
+   없이 실행하고, 폴더 밖·설치·`sudo` 등은 확인합니다(`--safe`). 더 관대하게
+   쓰려면 `--trust`, 전부 확인하려면 `--confirm-all`을 씁니다.
+   - 확인 대상(권한 상승): `sudo`, `su`, `doas`, `pkexec`
+   - 확인 대상(설치·패키지): `apt`/`pip`/`npm install` 등
+   - 확인 대상(폴더 밖 삭제): 워크스페이스 밖 `rm`/`rmdir` 등
+   - 위험 패턴(`rm -rf /`, `mkfs.*`, …)은 어느 모드에서도 차단
 2. **위험 패턴 차단** — 실행 전 금지 패턴 검사
    (예: `rm -rf /`, `mkfs.*`, `dd of=/dev/*`, fork bomb, `shutdown/reboot` 등)
 3. **읽기 전용/검증 명령 자동 실행** — 아래 화이트리스트에 해당하면 확인 없이
@@ -1033,13 +1042,13 @@ llm --rules
 | `DEEPSEEK_API_KEY` | (없음) | **필수**. API 키 |
 | `LLM_MODEL` | `deepseek-flash` | 기본 모델 |
 | `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(glow)을 끄고 원문 출력, 도구 결과 제자리 갱신도 끔(로그로 출력) |
-| `LLM_ALLOW_ALL` | (미설정) | `1`/`true`/`yes`/`on` 이면 `--allow-all`(기본값과 동일). 직접 준 CLI 옵션이 우선 |
-| `LLM_AUTO_WORKSPACE` | (미설정) | `1`/`true`/`yes`/`on` 이면 항상 `--auto-workspace` 켜짐. 직접 준 CLI 옵션이 우선. 두 변수가 모두 있으면 `LLM_ALLOW_ALL`이 우선 |
-| `LLM_RATES` | (미설정) | `0`/`false`/`no`/`off` 이면 실시간 환율 조회를 끄고 가정 환율로 환산 (`--no-rates`와 동일) |
-| `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 파일 경로를 직접 지정 (아래 조회 순서에서 가장 먼저) |
-| `LLM_HISTORY` | (미설정) | 대화 기록 저장 위치. `home` 이면 예전처럼 `~/.local/share/llm/`(동기화 안 됨), 그 외/미설정이면 작업 폴더 `.llm/` |
-| `LLM_AUTO_SYNC` | `1`(켜짐) | `0`/`false`/`no`/`off` 이면 실행 종료 시 자동 커밋·push를 끔(직접 `--sync-history`로 올림) |
-| `LLM_AUTO_PULL` | `1`(켜짐) | `0`/`false`/`no`/`off` 이면 질의 전 원격 최신 기록 자동 수신을 끔 (`--no-pull`과 동일) |
+| `LLM_ALLOW_ALL` / `LLM_SHELL_TRUST` | (미설정) | `1`이면 `--trust`(관대). CLI가 우선 |
+| `LLM_AUTO_WORKSPACE` | (미설정) | `1`이면 `--safe`. **미설정 시에도 기본은 safe** |
+| `LLM_RATES` | (미설정) | `0`이면 실시간 환율 끄고 가정 환율 (`--no-rates`) |
+| `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |
+| `LLM_HISTORY` | (미설정) | `home`이면 `~/.local/share/llm/`, 그 외 작업폴더 `.llm/` |
+| `LLM_AUTO_SYNC` | (꺼짐) | `1`/`true`/`yes`/`on` 이면 종료 시 자동 커밋·push |
+| `LLM_AUTO_PULL` | `1`(켜짐) | `0`이면 질의 전 원격 수신 끔 |
 | `LLM_AUTO_PULL_TTL` | `120` | 같은 폴더에서 원격을 다시 확인하기까지의 최소 간격(초) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 
@@ -1125,9 +1134,9 @@ llm (bash)  →  agent.py (python)
   이면 홈), `history_file_of_folder`/`find_history_file`,
   `migrate_legacy_session`(홈 → `.llm` 1회 이전, 더 긴 쪽 채택, 홈 원본은
   `*.migrated`), `history_sync_paths`/`git_run`/`cmd_sync_history`
-  (`--sync-history`: 기록만 커밋 → `pull --rebase --autostash` → `push`),
-  `auto_sync_enabled`/`auto_sync_history`(실행 종료 시 자동 동기화, 기본 켜짐·
-  `LLM_AUTO_SYNC=0`으로 끔), `auto_pull_enabled`/`auto_pull_interval`/
+  (`--sync-history` / `llm sync`: 기록만 커밋 → ff-only pull → push),
+  `auto_sync_enabled`/`auto_sync_history`(실행 종료 시 자동 동기화, **기본 꺼짐**·
+  `LLM_AUTO_SYNC=1`로 켬), `auto_pull_enabled`/`auto_pull_interval`/
   `maybe_auto_pull`(질의 전 원격 최신 기록 자동 수신, 기본 켜짐·`LLM_AUTO_PULL=0`/
   `--no-pull`로 끔, `autopull.json`에 확인 시각 기록, 커밋되지 않은 기록 변경이
   있으면 수신을 건너뜀), `print_history_sync_hint`,
@@ -1217,8 +1226,8 @@ llm (bash)  →  agent.py (python)
 
 ### 다른 PC에서 대화가 안 보임
 
-- 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있고, **매 턴 끝에 자동으로
-  커밋·push**됩니다(끄려면 `LLM_AUTO_SYNC=0`). 다른 PC에서는 **같은 폴더**에서
+- 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있고, **원할 때
+  `llm --sync-history`(또는 `LLM_AUTO_SYNC=1`)로 커밋·push**합니다. 다른 PC에서는 **같은 폴더**에서
   실행만 하면 시작할 때 원격 최신 기록을 자동으로 받아옵니다(끄려면
   `LLM_AUTO_PULL=0`/`--no-pull`). 지난 대화를 지금 올리려면 `llm --sync-history`.
 - 자동 수신이 안 되면 `git status`로 확인하세요: 로컬 커밋이 갈라졌거나(fast-forward
@@ -1252,15 +1261,15 @@ llm (bash)  →  agent.py (python)
 
 1. **표준 라이브러리만** 사용합니다(의존성 추가 금지).
 2. 변경은 **최소**로, 기존 구조와 UI 스타일(아이콘/색상/구분선)을 유지합니다.
-3. 기존 파일 편집은 `str_replace`로, 새 파일은 `write_file`로 작성합니다.
+3. 기존 파일 편집은 `edit`(replace), 새 파일은 `edit`(write)로 작성합니다.
 4. **기능/CLI 옵션/동작이 바뀌면 `README.md`를 즉시 갱신합니다.**
 5. 한글 응답을 기본으로 합니다.
 6. `.env`, 키 파일 등 비밀 정보는 출력하지 않습니다.
 7. 편집 후에는 가능한 범위에서 검증합니다(문법 검사, 실행 확인 등).
 8. **코드 수정 전 `git pull --rebase --autostash`, 검증 통과 후 커밋·`git push`**
    를 수행합니다. 검증 실패·중단 시에는 되돌리고 push하지 않습니다.
-   **대화 기록도 매 턴 끝에 자동으로 커밋·push**됩니다(`LLM_AUTO_SYNC=0`이면
-   `llm --sync-history`로 직접 올림). 절차 원본:
+   **대화 기록 자동 커밋·push는 기본 꺼짐**입니다(`LLM_AUTO_SYNC=1`이면
+   켜지고, 수동은 `llm --sync-history`). 절차 원본:
    [`.llm/rules.md`](.llm/rules.md).
 
 세션 규칙 원본은 [`.llm/rules.md`](.llm/rules.md)에서 관리됩니다.

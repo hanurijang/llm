@@ -13,9 +13,10 @@
 ## 코딩 규칙
 
 - 변경은 **최소**로, 기존 구조와 스타일을 유지한다.
-- 기존 파일 편집은 `str_replace`, 새 파일은 `write_file`을 사용한다.
+- 기존 파일 편집은 `edit`(action=replace), 새 파일은 `edit`(action=write).
+- 탐색은 `find`(mode=list|glob|grep), 읽기는 `read`.
 - 사용자 대면 메시지는 공통 UI 헬퍼(`print_title`, `print_info`, `print_ok`,
-  `print_warn`, `print_error`, `rule`)를 사용해 일관성을 유지한다.
+  `print_warn`, `print_error`, `print_phase`, `rule`)를 사용해 일관성을 유지한다.
 - 터미널 정렬이 필요한 곳은 한글 등 wide 문자를 고려해 `display_width`/`pad`를
   사용한다.
 - 편집 후 `python3 -m py_compile agent.py` 등으로 검증한다.
@@ -55,19 +56,17 @@
   `autopull.json`)는 항상 홈**에 둔다. 대화 기록 위치 변경과 무관하다.
 - 홈에만 있던 기록은 그 폴더에서 처음 실행할 때 `.llm/`으로 **한 번** 옮기고,
   양쪽에 있으면 더 긴 쪽을 채택하며 홈 원본은 `*.migrated`로 남긴다.
-- **대화 기록도 매 턴 끝에 자동으로 커밋·push 한다**(에이전트 실행이 끝나면
-  `auto_sync_history`가 기록·요약만 커밋 → `pull --rebase --autostash` → `push`).
-  "다음 턴에 올리자"고 미루지 않는다. `LLM_AUTO_SYNC=0`(false/no/off)이면 꺼지고,
-  그때는 `llm --sync-history`(이 세션 기록·요약만 커밋 → `pull --rebase
-  --autostash` → `push`)로 직접 올린다.
+- **대화 기록 자동 커밋·push는 기본 꺼짐.** `LLM_AUTO_SYNC=1`일 때만 실행
+  종료 시 `auto_sync_history`가 기록·요약만 커밋 → **ff-only pull** → `push`.
+  평소에는 `llm sync`(=`--sync-history`)로 직접 올린다. rebase 하지 않는다.
 - **다른 PC에서 이어갈 때는 첫 질의 전에 원격 최신 기록을 먼저 받아온다**
-  (`maybe_auto_pull`: `git fetch` → 원격이 앞서면 `git pull --ff-only --autostash`,
-  받아온 기록을 그대로 읽어 맥락을 잇는다). 실패(네트워크·인증·갈라진 커밋)하면
-  경고만 하고 **로컬 기록으로 계속**하며 임의로 rebase하지 않는다. **커밋되지
-  않은 기록 변경이 있으면 받아오지 않고** 올리는 방법만 안내한다(autostash 충돌로
-  기록 JSON이 깨져 대화를 잃는 것을 막는다). 끄는 방법은
-  `LLM_AUTO_PULL=0`(false/no/off) 또는 `--no-pull`, 재확인 간격은
-  `LLM_AUTO_PULL_TTL`(기본 120초, 확인 시각은 홈의 `autopull.json`).
+  (`maybe_auto_pull` → `history_receive_remote`: fetch 후 ff-only만).
+  시작 시 **이어가기** 한 줄로 로컬 턴·미커밋·원격 ahead/behind를 보여 준다.
+  실패·갈라짐·dirty 면 경고만 하고 **로컬 기록으로 계속**.
+  끄는 방법은 `LLM_AUTO_PULL=0` 또는 `--no-pull`.
+- clone 직후 `.llm/history_*`가 하나이거나 폴더명과 같으면 **세션 자동 바인딩**.
+  여러 개면 `llm session adopt`.
+- 대화형: `llm -i` / `llm repl` (같은 프로세스 다턴, 종료 시 sync 1회).
 - `.llm/`이 `.gitignore`에 있으면 에러로 안내하고 중단한다.
 - `LLM_HISTORY=home`으로 되돌리면 홈의 `*.migrated` 기록을 다시 꺼내 온다.
 - 이 동작을 바꿀 때는 `agent.py`의 `HISTORY_*`/`REPO_HISTORY_DIR_NAME`/
