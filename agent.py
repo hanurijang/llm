@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import argparse
+import concurrent.futures
 import difflib
 import fnmatch
 import hashlib
@@ -11,21 +12,55 @@ import http.client
 import json
 import os
 import re
-import shlex
 import shutil
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import unicodedata
 import urllib.error
 import urllib.request
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
+from llmlib import guard, web
+from llmlib.bgshell import BgManager
+from llmlib.context import expand_mentions, load_project_docs
+from llmlib.conversation import clear_old_tool_results, finalize_interrupted
+from llmlib.filestate import FileTracker, UndoStore, diff_stat, unified_diff
+from llmlib.netretry import urlopen_with_retry
+
+# 셸 안전 분류(분리 모듈)
+from llmlib.shell_policy import (
+    SHELL_ASK_LABELS,
+    SHELL_ASK_SOURCES,
+    SHELL_CHECK_WRITE_FLAGS,
+    SHELL_DENY,
+    SHELL_FLAG_SENSITIVE_HEADS,
+    SHELL_META_PATTERN,
+    SHELL_NO_PREFIX_HEADS,
+    SHELL_NO_PREFIX_SUBCOMMANDS,
+    SHELL_SCOPE_BLOCK_DIRS,
+    SHELL_SCOPE_HEADS,
+    SHELL_SCOPE_MIN_PARTS,
+    SHELL_SUBCOMMAND_PROGRAMS,
+    SHELL_WRITE_ARG_PATTERN,
+    env_assignments_unsafe,
+    intent_summary,
+    is_safe_command,
+    is_workspace_command,
+    needs_confirm_always,
+    scan_text,
+    shell_words,
+    split_shell_commands,
+    strip_env_assignments,
+)
+
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.6.0"
+VERSION = "0.7.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -74,6 +109,9 @@ SUMMARY_KEEP_RECENT = 24
 # 요약 직후에는 새 메시지가 이만큼 쌓이기 전까지 다시 요약하지 않는다(쿨다운).
 SUMMARY_MIN_NEW_MESSAGES = 40
 SUMMARY_MAX_CHARS = 4_000
+# 실제 입력 토큰(API usage.prompt_tokens)이 이 값을 넘으면 문자 수와 무관하게 압축한다.
+COMPACT_TOKENS_ENV = "LLM_COMPACT_TOKENS"
+COMPACT_TOKENS_DEFAULT = 90_000
 SUMMARY_DIR_NAME = "summaries"
 SUMMARY_MARKER = "[이전 대화 요약]"
 # 요약 시점의 메시지 수를 요약본 본문에 흔적 없이 남겨 쿨다운 판단에 쓴다.
@@ -150,535 +188,7 @@ IGNORE_DIRS = {
     ".mypy_cache",
     ".pytest_cache",
 }
-SECRET_NAMES = {
-    ".env",
-    ".env.local",
-    ".env.production",
-    "credentials.json",
-    "id_rsa",
-    "id_ed25519",
-    "id_ecdsa",
-}
-SHELL_DENY = (
-    re.compile(r"\brm\s+-[rf]{1,2}\s+/\s*(?:$|;|&|\|)"),
-    re.compile(r"\bmkfs\."),
-    re.compile(r"\bdd\s+.*\bof=/dev/"),
-    re.compile(r":\(\)\s*\{\s*:\s*\|\s*:\s*&"),
-    re.compile(r"\b(shutdown|reboot|halt|poweroff)\b"),
-)
-
-# 기본 모드(권한 상승·설치만 확인): 이 두 부류는 그대로 확인을 받는다.
-SHELL_ASK_HEADS = {"sudo", "su", "doas", "pkexec"}
-SHELL_ASK_PATTERNS = (
-    re.compile(
-        r"\b(?:apt|apt-get|dnf|yum|zypper|pacman|snap|brew|apk|choco|winget|port)\b"
-        r"[^|;&]*\b(?:install|add|upgrade|dist-upgrade|remove|purge|reinstall)\b"
-    ),
-    re.compile(r"\b(?:pip|pip3|pipx)\b[^|;&]*\b(?:install|uninstall|download)\b"),
-    re.compile(r"\bpython3?\b[^|;&]*\b-m\s+pip\b"),
-    re.compile(
-        r"\b(?:npm|pnpm|yarn|bun|deno)\b[^|;&]*"
-        r"\b(?:install|i|ci|add|link|global|update|upgrade)\b"
-    ),
-    re.compile(r"\buv\b[^|;&]*\b(?:install|add|sync|tool)\b"),
-    re.compile(r"\b(?:poetry|pipenv|pdm|hatch)\b[^|;&]*\b(?:install|add|sync)\b"),
-    re.compile(
-        r"\b(?:cargo|rustup|gem|go|composer|bundle|dotnet|nuget|vcpkg)\b"
-        r"[^|;&]*\b(?:install|add|require|restore|get|update|upgrade)\b"
-    ),
-    re.compile(r"\b(?:npx|bunx)\b"),
-    re.compile(r"\bmake\s+(?:-\S+\s+)*install\b"),
-)
-# 작업 폴더 밖을 지우는 명령도 기본 모드에서 확인한다(홈/시스템 실수 방지)
-SHELL_ASK_DELETE_HEADS = {"rm", "rmdir", "shred", "truncate", "dd"}
-# 셸 확인 범위(모드)와 배너에 보여줄 이름
-SHELL_ASK_LABELS = {
-    "all": "확인=전부",
-    "risky": "확인=trust(위험만)",
-    "outside": "확인=safe(폴더 안)",
-    "none": "확인=없음",
-}
-# 모드가 CLI 옵션이 아니라 환경변수에서 온 경우의 안내 문구
-SHELL_ASK_SOURCES = {
-    "LLM_AUTO_WORKSPACE": (
-        "환경변수 LLM_AUTO_WORKSPACE=1 → safe 모드"
-        " (작업 폴더 밖·설치 등은 확인). .env 에서 지워도 기본은 safe 입니다."
-    ),
-    "LLM_ALLOW_ALL": (
-        "환경변수 LLM_ALLOW_ALL=1 → trust 모드"
-        " (권한 상승·설치·폴더 밖 삭제만 확인)."
-    ),
-    "LLM_SHELL_TRUST": (
-        "환경변수 LLM_SHELL_TRUST=1 → trust 모드"
-        " (권한 상승·설치·폴더 밖 삭제만 확인)."
-    ),
-}
-# heredoc 본문을 코드로 실행하는 셸/실행기: 본문도 명령으로 보고 확인을 받는다
-SHELL_HEREDOC_EXEC_HEADS = {"bash", "sh", "zsh", "dash", "ksh", "fish", "source", "eval", "sudo"}
-
-
-def _deletes_outside_workspace(segment: str, root: Path) -> bool:
-    """`rm ~/x`, `rm -rf /etc/...`, `rm -rf ../x`처럼 폴더 밖을 지우는지."""
-    tokens = shell_words(segment)
-    _, tokens = strip_env_assignments(tokens)
-    if not tokens or Path(tokens[0]).name not in SHELL_ASK_DELETE_HEADS:
-        return False
-    for tok in tokens[1:]:
-        if tok.startswith("-") or any(ch.isspace() for ch in tok):
-            continue
-        cleaned = tok.strip().strip("'\"")
-        if not cleaned or cleaned.startswith("$"):
-            continue
-        if cleaned.startswith(("/", "~")) or ".." in cleaned:
-            return True
-    return False
-
-
-def heredoc_shell_exec(command: str) -> bool:
-    """heredoc 본문을 `bash`/`sh` 같은 셸에 코드로 넘기는 명령인지.
-
-    본문은 보통 데이터라 `install` 같은 단어가 있어도 무시하지만, 셸
-    인터프리터에 넘길 때는 그대로 실행되는 코드이므로 확인을 받는다.
-    """
-    for line in (command or "").splitlines():
-        if not heredoc_marker(line):
-            continue
-        tokens = shell_words(line)
-        for tok in tokens:
-            if tok in SHELL_HEREDOC_EXEC_HEADS:
-                return True
-    return False
-
-
-def needs_confirm_always(command: str, root: Path | None = None) -> bool:
-    """기본 모드에서도 확인을 받아야 하는 명령인지(권한 상승·설치·폴더 밖 삭제).
-
-    heredoc 본문(예: `python3 - <<EOF ... EOF`의 코드)은 실행할 명령이 아니라
-    데이터이므로 `install` 같은 단어가 들어 있어도 설치로 오해하지 않는다.
-    단 `bash <<EOF`처럼 본문이 그대로 실행되는 경우는 확인을 받는다.
-    """
-    raw = (command or "").strip()
-    text = scan_text(raw)
-    if not text:
-        return True
-    if heredoc_shell_exec(raw):
-        return True
-    segments = chain_segments(text) or [text]
-    for segment in segments:
-        _, bare = strip_env_assignments(shell_words(segment))
-        if bare and Path(bare[0]).name in SHELL_ASK_HEADS:
-            return True
-        if any(rx.search(segment) for rx in SHELL_ASK_PATTERNS):
-            return True
-        if root is not None and _deletes_outside_workspace(segment, root):
-            return True
-    return False
-
-# 확인 없이 바로 실행해도 되는 읽기 전용 명령(첫 토큰 기준)
-SHELL_SAFE_COMMANDS = {
-    "pwd", "ls", "tree", "cat", "head", "tail", "wc", "stat", "file", "du", "df",
-    "grep", "rg", "egrep", "fgrep", "find", "fd", "sort", "uniq", "cut", "nl",
-    "tr", "column", "diff", "cmp", "comm", "paste", "fold", "rev", "tac",
-    "jq", "which", "whereis", "type", "command", "env", "printenv", "echo",
-    "date", "whoami", "id", "uname", "hostname", "dirname", "basename",
-    "realpath", "readlink", "md5sum", "sha1sum", "sha256sum", "base64",
-    # 셸 자체 부작용이 없는 명령(서브프로세스라 cd는 이후 명령에 영향 없음)
-    "cd", "sleep", "true", "false",
-}
-SHELL_SAFE_GIT_SUBCOMMANDS = {
-    "status", "diff", "log", "show", "branch", "remote", "ls-files",
-    "rev-parse", "rev-list", "blame", "shortlog", "describe", "tag",
-    # index만 바꾸고 `git reset`으로 되돌릴 수 있어 자동 실행 대상으로 둔다
-    "add",
-}
-SHELL_SAFE_PY_MODULES = {
-    "py_compile", "compileall", "json.tool", "unittest", "pytest", "mypy",
-}
-# 테스트/린트/타입 검사 도구: 기본 동작이 "검사"라 자동 실행한다
-SHELL_SAFE_CHECKERS = {
-    "pytest", "ruff", "flake8", "mypy", "pyright", "eslint", "shellcheck",
-    "hadolint", "yamllint", "gofmt", "checkov", "bandit",
-}
-# 위 검사 도구라도 파일을 고치는 플래그가 있으면 확인 대상
-SHELL_CHECK_WRITE_FLAGS = {
-    "--fix", "--write", "--fix-only", "-w", "--in-place", "--install-types",
-}
-# black/prettier 등은 기본 동작이 "쓰기"라 검사 플래그일 때만 자동 실행
-SHELL_PAIRS_ONLY_READONLY = (("black", {"--check", "--diff"}), ("prettier", {"--check"}))
-# 첫 토큰이 안전 목록에 없어도 두 토큰 조합이 조회 전용이면 자동 실행한다
-SHELL_SAFE_PAIRS = {
-    ("pip", "list"), ("pip", "show"), ("pip", "freeze"), ("pip", "--version"),
-    ("pip3", "list"), ("pip3", "show"), ("pip3", "freeze"), ("pip3", "--version"),
-    ("node", "--version"), ("node", "-v"),
-    ("rustc", "--version"), ("java", "-version"),
-    ("tsc", "--noEmit"), ("tsc", "--version"),
-}
-# 서브커맨드로 동작이 갈리는 프로그램: 조회/검증 서브커맨드만 자동 실행
-SHELL_SAFE_SUBCOMMANDS = {
-    "npm": {"ls", "list", "view", "outdated", "test", "why"},
-    "yarn": {"test", "list", "why", "info"},
-    "pnpm": {"test", "list", "why", "outdated"},
-    "bun": {"test"},
-    "cargo": {"test", "build", "check", "clippy", "metadata", "tree", "bench", "doc"},
-    "go": {"test", "build", "vet", "list", "doc", "version", "env"},
-    "docker": {"ps", "images", "version", "info", "inspect"},
-    "kubectl": {
-        "get", "describe", "logs", "version", "explain", "top",
-        "api-resources", "api-versions", "cluster-info",
-    },
-    "systemctl": {
-        "status", "is-active", "is-enabled", "is-failed", "show", "cat",
-        "list-units", "list-timers", "list-dependencies",
-    },
-    "gradle": {"test", "build", "tasks", "--status"},
-    "dotnet": {"test", "build", "--info", "--list-sdks", "--list-runtimes"},
-    "poetry": {"show", "check", "about", "version"},
-}
-# `npm run <script>` / `yarn <script>`: 아래 스크립트 이름만 조회/검증으로 본다
-SHELL_SAFE_RUN_SCRIPTS = {
-    "test", "tests", "lint", "typecheck", "check", "build", "fmt", "format",
-    "verify", "ci", "coverage", "e2e",
-}
-# `make <target>`: 아래 타깃만 자동 실행(clean/install/deploy 등은 확인)
-SHELL_SAFE_MAKE_TARGETS = {
-    "test", "tests", "check", "lint", "build", "fmt", "format", "verify",
-    "ci", "all", "docs", "typecheck",
-}
-# 안전 판정을 막는 위험 요소(쓰기·임의 실행 유발)
-SHELL_UNSAFE_PATTERN = re.compile(
-    r"[><`;]|\$\(|\bsudo\b|\bxargs\b"
-    r"|\|\s*(?:sh|bash|zsh|node|python3?|perl|ruby|eval|tee|dd|rm|mv|cp)\b"
-    r"|\b(?:rm|mv|cp|dd|tee|chmod|chown|chgrp|kill|pkill|truncate|ln|touch"
-    r"|mkdir|install|curl|wget|eval|source)\b"
-    r"|\bgit\s+(?:push|commit|checkout|switch|reset|clean|rm|mv|apply"
-    r"|stash|fetch|pull)\b"
-    r"|-(?:exec|execdir|delete)\b|--output|--in-place"
-)
-# 무해한 리다이렉션(출력 버리기/에러 합치기)은 무시한다
-SHELL_HARMLESS_REDIRECT = re.compile(r"\d?>\s*/dev/null|\d?>&\s*\d|&>\s*/dev/null")
-
-# `FOO=bar cmd`처럼 명령 앞에 붙는 환경변수 지정
-SHELL_ENV_ASSIGN_RE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*=\S*")
-# 값이 코드 로딩/경로 해석을 바꿔 "같은 계열"이라도 동작이 달라지는 이름
-SHELL_ENV_UNSAFE_NAMES = {
-    "PATH", "IFS", "SHELLOPTS", "BASH_ENV", "ENV", "PROMPT_COMMAND",
-    "LD_PRELOAD", "LD_LIBRARY_PATH", "LD_AUDIT", "DYLD_INSERT_LIBRARIES",
-    "DYLD_LIBRARY_PATH", "PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
-    "NODE_OPTIONS", "NODE_PATH", "PERL5LIB", "PERL5OPT", "RUBYOPT",
-    "RUBYLIB", "GEM_HOME", "GIT_SSH", "GIT_SSH_COMMAND", "GIT_EXTERNAL_DIFF",
-    "GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_DIR", "GIT_WORK_TREE",
-    "JAVA_TOOL_OPTIONS", "_JAVA_OPTIONS", "CLASSPATH", "GOFLAGS",
-    "HISTFILE", "PS4", "BASH_XTRACEFD", "SSH_AUTH_SOCK", "HOME",
-}
-
-
-def strip_env_assignments(tokens: list[str]) -> tuple[list[str], list[str]]:
-    """앞머리 `NAME=value` 지정을 분리해 (지정 목록, 남은 토큰)을 돌려준다."""
-    envs: list[str] = []
-    rest = list(tokens)
-    while len(rest) > 1 and SHELL_ENV_ASSIGN_RE.fullmatch(rest[0]):
-        envs.append(rest.pop(0))
-    return envs, rest
-
-
-def env_assignments_unsafe(envs: list[str]) -> bool:
-    """환경변수 지정이 동작·코드 로딩을 바꿀 수 있는 이름인지 판단한다."""
-    return any(env.split("=", 1)[0] in SHELL_ENV_UNSAFE_NAMES for env in envs)
-
-
-def shell_words(text: str) -> list[str]:
-    """셸 토큰으로 나눈다(인용부호 해석).
-
-    단순 `split()`은 `echo "== /etc/x =="`를 `["==`, `/etc/x`, `=="]`로 쪼개
-    메시지 속 경로를 실제 경로로 오해한다(불필요한 확인 요청의 큰 원인).
-    인용부호가 닫히지 않아 해석할 수 없으면 공백 분리로 대체한다.
-    """
-    try:
-        return shlex.split(text, comments=False, posix=True)
-    except ValueError:
-        return text.split()
-
-# 계열(접두) 자동 허용을 만들 때는 인자에 따라 동작이 바뀌는 명령을 막는다.
-# 접두로 묶인 뒤 다른 인자가 붙어 부작용이 생기는 것을 예방한다.
-SHELL_WRITE_ARG_PATTERN = re.compile(
-    r"-(?:exec|execdir|delete|fprint0?)\b|--in-place|--output\b|\bsudo\b|\bxargs\b"
-)
-
-# 셸 메타문자(파이프/연결/리다이렉션/치환) — 있으면 접두 자동 허용을 만들지 않는다
-SHELL_META_PATTERN = re.compile(r"[;&|<>`\n]|\$\(")
-# 삭제·설치·임의 실행류: 접두 허용 금지(정확 일치만)
-SHELL_NO_PREFIX_HEADS = {
-    "rm", "rmdir", "mv", "cp", "dd", "truncate", "shred", "chmod", "chown",
-    "chgrp", "ln", "install", "sudo", "su", "sh", "bash", "zsh", "eval",
-    "source", "kill", "pkill", "killall", "tee", "curl", "wget", "env",
-    "python", "python3", "perl", "ruby", "node", "nohup", "xargs",
-}
-# 서브커맨드형 프로그램: "git add"처럼 첫 두 토큰을 접두로 묶는다
-SHELL_SUBCOMMAND_PROGRAMS = {
-    "git", "npm", "yarn", "pnpm", "bun", "cargo", "go", "docker",
-    "docker-compose", "kubectl", "make", "pip", "pip3", "apt", "apt-get",
-    "systemctl", "gh", "poetry", "uv", "deno", "gradle", "mvn", "dotnet",
-}
-# 같은 접두 안에 안전/위험 변형이 공존해 계열 자동 허용을 금지하는 조합
-SHELL_NO_PREFIX_SUBCOMMANDS = {("cargo", "fmt"), ("cargo", "clippy")}
-# 인자(플래그)에 따라 쓰기 동작이 켜지는 프로그램: 계열 허용 금지(정확 일치만)
-SHELL_FLAG_SENSITIVE_HEADS = {
-    "black", "prettier", "ruff", "eslint", "gofmt", "biome", "checkov",
-    "standard", "stylelint",
-}
-
-# --- 폴더 단위 자동 허용: `rm build/x`를 허용하면 `rm build/y`는 다시 묻지 않는다 ---
-# 대상 경로가 한 폴더 안에 모이는 프로그램만 대상(인자에 따라 위험도가 달라지지 않는 것).
-SHELL_SCOPE_HEADS = {
-    "rm", "rmdir", "shred", "truncate", "mv", "cp", "ln", "chmod", "chown",
-    "chgrp", "touch", "mkdir", "tee", "unzip", "tar",
-}
-# 폴더 통째로 자동 허용하면 위험한 상위 경로(시스템·홈·임시 루트)
-SHELL_SCOPE_BLOCK_DIRS = {
-    "/", "/bin", "/boot", "/dev", "/etc", "/home", "/lib", "/lib64", "/opt",
-    "/proc", "/root", "/run", "/sbin", "/srv", "/sys", "/tmp", "/usr", "/var",
-}
-# 이보다 얕은 경로는 범위로 삼지 않는다(`/tmp/sub` 같은 넓은 폴더 방지)
-SHELL_SCOPE_MIN_PARTS = 3
-
-# --- `--auto-workspace`: 작업 폴더 안에서 끝나는 부작용만 확인 없이 실행 ---
-# 권한·시스템·원격·설치·컨테이너·임의 코드 실행: workspace 경계를 넘을 수 있어 제외
-SHELL_WORKSPACE_BLOCK_HEADS = {
-    "sudo", "su", "doas", "systemctl", "service", "mount", "umount", "insmod",
-    "modprobe", "crontab", "at", "batch", "launchctl", "shutdown", "reboot",
-    "halt", "poweroff", "kill", "pkill", "killall",
-    "curl", "wget", "nc", "ncat", "netcat", "ssh", "scp", "sftp", "rsync",
-    "telnet", "ftp", "socat", "nohup",
-    "apt", "apt-get", "yum", "dnf", "pacman", "brew", "snap", "gem",
-    "pip", "pip3", "uv", "npm", "npx", "yarn", "pnpm", "bun", "conda",
-    "mamba", "poetry", "go", "cargo", "gradle", "mvn", "dotnet", "make",
-    "docker", "docker-compose", "podman", "kubectl", "helm", "minikube",
-    "vagrant",
-    "sh", "bash", "zsh", "fish", "source", "eval", "env", "xargs",
-}
-# git 이력·설정·원격을 건드리는 서브커맨드(되돌리기 어려운 것)
-SHELL_WORKSPACE_BLOCK_GIT = {
-    "push", "pull", "fetch", "reset", "clean", "checkout", "switch", "stash",
-    "rm", "mv", "rebase", "apply", "restore", "config", "remote", "submodule",
-    "clone", "init", "filter-branch", "filter-repo", "daemon", "worktree",
-}
-SHELL_WORKSPACE_BLOCK_GIT_FLAGS = {"--amend", "--hard", "--force"}
-# 코드를 문자열로 받아 실행하는 인터프리터 플래그
-SHELL_WORKSPACE_CODE_FLAGS = {"-c", "--command", "-e", "--eval"}
-SHELL_WORKSPACE_INTERPRETERS = {
-    "python", "python3", "perl", "ruby", "node", "php", "lua", "deno",
-}
-# find로 쓰기·삭제·임의 실행을 켜는 인자
-SHELL_WORKSPACE_FIND_WRITE_ARGS = {
-    "-exec", "-execdir", "-ok", "-okdir", "-delete", "-fprint", "-fprint0", "-fls",
-}
-# 아래 조합은 workspace 안이어도 되돌릴 수 없어 제외(복구 수단·작업 폴더 자체)
-SHELL_WORKSPACE_PROTECTED_TARGETS = {".", "..", "/", "~", "*", "./*", ".git", "./.git"}
-SHELL_WORKSPACE_PROTECTED_HEADS = {"rm", "rmdir", "mv", "chmod", "chown", "shred"}
-SHELL_WORKSPACE_SCRIPT_SUFFIXES = (".sh", ".bash", ".zsh", ".fish", ".command", ".ps1")
-SHELL_WORKSPACE_SPECIAL_PATHS = {"/dev/null", "/dev/stdout", "/dev/stderr", "/dev/tty"}
-# 대상 경로를 정적으로 알 수 없으면(=변수/치환) 확인을 받아야 하는 명령.
-# 삭제·이동·권한 변경처럼 되돌리기 어려운 것만 해당한다(읽기용은 `$t`를 무시).
-SHELL_PATH_STRICT_HEADS = (
-    SHELL_WORKSPACE_PROTECTED_HEADS | SHELL_ASK_DELETE_HEADS
-    | {"cp", "ln", "tee", "install", "sed", "tar", "unzip", "find"}
-)
-
-
-def is_safe_command(command: str) -> bool:
-    """확인 없이 실행해도 되는 읽기 전용/검증 명령인지 판단한다.
-
-    `ls && git status`처럼 연결된 명령은 **모든 조각이 자동 실행 대상일 때만**
-    자동 실행한다. 위험 요소는 연결 전체를 대상으로 먼저 검사하므로,
-    `ls && rm -rf x` 같은 조합은 여기서 걸러진다.
-    """
-    text = scan_text(command)
-    if not text or SHELL_UNSAFE_PATTERN.search(text):
-        return False
-    parts = chain_segments(text)
-    if not parts:
-        return False
-    return all(_is_safe_simple_command(part) for part in parts)
-
-
-def _is_safe_simple_command(part: str) -> bool:
-    """연결 없는 단일 명령이 자동 실행 대상인지 판단한다."""
-    tokens = shell_words(part)
-    if not tokens:
-        return False
-    # `FOO=1 cmd`의 앞머리 지정은 떼고 프로그램으로 판단한다.
-    envs, tokens = strip_env_assignments(tokens)
-    if env_assignments_unsafe(envs):
-        return False  # PATH/LD_PRELOAD 등은 실행 대상이 달라질 수 있다
-    head = Path(tokens[0]).name
-    rest = tokens[1:]
-    if head in {"python", "python3"}:
-        return _safe_python(rest)
-    if head == "git":
-        return bool(rest) and (
-            rest[0] in SHELL_SAFE_GIT_SUBCOMMANDS
-            or rest[0] in {"--version", "--help", "-v"}
-        )
-    if head in SHELL_SAFE_COMMANDS:
-        return True
-    if head in SHELL_SAFE_CHECKERS:
-        if head == "ruff" and rest[:1] == ["format"]:
-            return "--check" in rest or "--diff" in rest  # `ruff format`은 파일을 고친다
-        return not any(tok in SHELL_CHECK_WRITE_FLAGS for tok in rest)
-    for program, readonly_args in SHELL_PAIRS_ONLY_READONLY:
-        if head == program:
-            return bool(rest) and rest[0] in readonly_args
-    if head in {"npm", "yarn", "pnpm", "bun"}:
-        return _safe_package_command(head, rest)
-    if head == "make":
-        return _safe_make(rest)
-    # 경로/스크립트 실행(`./run.sh`)은 제외하고, 순수 명령의 버전/도움말만 허용
-    if tokens[0] == head and "." not in head and rest[:1] in (
-        ["--version"], ["--help"], ["-V"], ["-h"], ["-v"]
-    ):
-        return True
-    if head in SHELL_SAFE_SUBCOMMANDS:
-        if head == "cargo" and rest[:1] == ["fmt"]:
-            return "--check" in rest  # `cargo fmt`는 파일을 고친다
-        if any(tok in SHELL_CHECK_WRITE_FLAGS for tok in rest):
-            return False  # `cargo clippy --fix`처럼 서브커맨드에 쓰기 플래그가 붙는 경우
-        return bool(rest) and rest[0] in SHELL_SAFE_SUBCOMMANDS[head]
-    return bool(rest) and (head, rest[0]) in SHELL_SAFE_PAIRS
-
-
-def _safe_package_command(head: str, rest: list[str]) -> bool:
-    """npm/yarn/pnpm/bun 명령이 조회·검증 수준인지 판단한다."""
-    if not rest:
-        return False
-    if rest[0] == "run":
-        return len(rest) > 1 and rest[1] in SHELL_SAFE_RUN_SCRIPTS
-    return rest[0] in SHELL_SAFE_SUBCOMMANDS.get(head, set())
-
-
-def _safe_make(rest: list[str]) -> bool:
-    """make 타깃이 빌드/검증 계열인지 판단한다(clean·install·deploy는 제외)."""
-    targets = [tok for tok in rest if not tok.startswith("-")]
-    if not targets:
-        return False
-    return all(tok in SHELL_SAFE_MAKE_TARGETS for tok in targets)
-
-
-def _safe_python(rest: list[str]) -> bool:
-    """python3 호출이 검증/실행 수준인지 판단한다(-c 등 임의 코드는 제외)."""
-    if not rest:
-        return False
-    if any(arg in {"-c", "-i", "-e", "-"} for arg in rest):
-        return False
-    if "-m" in rest:
-        idx = rest.index("-m")
-        return len(rest) > idx + 1 and rest[idx + 1] in SHELL_SAFE_PY_MODULES
-    if rest[0].startswith("-"):
-        return all(arg in {"--version", "-V", "-h", "--help"} for arg in rest)
-    script = rest[0]
-    if script.startswith(("/", "~")) or ".." in script:
-        return False
-    return script.endswith(".py")
-
-
-def _workspace_path_ok(root: Path, token: str, strict: bool = False) -> bool:
-    """토큰이 가리키는 경로가 workspace 안(또는 무해한 특수 경로)인지.
-
-    `strict`는 삭제·이동처럼 대상 경로를 정적으로 알 수 없으면 위험한 명령에
-    쓴다. 그 외에는 인용된 산문(공백 포함)과 변수(`$t`)를 경로로 보지 않아
-    `echo "== /etc/x 여부 =="` 같은 읽기용 메시지로 확인을 요구하지 않는다.
-    """
-    raw = token.strip()
-    if not raw:
-        return True
-    if any(ch.isspace() for ch in raw):
-        return True  # 인용된 문장은 경로가 아니라 화면에 찍는 글이다
-    raw = raw.strip("'\"")
-    if not raw:
-        return True
-    if raw.startswith("-"):
-        if "=" not in raw:
-            return True  # 플래그 자체는 경로가 아니다
-        raw = raw.split("=", 1)[1].strip().strip("'\"")
-    if not raw:
-        return True
-    if raw in SHELL_WORKSPACE_SPECIAL_PATHS or raw.startswith("/dev/fd/"):
-        return True
-    if any(ch in raw for ch in "$`"):
-        return not strict  # 대상 경로를 정적으로 알 수 없다(삭제류는 확인)
-    if raw.startswith("~"):
-        return False  # 홈 디렉터리는 workspace 밖
-    if "/" not in raw and raw not in {".", ".."}:
-        return True  # 단순 파일명은 cwd(=workspace) 기준
-    try:
-        base = Path(raw).resolve() if raw.startswith("/") else (root / raw).resolve()
-    except (OSError, RuntimeError):
-        return False
-    root_s = str(root.resolve())
-    base_s = str(base)
-    return base_s == root_s or base_s.startswith(root_s + os.sep)
-
-
-def _workspace_fragment_safe(fragment: str, root: Path) -> bool:
-    """연결 명령의 한 조각이 workspace 안에서 끝나고 되돌릴 수 있는지."""
-    tokens = shell_words(fragment)
-    if not tokens:
-        return False
-    envs, bare = strip_env_assignments(tokens)
-    head = Path(bare[0]).name if bare else ""
-    strict = head in SHELL_PATH_STRICT_HEADS
-    # 경로가 workspace를 벗어나면 무엇이든 확인 대상
-    if not all(_workspace_path_ok(root, tok, strict) for tok in tokens):
-        return False
-    # 읽기 전용/검증 명령이면 조각 단독으로도 그대로 허용(`npm test`, `tail -5`)
-    if is_safe_command(fragment):
-        return True
-    # 리다이렉션 대상만 뺀 명령이 읽기 전용/검증이면 허용(`npm test > out.txt`)
-    body = re.sub(r"\d*>>?\s*\S+", " ", fragment).strip()
-    if body and body != fragment and is_safe_command(body):
-        return True
-    if env_assignments_unsafe(envs):
-        return False  # PATH/LD_PRELOAD 등은 실행 대상이 달라질 수 있다
-    if head in SHELL_WORKSPACE_BLOCK_HEADS:
-        return False
-    if head in SHELL_WORKSPACE_INTERPRETERS:
-        if any(tok in SHELL_WORKSPACE_CODE_FLAGS for tok in bare):
-            return False  # `python3 -c ...` 같은 임의 코드 실행
-        if not [tok for tok in bare[1:] if not tok.startswith("-")]:
-            return False  # 인터프리터 단독 실행(REPL/stdin)
-    elif bare[0].startswith("./") or head.endswith(SHELL_WORKSPACE_SCRIPT_SUFFIXES):
-        # 스크립트 파일 실행은 내용을 검증할 수 없다. 인터프리터는 경로로 지정해도
-        # (`./.venv/bin/python - <<EOF`) 위 인터프리터 규칙으로 판단한다.
-        return False
-    if head == "find" and any(tok in SHELL_WORKSPACE_FIND_WRITE_ARGS for tok in bare):
-        return False
-    if head == "git":
-        if any(tok in SHELL_WORKSPACE_BLOCK_GIT for tok in bare[1:]):
-            return False
-        if any(tok in SHELL_WORKSPACE_BLOCK_GIT_FLAGS for tok in bare[1:]):
-            return False
-    if head in SHELL_WORKSPACE_PROTECTED_HEADS:
-        for tok in bare[1:]:
-            cleaned = tok.strip().strip("'\"")
-            if cleaned in SHELL_WORKSPACE_PROTECTED_TARGETS or cleaned.startswith(".git"):
-                return False
-    return True
-
-
-def is_workspace_command(command: str, root: Path) -> bool:
-    """`--auto-workspace`: workspace 안에서 끝나는 부작용만 자동 실행한다.
-
-    경로가 workspace를 벗어나거나(`~/x`, `/etc/x`, `../x`), 설치·네트워크·권한
-    명령, 임의 코드 실행, git 이력 파괴로 이어지면 False를 돌려 확인을 받는다.
-    """
-    text = scan_text(command)
-    if not text:
-        return False
-    if any(rx.search(text) for rx in SHELL_DENY):
-        return False
-    fragments = chain_segments(text)
-    if not fragments:
-        return False
-    return all(_workspace_fragment_safe(frag, root) for frag in fragments)
+SECRET_NAMES = guard.SECRET_NAMES  # 비밀 파일 이름(llmlib/guard.py)
 
 
 def color_enabled() -> bool:
@@ -1638,6 +1148,14 @@ def last_summary_count(messages: list[dict[str, Any]]) -> int | None:
     return int(matches[-1]) if matches else None
 
 
+def compact_token_limit() -> int:
+    raw = os.environ.get(COMPACT_TOKENS_ENV, "").strip()
+    try:
+        return max(10_000, int(raw)) if raw else COMPACT_TOKENS_DEFAULT
+    except ValueError:
+        return COMPACT_TOKENS_DEFAULT
+
+
 def should_summarize(messages: list[dict[str, Any]]) -> bool:
     """압축 대상(최근 SUMMARY_KEEP_RECENT개 제외)이 임계를 넘으면 True.
 
@@ -1651,6 +1169,10 @@ def should_summarize(messages: list[dict[str, Any]]) -> bool:
     # 직전 요약본 하나만 남아 있고 새 대화가 없는 상태(구버전 기록 대비)
     if len(head) == 1 and SUMMARY_MARKER in (head[0].get("content") or ""):
         return False
+
+    # 실제 토큰이 한도에 다가가면(컨텍스트 초과 직전) 다른 조건보다 우선한다.
+    if LAST_PROMPT_TOKENS >= compact_token_limit():
+        return True
 
     last = last_summary_count(messages)
     if last is not None and len(messages) - last < SUMMARY_MIN_NEW_MESSAGES:
@@ -1936,10 +1458,12 @@ def maybe_summarize(
             print_info("요약 기준을 넘지 않아 요약하지 않았습니다.")
         return messages
 
+    global LAST_PROMPT_TOKENS
     head = messages[:-SUMMARY_KEEP_RECENT] or messages
+    tokens = f", 입력 {LAST_PROMPT_TOKENS:,} 토큰" if LAST_PROMPT_TOKENS else ""
     print_info(
         f"대화가 커져 요약합니다 "
-        f"(메시지 {len(messages)}개, 압축 대상 {history_chars(head):,}자)..."
+        f"(메시지 {len(messages)}개, 압축 대상 {history_chars(head):,}자{tokens})..."
     )
     try:
         summary = summarize_messages(messages, model)
@@ -1972,6 +1496,7 @@ def maybe_summarize(
         reduced,
     )
 
+    LAST_PROMPT_TOKENS = 0  # 다음 API 호출이 새 크기를 알려줄 때까지 다시 압축하지 않는다
     print_ok(
         f"요약·백업 완료: {entry['summary_file']} "
         f"(최근 {len(reduced) - 1}개 메시지 유지)"
@@ -2262,7 +1787,12 @@ def cmd_show_rules(root: Path, raw: bool = False) -> int:
     extra = extra_rules_dir(root)
     if extra.is_dir():
         print(f"  {C.dim}📄 추가 규칙{C.reset}  {extra}/*.md")
+    docs = load_project_docs(root)
+    for path, _ in docs:
+        print(f"  {C.dim}📘 프로젝트 지침{C.reset}  {path}")
     print(f"{C.dim}{rule()}{C.reset}")
+    if not text and docs:
+        return 0
     if not text:
         print_warn("규칙이 없습니다.")
         print_info("llm --init-rules  로 템플릿을 만들 수 있습니다.")
@@ -2293,8 +1823,14 @@ def build_system_prompt(root: Path, session: str) -> str:
         "- find: explore (mode=list|glob|grep)\n"
         "- read: read a file (offset/limit for large files)\n"
         "- edit: change files (action=replace|write|delete). Prefer replace for edits.\n"
+        "  You must `read` an existing file before editing it; use `edits` for several changes in one file.\n"
         "- shell: run bash (tests, git, builds). Do NOT use shell to read/edit files.\n"
+        "  Long-running commands (servers, watchers): background=true, then poll with bg_id.\n"
+        "- web_fetch: read a web page/doc URL when local info is not enough.\n"
+        "- task: delegate a broad read-only investigation to a sub-agent; call several at once to parallelize.\n"
         "- todo: show a short plan for non-trivial work; skip for one-line Q&A.\n"
+        "Independent read/find/task calls can be issued together in one turn; they run in parallel.\n"
+        "Files the user attached with @path are included under [첨부된 파일(@멘션)].\n"
         "Keep changes minimal and correct. After edits, sanity-check if needed.\n"
         "For multi-step jobs call `todo` first with goal + items, then update statuses.\n"
         "Keep ONE plan for the whole job; never restart a finished plan.\n"
@@ -2306,6 +1842,17 @@ def build_system_prompt(root: Path, session: str) -> str:
         "Top-level entries:\n"
         f"{workspace_listing(root)}\n"
     )
+    if RUN.plan_mode:
+        prompt += (
+            "\nPLAN MODE IS ON: do not modify anything. Investigate with read-only tools, "
+            "then answer with a concrete step-by-step implementation plan (files, changes, "
+            "risks, verification). The user will turn plan mode off to execute it.\n"
+        )
+    for path, text in load_project_docs(root):
+        prompt += (
+            f"\nProject instructions from {path} (follow them):\n"
+            f"<project_instructions>\n{text}\n</project_instructions>\n"
+        )
     if rules:
         prompt += (
             "\nThe following session rules are stored in the workspace "
@@ -2392,7 +1939,8 @@ def tool_schemas() -> list[dict[str, Any]]:
         ),
         fn(
             "edit",
-            "파일 수정. action=replace(기존 치환)·write(생성/덮어쓰기)·delete.",
+            "파일 수정. action=replace(기존 치환)·write(생성/덮어쓰기)·delete. "
+            "기존 파일은 먼저 read 해야 한다. 한 파일 여러 곳은 edits 배열로 한 번에.",
             {
                 "action": {
                     "type": "string",
@@ -2404,6 +1952,19 @@ def tool_schemas() -> list[dict[str, Any]]:
                 "new_string": {"type": "string", "description": "replace 시 바꿀 문자열"},
                 "replace_all": {"type": "boolean"},
                 "contents": {"type": "string", "description": "write 시 전체 내용"},
+                "edits": {
+                    "type": "array",
+                    "description": "replace 시 여러 치환을 순서대로 한 번에(하나라도 실패하면 아무것도 바꾸지 않음)",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "old_string": {"type": "string"},
+                            "new_string": {"type": "string"},
+                            "replace_all": {"type": "boolean"},
+                        },
+                        "required": ["old_string", "new_string"],
+                    },
+                },
             },
             ["path"],
         ),
@@ -2423,17 +1984,47 @@ def tool_schemas() -> list[dict[str, Any]]:
                 },
                 "glob": {"type": "string", "description": "grep 시 파일명 필터"},
                 "case_insensitive": {"type": "boolean"},
+                "output": {
+                    "type": "string",
+                    "enum": ["content", "files", "count"],
+                    "description": "grep 결과 형태: 일치 줄(기본)·파일명만·파일별 개수",
+                },
+                "context": {"type": "integer", "description": "grep 일치 줄 앞뒤로 보여줄 줄 수(0~20)"},
+                "max_results": {"type": "integer", "description": "grep 최대 결과 줄 수(기본 80)"},
             },
             [],
         ),
         fn(
             "shell",
-            "bash 실행(테스트·git·빌드). 파일 읽기/수정에는 쓰지 말 것.",
+            "bash 실행(테스트·git·빌드). 파일 읽기/수정에는 쓰지 말 것. "
+            "서버·watch 등 끝나지 않는 명령은 background=true 후 bg_id 로 출력 확인.",
             {
                 "command": {"type": "string"},
-                "timeout": {"type": "integer", "description": "초, 기본 60, 최대 180"},
+                "timeout": {"type": "integer", "description": "초, 기본 60, 최대 600"},
+                "background": {"type": "boolean", "description": "백그라운드로 띄우고 bg_id 를 받는다"},
+                "bg_id": {"type": "string", "description": "백그라운드 작업 새 출력/상태 조회(command 없이)"},
+                "kill": {"type": "boolean", "description": "bg_id 작업 종료"},
             },
-            ["command"],
+            [],
+        ),
+        fn(
+            "web_fetch",
+            "웹 페이지/문서 URL 을 텍스트로 가져온다(공식 문서·이슈·API 레퍼런스 확인용).",
+            {
+                "url": {"type": "string", "description": "http(s) URL"},
+                "max_chars": {"type": "integer", "description": "최대 글자 수(기본 40000)"},
+            },
+            ["url"],
+        ),
+        fn(
+            "task",
+            "읽기 전용 서브에이전트에게 조사를 맡긴다(넓은 코드 탐색·여러 파일 비교). "
+            "독립 대화로 돌고 보고서만 돌려주므로 메인 맥락을 아낀다. 여러 개를 한 번에 호출하면 병렬 실행.",
+            {
+                "description": {"type": "string", "description": "3~6단어 요약"},
+                "prompt": {"type": "string", "description": "서브에이전트가 할 일(맥락·찾을 것·보고 형식 포함)"},
+            },
+            ["prompt"],
         ),
     ]
 
@@ -2441,9 +2032,10 @@ def tool_schemas() -> list[dict[str, Any]]:
 def tool_edit(root: Path, args: dict[str, Any]) -> str:
     """통합 편집: replace / write / delete."""
     action = str(args.get("action") or "replace").strip().lower()
-    if action in {"replace", "str_replace"}:
-        if "old_string" not in args or "new_string" not in args:
-            return "ERROR: replace 에는 old_string 과 new_string 이 필요합니다."
+    if action in {"replace", "str_replace", "multi_edit"}:
+        has_edits = isinstance(args.get("edits"), list) and bool(args.get("edits"))
+        if not has_edits and ("old_string" not in args or "new_string" not in args):
+            return "ERROR: replace 에는 old_string/new_string(또는 edits 배열)이 필요합니다."
         return tool_str_replace(root, args)
     if action in {"write", "write_file", "create"}:
         if "contents" not in args:
@@ -2472,13 +2064,10 @@ def tool_find(root: Path, args: dict[str, Any]) -> str:
 
 
 def is_secret_path(path: Path) -> bool:
-    name = path.name
-    if name in SECRET_NAMES or name.endswith(".pem") or name.endswith(".key"):
+    if guard.is_secret_name(path.name) or guard.is_secret_path_text(str(path)):
         return True
     lowered = {part.lower() for part in path.parts}
-    if ".ssh" in lowered:
-        return True
-    return False
+    return ".ssh" in lowered
 
 
 def resolve_in_workspace(root: Path, raw: str) -> Path:
@@ -2500,6 +2089,168 @@ def clip(text: str, limit: int = MAX_TOOL_CHARS) -> str:
     return text[:limit] + f"\n\n... [truncated {len(text) - limit} chars]"
 
 
+@dataclass
+class RunState:
+    """이번 실행의 도구 동작 설정(REPL 에서는 턴 사이에 바뀔 수 있다)."""
+
+    plan_mode: bool = False        # 읽기 전용 조사 + 계획만(편집·쓰기 셸 금지)
+    confirm_edits: bool = False    # 편집마다 diff 를 보여주고 확인
+    edits_auto_all: bool = False   # 편집 확인에서 'a' → 이번 실행 동안 묻지 않음
+    yes: bool = False              # --yes: 모든 확인 생략
+    web_trust: bool = False        # web_fetch 확인 생략(--trust/--yes)
+    web_hosts: set[str] = field(default_factory=set)  # 이번 실행에서 허용한 호스트
+    model: str = DEFAULT_MODEL
+    thinking: bool = True
+    session: str = ""
+
+
+RUN = RunState()
+FILES = FileTracker()  # read 한 파일(편집 전 읽기 확인·외부 변경 감지)
+UNDO: UndoStore | None = None
+_BG: BgManager | None = None
+_SECRET_CACHE: dict[str, list[str]] = {}
+READ_MAX_LINE_CHARS = 2_000
+DIFF_SHOW_LINES = 60
+REQUIRE_READ_ENV = "LLM_EDIT_REQUIRE_READ"
+_THREAD = threading.local()  # 서브에이전트(task) 실행 중 표시 — 스레드별
+
+
+def in_subagent() -> bool:
+    return bool(getattr(_THREAD, "subagent", False))
+
+
+def read_only_mode() -> bool:
+    """plan 모드이거나 서브에이전트 안이면 편집·쓰기 셸을 막는다."""
+    return RUN.plan_mode or in_subagent()
+
+
+def bg_manager() -> BgManager:
+    global _BG
+    if _BG is None:
+        _BG = BgManager()
+    return _BG
+
+
+def undo_store(session: str | None = None) -> UndoStore:
+    """세션별 편집 되돌리기 저장소(기기 로컬: 절대 경로를 담으므로 홈에 둔다)."""
+    global UNDO
+    name = sanitize_session_name(session or RUN.session or "default")
+    path = HISTORY_DIR / "undo" / f"undo_{name}.json"
+    if UNDO is None or UNDO.path != path:
+        UNDO = UndoStore(path)
+    return UNDO
+
+
+def secret_values(root: Path | None = None) -> list[str]:
+    """도구 결과에서 가릴 비밀값(환경변수 + .env 파일들). 폴더별로 한 번 계산."""
+    key = str(root or "")
+    if key not in _SECRET_CACHE:
+        files = [LOCAL_ENV_FILE, SYSTEM_ENV_FILE]
+        env_file = os.environ.get("LLM_ENV_FILE", "").strip()
+        if env_file:
+            files.append(Path(env_file).expanduser())
+        if root is not None:
+            try:
+                files += [p for p in root.glob(".env*") if p.is_file() and guard.is_secret_name(p.name)]
+            except OSError:
+                pass
+        _SECRET_CACHE[key] = guard.collect_secret_values(os.environ, files)
+    return _SECRET_CACHE[key]
+
+
+def rel_path(root: Path, path: Path) -> str:
+    try:
+        return str(path.relative_to(root.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def show_diff(diff: list[str], limit: int = DIFF_SHOW_LINES) -> None:
+    """편집 diff 를 색을 입혀 보여준다(길면 앞부분만)."""
+    if not diff:
+        return
+    suspend_panel()
+    shown = diff[2:] if len(diff) > 2 and diff[0].startswith("---") else diff
+    for line in shown[:limit]:
+        if line.startswith("+"):
+            color = C.green
+        elif line.startswith("-"):
+            color = C.red
+        elif line.startswith("@@"):
+            color = C.cyan
+        else:
+            color = C.dim
+        print(f"      {color}{clip_ansi(line, max(20, terminal_width() - 8))}{C.reset}")
+    if len(shown) > limit:
+        print(f"      {C.dim}… diff {len(shown) - limit}줄 더{C.reset}")
+    resume_panel()
+
+
+def confirm_edit(rel: str, verb: str) -> bool:
+    """--confirm-edits 일 때 편집 적용 여부를 묻는다(diff 는 이미 보여준 상태)."""
+    if not RUN.confirm_edits or RUN.yes or RUN.edits_auto_all:
+        return True
+    if not sys.stdin.isatty():
+        print_error("편집 확인(--confirm-edits)은 TTY 가 필요합니다. --yes 로 생략할 수 있습니다.", stream=True)
+        return False
+    suspend_panel()
+    try:
+        answer = input(
+            f"{C.yellow}❓ {verb} {rel}{C.reset} 적용할까요? "
+            f"{C.bold}[y/N/a]{C.reset} {C.dim}(a=이번 실행 동안 편집 확인 생략){C.reset}: "
+        ).strip().lower()
+    except EOFError:
+        answer = "n"
+    resume_panel()
+    if answer in {"a", "ㅁ", "all"}:
+        RUN.edits_auto_all = True
+        return True
+    return answer in {"y", "yes", "ㅛ"}
+
+
+def edit_precheck(path: Path) -> str | None:
+    """편집 전 공통 검사. 문제가 있으면 모델에게 돌려줄 오류 문구."""
+    if in_subagent():
+        return "ERROR: 서브에이전트(task)는 읽기 전용입니다. 조사 결과만 돌려주세요."
+    if RUN.plan_mode:
+        return "ERROR: plan 모드에서는 파일을 수정할 수 없습니다. 조사 결과와 계획만 제시하세요."
+    if os.environ.get(REQUIRE_READ_ENV, "").strip().lower() in {"0", "false", "no", "off"}:
+        return None
+    problem = FILES.check(path)
+    return f"ERROR: {problem}" if problem else None
+
+
+def commit_file_change(root: Path, path: Path, after: str | None, verb: str) -> str:
+    """파일 변경을 diff 표시 → (확인) → undo 기록 → 쓰기 순서로 적용한다.
+
+    after 가 None 이면 삭제. 줄바꿈(CRLF)은 호출자가 맞춰 넘긴다.
+    """
+    rel = rel_path(root, path)
+    before_bytes = path.read_bytes() if path.is_file() else None
+    before_text = before_bytes.decode("utf-8", errors="replace") if before_bytes is not None else ""
+    after_bytes = None if after is None else after.encode("utf-8")
+    if before_bytes is not None and after_bytes == before_bytes:
+        return f"변경 없음: {rel} (내용이 같습니다)"
+    diff = unified_diff(before_text, after or "", rel)
+    show_diff(diff)
+    if not confirm_edit(rel, verb):
+        return "ERROR: 사용자가 편집을 거부했습니다."
+    undo_ok = undo_store().record(path, rel, before_bytes, after_bytes)
+    if after_bytes is None:
+        path.unlink()
+        FILES.forget(path)
+    else:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(after_bytes)
+        FILES.mark(path)  # 방금 쓴 내용은 에이전트가 아는 최신 상태다
+    added, removed = diff_stat(diff)
+    lines = 0 if after is None else len(after.splitlines())
+    msg = f"{verb} {rel} (+{added} -{removed}, {lines} lines)"
+    if not undo_ok:
+        msg += " · 원본이 커서 /undo 대상이 아닙니다"
+    return msg
+
+
 def tool_read_file(root: Path, args: dict[str, Any]) -> str:
     path = resolve_in_workspace(root, args["path"])
     if not path.is_file():
@@ -2507,6 +2258,8 @@ def tool_read_file(root: Path, args: dict[str, Any]) -> str:
     data = path.read_bytes()
     if b"\0" in data[:4096]:
         return "ERROR: 바이너리 파일은 읽을 수 없습니다."
+    if not in_subagent():  # 서브에이전트가 읽은 내용은 메인 에이전트가 본 것이 아니다
+        FILES.mark(path)
     text = data.decode("utf-8", errors="replace")
     lines = text.splitlines()
     offset = int(args.get("offset") or 1)
@@ -2516,7 +2269,11 @@ def tool_read_file(root: Path, args: dict[str, Any]) -> str:
     start = offset - 1
     end = start + int(limit) if limit else len(lines)
     slice_lines = lines[start:end]
-    numbered = [f"{i:>6}|{line}" for i, line in enumerate(slice_lines, start=offset)]
+    numbered = []
+    for i, line in enumerate(slice_lines, start=offset):
+        if len(line) > READ_MAX_LINE_CHARS:  # 압축된 js 같은 초장문 줄은 자른다
+            line = line[:READ_MAX_LINE_CHARS] + f" … [+{len(line) - READ_MAX_LINE_CHARS}자]"
+        numbered.append(f"{i:>6}|{line}")
     header = f"{path} ({len(lines)} lines)"
     body = "\n".join(numbered)
     if end < len(lines):
@@ -2531,37 +2288,76 @@ def tool_write_file(root: Path, args: dict[str, Any]) -> str:
     path = resolve_in_workspace(root, args["path"])
     if path.exists() and path.is_dir():
         return f"ERROR: 디렉터리입니다: {path}"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    contents = args.get("contents", "")
-    path.write_text(contents, encoding="utf-8")
-    rel = path.relative_to(root)
-    return f"wrote {rel} ({len(contents.splitlines())} lines, {len(contents.encode('utf-8'))} bytes)"
+    problem = edit_precheck(path)
+    if problem:
+        return problem
+    verb = "overwrote" if path.exists() else "wrote"
+    return commit_file_change(root, path, str(args.get("contents", "")), verb)
+
+
+def _apply_replacements(text: str, edits: list[dict[str, Any]]) -> tuple[str, int] | str:
+    """치환 목록을 차례로 적용한다. 반환: (새 내용, 총 치환 수) 또는 오류 문구."""
+    crlf = "\r\n" in text
+    total = 0
+    for n, edit in enumerate(edits, 1):
+        if not isinstance(edit, dict) or "old_string" not in edit or "new_string" not in edit:
+            return f"ERROR: edits[{n}] 에 old_string/new_string 이 필요합니다."
+        old = str(edit["old_string"])
+        new = str(edit["new_string"])
+        if not old:
+            return f"ERROR: edits[{n}] old_string 이 비어 있습니다(새 파일은 action=write)."
+        if old == new:
+            return f"ERROR: edits[{n}] old_string 과 new_string 이 같습니다."
+        count = text.count(old)
+        if count == 0 and crlf and "\n" in old and "\r\n" not in old:
+            # CRLF 파일에 LF 로 보낸 치환: 파일 줄바꿈에 맞춰 다시 찾는다.
+            old = old.replace("\n", "\r\n")
+            new = new.replace("\r\n", "\n").replace("\n", "\r\n")
+            count = text.count(old)
+        where = f"edits[{n}] " if len(edits) > 1 else ""
+        if count == 0:
+            return f"ERROR: {where}old_string을 찾지 못했습니다. 파일 내용을 다시 읽으세요."
+        if count > 1 and not edit.get("replace_all"):
+            return f"ERROR: {where}old_string이 {count}번 등장합니다. 더 고유하게 만들거나 replace_all=true를 쓰세요."
+        text = text.replace(old, new)
+        total += count
+    return text, total
 
 
 def tool_str_replace(root: Path, args: dict[str, Any]) -> str:
     path = resolve_in_workspace(root, args["path"])
     if not path.is_file():
         return f"ERROR: 파일이 없습니다: {path}"
-    text = path.read_text(encoding="utf-8")
-    old = args["old_string"]
-    new = args["new_string"]
-    replace_all = bool(args.get("replace_all"))
-    count = text.count(old)
-    if count == 0:
-        return "ERROR: old_string을 찾지 못했습니다. 파일 내용을 다시 읽으세요."
-    if count > 1 and not replace_all:
-        return f"ERROR: old_string이 {count}번 등장합니다. 더 고유하게 만들거나 replace_all=true를 쓰세요."
-    path.write_text(text.replace(old, new), encoding="utf-8")
-    rel = path.relative_to(root)
-    return f"updated {rel} ({count} replacement{'s' if count != 1 else ''})"
+    problem = edit_precheck(path)
+    if problem:
+        return problem
+    text = path.read_bytes().decode("utf-8", errors="replace")  # 줄바꿈 그대로
+    edits = args.get("edits")
+    if not isinstance(edits, list) or not edits:
+        edits = [
+            {
+                "old_string": args.get("old_string"),
+                "new_string": args.get("new_string"),
+                "replace_all": args.get("replace_all"),
+            }
+        ]
+    applied = _apply_replacements(text, edits)
+    if isinstance(applied, str):
+        return applied
+    new_text, count = applied
+    result = commit_file_change(root, path, new_text, "updated")
+    if result.startswith("updated"):
+        result += f" · {count} replacement{'s' if count != 1 else ''}"
+    return result
 
 
 def tool_delete_file(root: Path, args: dict[str, Any]) -> str:
     path = resolve_in_workspace(root, args["path"])
     if not path.is_file():
         return f"ERROR: 파일이 없습니다: {path}"
-    path.unlink()
-    return f"deleted {path.relative_to(root)}"
+    if read_only_mode():
+        return edit_precheck(path) or ""
+    return commit_file_change(root, path, None, "deleted")
 
 
 def todo_marker(status: str) -> str:
@@ -3011,21 +2807,33 @@ def tool_glob(root: Path, args: dict[str, Any]) -> str:
 
 
 def tool_grep(root: Path, args: dict[str, Any]) -> str:
+    """정규식 검색. output=content(기본, 줄)|files(파일명만)|count(파일별 개수),
+    context=N 이면 일치 줄 앞뒤 N줄을 함께 보여준다. 비밀 파일은 건너뛴다."""
     target = resolve_in_workspace(root, args.get("path") or ".")
     flags = re.IGNORECASE if args.get("case_insensitive") else 0
     try:
         rx = re.compile(args["pattern"], flags)
     except re.error as exc:
         return f"ERROR: 잘못된 정규식: {exc}"
+    output = str(args.get("output") or "content").strip().lower()
+    if output not in {"content", "files", "count"}:
+        return f"ERROR: 알 수 없는 output: {output} (content|files|count)"
+    try:
+        context = max(0, min(int(args.get("context") or 0), 20))
+        max_hits = max(1, min(int(args.get("max_results") or MAX_GREP_HITS), 500))
+    except (TypeError, ValueError):
+        return "ERROR: context/max_results 는 정수여야 합니다."
     glob_pat = args.get("glob")
     files: list[Path] = []
     if target.is_file():
         files = [target]
     elif target.is_dir():
         for dirpath, dirnames, filenames in os.walk(target):
-            dirnames[:] = [d for d in dirnames if not should_skip_dir(d)]
-            for name in filenames:
+            dirnames[:] = sorted(d for d in dirnames if not should_skip_dir(d))
+            for name in sorted(filenames):
                 path = Path(dirpath) / name
+                if is_secret_path(path):
+                    continue  # .env 등은 검색 결과로도 내보내지 않는다
                 if glob_pat:
                     rel = str(path.relative_to(root))
                     if not (fnmatch.fnmatch(name, glob_pat) or fnmatch.fnmatch(rel, glob_pat)):
@@ -3035,6 +2843,7 @@ def tool_grep(root: Path, args: dict[str, Any]) -> str:
         return f"ERROR: 경로가 없습니다: {target}"
 
     hits: list[str] = []
+    matched = 0
     scanned = 0
     for path in files:
         scanned += 1
@@ -3049,322 +2858,40 @@ def tool_grep(root: Path, args: dict[str, Any]) -> str:
             rel = path.relative_to(root)
         except ValueError:
             rel = path
-        for i, line in enumerate(text.splitlines(), 1):
-            if rx.search(line):
-                hits.append(f"{rel}:{i}:{line[:300]}")
-                if len(hits) >= MAX_GREP_HITS:
-                    extra = f"\n... [stopped at {MAX_GREP_HITS} hits after {scanned} files]"
-                    return "\n".join(hits) + extra
-    return "\n".join(hits) if hits else f"(no matches in {scanned} files)"
-
-
-SHELL_SPLIT_RE = re.compile(r"\s*(;|&&|\|\||\||\n)\s*")
-
-
-def split_shell_commands(command: str) -> list[tuple[str, str]]:
-    """셸 명령을 (앞 연산자, 명령) 목록으로 분해한다.
-
-    인용부호 안의 연산자와 이스케이프된 연산자(`\\|`, `\\;`)는 무시한다.
-    첫 항목의 연산자는 빈 문자열이다.
-    """
-    parts: list[tuple[str, str]] = []
-    buf: list[str] = []
-    op = ""
-    quote: str | None = None
-    i = 0
-    text = command.strip()
-    while i < len(text):
-        ch = text[i]
-        if quote:
-            buf.append(ch)
-            if ch == quote:
-                quote = None
-            i += 1
+        lines = text.splitlines()
+        found = [i for i, line in enumerate(lines) if rx.search(line)]
+        found_set = set(found)
+        if not found:
             continue
-        if ch == "\\" and i + 1 < len(text):
-            buf.append(text[i : i + 2])  # 이스케이프된 문자는 연산자가 아니다
-            i += 2
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-            buf.append(ch)
-            i += 1
-            continue
-        two = text[i : i + 2]
-        if two in {"&&", "||"}:
-            parts.append((op, "".join(buf).strip()))
-            op = two
-            buf = []
-            i += 2
-            continue
-        if ch in {";", "|", "&", "\n"}:
-            parts.append((op, "".join(buf).strip()))
-            op = ch
-            buf = []
-            i += 1
-            continue
-        buf.append(ch)
-        i += 1
-    parts.append((op, "".join(buf).strip()))
-    return [(o, c) for o, c in parts if c]
+        matched += len(found)
+        if output == "files":
+            hits.append(str(rel))
+        elif output == "count":
+            hits.append(f"{rel}:{len(found)}")
+        elif context:
+            shown: set[int] = set()
+            for i in found:
+                lo, hi = max(0, i - context), min(len(lines), i + context + 1)
+                if hits and lo not in shown and lo - 1 not in shown:
+                    hits.append("--")
+                for k in range(lo, hi):
+                    if k in shown:
+                        continue
+                    shown.add(k)
+                    sep = ":" if k in found_set else "-"
+                    hits.append(f"{rel}{sep}{k + 1}{sep}{lines[k][:300]}")
+        else:
+            hits.extend(f"{rel}:{i + 1}:{lines[i][:300]}" for i in found)
+        if len(hits) >= max_hits:
+            extra = f"\n... [stopped at {max_hits} results after {scanned} files]"
+            return "\n".join(hits[:max_hits]) + extra
+    if not hits:
+        return f"(no matches in {scanned} files)"
+    if output == "count":
+        hits.append(f"(total {matched} matches)")
+    return "\n".join(hits)
 
 
-def chain_segments(command: str) -> list[str]:
-    """`&&`/`||`/`|`/`&`/`;`로 이어진 명령의 조각 목록(인용부호 무시)."""
-    return [c for _, c in split_shell_commands(command)]
-
-
-# 셸 명령을 "무엇을 하려는지"로 요약할 때 쓰는 프로그램별 의도 문구.
-# 명령 원문을 설명하지 않고 작업 의도만 한 줄로 보여주기 위한 표다.
-SHELL_INTENT_PROGRAMS = {
-    "ls": "폴더 내용을 확인합니다",
-    "cat": "파일 내용을 읽습니다",
-    "head": "파일 앞부분을 읽습니다",
-    "tail": "파일 끝부분을 읽습니다",
-    "less": "파일 내용을 읽습니다",
-    "wc": "코드 줄 수를 셉니다",
-    "grep": "코드에서 패턴을 찾습니다",
-    "rg": "코드에서 패턴을 찾습니다",
-    "find": "파일을 찾습니다",
-    "du": "용량을 확인합니다",
-    "df": "디스크 여유 공간을 확인합니다",
-    "tree": "폴더 구조를 봅니다",
-    "mkdir": "새 폴더를 만듭니다",
-    "touch": "새 파일을 만듭니다",
-    "rm": "파일을 삭제합니다",
-    "rmdir": "폴더를 삭제합니다",
-    "shred": "파일을 삭제합니다",
-    "mv": "파일을 이동하거나 이름을 바꿉니다",
-    "cp": "파일을 복사합니다",
-    "chmod": "실행 권한을 조정합니다",
-    "chown": "파일 소유자를 바꿉니다",
-    "ln": "링크를 만듭니다",
-    "sed": "파일 내용을 수정합니다",
-    "awk": "텍스트를 가공합니다",
-    "truncate": "파일을 비웁니다",
-    "tee": "결과를 파일로 저장합니다",
-    "echo": "결과를 출력합니다",
-    "printf": "결과를 출력합니다",
-    "tar": "압축을 풀거나 묶습니다",
-    "zip": "압축 파일을 만듭니다",
-    "unzip": "압축을 풉니다",
-    "curl": "네트워크에서 데이터를 가져옵니다",
-    "wget": "네트워크에서 파일을 받습니다",
-    "sudo": "관리자 권한으로 실행합니다",
-    "kill": "프로세스를 종료합니다",
-    "pkill": "프로세스를 종료합니다",
-    "docker": "컨테이너를 다룹니다",
-    "kubectl": "클러스터를 제어합니다",
-    "systemctl": "서비스를 제어합니다",
-    "pytest": "테스트를 실행합니다",
-    "ruff": "코드 스타일을 검사합니다",
-    "flake8": "코드 스타일을 검사합니다",
-    "black": "코드 스타일을 정리합니다",
-    "eslint": "코드 스타일을 검사합니다",
-    "prettier": "코드 스타일을 정리합니다",
-    "mypy": "타입을 검사합니다",
-    "tsc": "타입을 검사합니다",
-    "make": "빌드를 실행합니다",
-    "sleep": "잠시 기다립니다",
-    "which": "설치 경로를 확인합니다",
-}
-
-SHELL_INTENT_GIT = {
-    "status": "저장소 상태를 확인합니다",
-    "diff": "변경 내용을 확인합니다",
-    "log": "커밋 기록을 확인합니다",
-    "show": "커밋 내용을 확인합니다",
-    "branch": "브랜치를 확인합니다",
-    "remote": "원격 저장소를 확인합니다",
-    "add": "변경을 커밋 대상에 추가합니다",
-    "commit": "변경을 커밋합니다",
-    "tag": "태그를 추가합니다",
-    "rm": "추적 중인 파일을 삭제합니다",
-    "push": "원격 저장소로 올립니다",
-    "pull": "원격 저장소에서 받아옵니다",
-    "fetch": "원격 저장소 정보를 갱신합니다",
-    "clone": "저장소를 복제합니다",
-    "checkout": "다른 브랜치나 버전으로 바꿉니다",
-    "switch": "다른 브랜치로 바꿉니다",
-    "restore": "파일을 되돌립니다",
-    "reset": "커밋 상태를 되돌립니다",
-    "clean": "추적하지 않는 파일을 지웁니다",
-    "stash": "작업 내용을 임시 보관합니다",
-    "init": "저장소를 초기화합니다",
-    "config": "git 설정을 변경합니다",
-    "mv": "파일을 이동합니다",
-}
-
-SHELL_INTENT_PACKAGE_HEADS = {
-    "pip",
-    "pip3",
-    "uv",
-    "poetry",
-    "conda",
-    "apt",
-    "apt-get",
-    "brew",
-    "snap",
-    "gem",
-}
-
-SHELL_INTENT_WRITE_HEADS = {"echo", "printf", "cat", "tee", "sed"}
-SHELL_INTENT_SCRIPT_HEADS = {"bash", "sh", "zsh", "fish", "node", "deno", "ruby", "perl"}
-SHELL_INTENT_CHECKER_HEADS = {"ruff", "black", "prettier", "eslint", "flake8"}
-SHELL_INTENT_HEREDOC = re.compile(r"<<-?\s*['\"]?([A-Za-z_][A-Za-z0-9_]*)['\"]?")
-
-
-def strip_heredoc_bodies(command: str) -> str:
-    """heredoc 본문을 제거해 명령 뼈대만 남긴다.
-
-    본문(`print(1)` 같은 코드·데이터 줄)이 별개 명령처럼 해석되는 것을 막는다.
-    의도 요약과 보안 판정(설치·권한 상승 오탐 방지)에 함께 쓴다.
-    """
-    lines = command.splitlines()
-    kept: list[str] = []
-    i = 0
-    while i < len(lines):
-        line = lines[i]
-        kept.append(line)
-        i += 1
-        match = heredoc_marker(line)
-        if not match:
-            continue
-        while i < len(lines) and lines[i].strip() != match:
-            i += 1
-        i += 1  # 종료 토큰 줄 건너뛰기
-    return "\n".join(kept)
-
-
-def heredoc_marker(line: str) -> str | None:
-    """줄에서 heredoc 시작 토큰(`<<EOF`)을 찾는다(인용부호 밖의 `<<`만).
-
-    `echo "<<EOF"`처럼 인용부호 안에 든 `<<`를 진짜 heredoc으로 오해하면
-    뒤따르는 명령까지 본문으로 지워버리므로, 따옴표·이스케이프를 존중한다.
-    """
-    i = 0
-    while i < len(line):
-        ch = line[i]
-        if ch == "\\":
-            i += 2
-            continue
-        if ch in ("'", '"'):
-            quote = ch
-            i += 1
-            while i < len(line) and line[i] != quote:
-                i += 2 if line[i] == "\\" and quote == '"' else 1
-            i += 1
-            continue
-        if line[i : i + 2] == "<<":
-            match = SHELL_INTENT_HEREDOC.match(line, i)
-            if match:
-                return match.group(1)
-        i += 1
-    return None
-
-
-def scan_text(command: str) -> str:
-    """보안 판정용으로 데이터(heredoc 본문)와 무해한 리다이렉션을 뺀 명령."""
-    return SHELL_HARMLESS_REDIRECT.sub(" ", strip_heredoc_bodies((command or "").strip()))
-
-
-def intent_for_step(command: str) -> str | None:
-    """단일 셸 명령에서 "무엇을 하려는지" 한 줄을 뽑는다."""
-    single = command.strip()
-    if not single:
-        return None
-    tokens = single.split()
-    # `FOO=bar cmd ...` 처럼 앞에 붙은 환경변수 지정은 건너뛴다.
-    _, tokens = strip_env_assignments(tokens)
-    head = tokens[0]
-    name = Path(head).name
-    sub = tokens[1] if len(tokens) > 1 else ""
-
-    if name == "cd":
-        return "작업 폴더를 이동합니다"
-    if re.search(r"(?<![0-9&])>>?", single) and name in SHELL_INTENT_WRITE_HEADS:
-        return "파일을 작성하거나 수정합니다"
-    if name in {"python", "python3", "py"}:
-        if sub == "-m":
-            mod = tokens[2] if len(tokens) > 2 else ""
-            if "pytest" in mod or "unittest" in mod:
-                return "테스트를 실행합니다"
-            if "py_compile" in mod:
-                return "문법을 검사합니다"
-            if "json.tool" in mod:
-                return "JSON을 검사합니다"
-            return "파이썬 모듈을 실행합니다"
-        if sub in SHELL_WORKSPACE_CODE_FLAGS:
-            return "파이썬 코드를 실행합니다"
-        return "파이썬 스크립트를 실행합니다"
-    if name in SHELL_INTENT_SCRIPT_HEADS:
-        return "스크립트를 실행합니다"
-    if name == "git":
-        return SHELL_INTENT_GIT.get(sub, "Git 저장소를 다룹니다")
-    if name in {"npm", "yarn", "pnpm", "bun"}:
-        if sub in {"install", "i", "ci", "add"}:
-            return "패키지를 설치합니다"
-        if sub in {"test", "t"}:
-            return "테스트를 실행합니다"
-        if sub in {"run", "exec"}:
-            script = (tokens[2] if len(tokens) > 2 else "").lower()
-            if "test" in script:
-                return "테스트를 실행합니다"
-            if "build" in script:
-                return "빌드를 실행합니다"
-            if "lint" in script or "format" in script:
-                return "코드 스타일을 검사하거나 정리합니다"
-            return "스크립트를 실행합니다"
-        if sub in {"ls", "list"}:
-            return "설치된 패키지를 확인합니다"
-        return "Node 패키지를 다룹니다"
-    if name in SHELL_INTENT_PACKAGE_HEADS:
-        return "패키지를 설치하거나 관리합니다"
-    if name == "cargo":
-        return {
-            "test": "테스트를 실행합니다",
-            "build": "빌드합니다",
-            "check": "코드를 검사합니다",
-            "fmt": "코드 스타일을 정리합니다",
-            "clippy": "코드를 검사합니다",
-        }.get(sub, "Rust 프로젝트를 다룹니다")
-    if name == "go":
-        return {
-            "test": "테스트를 실행합니다",
-            "build": "빌드합니다",
-            "vet": "코드를 검사합니다",
-            "run": "코드를 실행합니다",
-            "mod": "모듈을 관리합니다",
-        }.get(sub, "Go 프로젝트를 다룹니다")
-    label = SHELL_INTENT_PROGRAMS.get(name)
-    if name in SHELL_INTENT_CHECKER_HEADS:
-        if "--fix" in tokens or name in {"black", "prettier"}:
-            return "코드 스타일을 정리합니다"
-        return "코드 스타일을 검사합니다"
-    if label:
-        return label
-    if head.startswith("./") or name.endswith(SHELL_WORKSPACE_SCRIPT_SUFFIXES):
-        return "스크립트를 실행합니다"
-    return f"{name} 명령을 실행합니다"
-
-
-def intent_summary(command: str) -> str:
-    """실행할 명령을 "무엇을 하려는지" 한 줄로 요약한다(명령 원문 설명 대신)."""
-    skeleton = strip_heredoc_bodies(command)
-    steps = split_shell_commands(skeleton) or [("", skeleton.strip())]
-    intents: list[str] = []
-    for _, single in steps:
-        text = intent_for_step(single)
-        if text and text not in intents:
-            intents.append(text)
-    if len(intents) > 1:
-        # `cd` 이동은 다른 작업과 함께면 의도 요약에서 뺀다.
-        intents = [i for i in intents if i != "작업 폴더를 이동합니다"] or intents
-    if not intents:
-        return "명령을 실행합니다"
-    if len(intents) > 2:
-        return intents[0] + f" 외 {len(intents) - 1}가지"
-    return " → ".join(intents)
 
 
 def allow_file(session: str) -> Path:
@@ -3778,6 +3305,25 @@ def confirm_shell(
     return True
 
 
+SHELL_MAX_TIMEOUT = 600
+
+
+def confirm_secret_command(command: str, reason: str) -> bool:
+    """비밀을 드러낼 수 있는 명령: 자동 허용 목록·trust 와 무관하게 매번 묻는다."""
+    if RUN.yes:
+        return True
+    if not sys.stdin.isatty():
+        return False
+    suspend_panel()
+    print(f"{C.yellow}🔐 비밀값이 모델에 전달될 수 있는 명령입니다{C.reset} {C.dim}({reason}){C.reset}")
+    try:
+        answer = input(f"   {C.bold}{command}{C.reset}\n   실행할까요? {C.bold}[y/N]{C.reset}: ").strip().lower()
+    except EOFError:
+        answer = "n"
+    resume_panel()
+    return answer in {"y", "yes", "ㅛ"}
+
+
 def tool_shell(
     root: Path,
     args: dict[str, Any],
@@ -3787,15 +3333,33 @@ def tool_shell(
     auto_workspace: bool = False,
     allow_all: bool = False,
 ) -> str:
+    bg_id = str(args.get("bg_id") or "").strip()
     command = args.get("command") or ""
+    if bg_id and not command.strip():
+        # 백그라운드 작업 조회/종료(새 명령 실행이 아니므로 확인 불필요)
+        if args.get("kill"):
+            return bg_manager().kill(bg_id)
+        return bg_manager().read_new(bg_id)
     if not command.strip():
+        if args.get("background") or bg_id == "list":
+            return bg_manager().summary()
         return "ERROR: command가 비어 있습니다."
     for rx in SHELL_DENY:
         if rx.search(command):
             return f"ERROR: 차단된 위험한 명령 패턴입니다: {command}"
+    if read_only_mode() and not is_safe_command(command):
+        return (
+            "ERROR: plan 모드에서는 읽기 전용 명령(ls, cat, git status/diff/log, grep, "
+            "테스트 조회 등)만 실행할 수 있습니다. 계획만 제시하세요."
+        )
+    secret = guard.command_touches_secret(command)
+    if secret and in_subagent():
+        return f"ERROR: 서브에이전트는 비밀값을 드러낼 수 있는 명령을 실행할 수 없습니다({secret})."
+    if secret and not (yes or confirm_secret_command(command, secret)):
+        return f"ERROR: 비밀값을 드러낼 수 있는 명령이라 실행하지 않았습니다({secret})."
     timeout = int(args.get("timeout") or 60)
-    timeout = max(1, min(timeout, 180))
-    auto_run = (
+    timeout = max(1, min(timeout, SHELL_MAX_TIMEOUT))
+    auto_run = bool(secret) or (
         approval is not None
         and approval.is_allowed(command)
         or auto_safe
@@ -3809,6 +3373,13 @@ def tool_shell(
         command, yes, approval, only_risky=allow_all, root=root
     ):
         return "ERROR: 사용자가 셸 실행을 거부했습니다."
+    env = guard.scrubbed_env()  # API 키·토큰은 하위 프로세스에 넘기지 않는다
+    if args.get("background"):
+        job = bg_manager().start(command, root, env)
+        return (
+            f"started {job.id} (pid {job.proc.pid}) — 출력 확인: shell(bg_id=\"{job.id}\"), "
+            f"종료: shell(bg_id=\"{job.id}\", kill=true)"
+        )
     try:
         proc = subprocess.run(
             command,
@@ -3817,17 +3388,107 @@ def tool_shell(
             capture_output=True,
             text=True,
             timeout=timeout,
-            env=os.environ.copy(),
+            env=env,
             executable="/bin/bash",
+            stdin=subprocess.DEVNULL,
         )
     except subprocess.TimeoutExpired:
-        return f"ERROR: {timeout}s 시간 초과"
+        return (
+            f"ERROR: {timeout}s 시간 초과 (최대 {SHELL_MAX_TIMEOUT}s. 서버·watch 처럼 "
+            "끝나지 않는 명령은 background=true 로 실행하세요)"
+        )
     parts = [f"exit {proc.returncode}"]
     if proc.stdout:
         parts.append("--- stdout ---\n" + proc.stdout)
     if proc.stderr:
         parts.append("--- stderr ---\n" + proc.stderr)
     return clip("\n".join(parts))
+
+
+def tool_web_fetch(args: dict[str, Any]) -> str:
+    """URL 본문을 텍스트로 가져온다. 호스트별로 처음 한 번 확인(--trust/--yes 는 생략)."""
+    url = web.validate_url(str(args.get("url") or ""))
+    host = web.url_host(url)
+    if not (RUN.yes or RUN.web_trust or host in RUN.web_hosts):
+        if in_subagent() or not sys.stdin.isatty():
+            return (
+                f"ERROR: {host} 접근이 아직 허용되지 않았습니다"
+                + (" (서브에이전트는 확인을 받을 수 없습니다. 메인에서 먼저 web_fetch 하세요)." if in_subagent() else " (--trust 또는 --yes 필요).")
+            )
+        suspend_panel()
+        try:
+            answer = input(
+                f"{C.yellow}🌐 웹 페이지를 가져올까요?{C.reset} {C.bold}{url}{C.reset}\n"
+                f"   {C.bold}[y/N/a]{C.reset} {C.dim}(a={host} 는 이번 실행 동안 묻지 않음){C.reset}: "
+            ).strip().lower()
+        except EOFError:
+            answer = "n"
+        resume_panel()
+        if answer in {"a", "ㅁ"}:
+            RUN.web_hosts.add(host)
+        elif answer not in {"y", "yes", "ㅛ"}:
+            return "ERROR: 사용자가 웹 요청을 거부했습니다."
+    try:
+        max_chars = max(1_000, min(int(args.get("max_chars") or web.DEFAULT_MAX_CHARS), MAX_TOOL_CHARS))
+    except (TypeError, ValueError):
+        max_chars = web.DEFAULT_MAX_CHARS
+    return web.fetch_text(url, max_chars=max_chars)
+
+
+SUBAGENT_MAX_STEPS = 25
+SUBAGENT_TOOLS = ("read", "find", "shell", "web_fetch")
+SUBAGENT_NOTE = (
+    "\nYou are a READ-ONLY sub-agent launched by the main agent for one focused task.\n"
+    "Investigate with read/find/read-only shell, then reply with a concise report:\n"
+    "concrete findings with file paths and line numbers, no speculation.\n"
+    "You cannot edit files and cannot ask the user questions.\n"
+)
+
+
+def tool_task(root: Path, args: dict[str, Any]) -> str:
+    """서브에이전트: 독립된 대화로 조사만 하고 보고서를 돌려준다(메인 맥락 절약)."""
+    if in_subagent():
+        return "ERROR: 서브에이전트 안에서는 task 를 다시 호출할 수 없습니다."
+    prompt = str(args.get("prompt") or "").strip()
+    if not prompt:
+        return "ERROR: task 에는 prompt 가 필요합니다."
+    system = build_system_prompt(root, RUN.session) + SUBAGENT_NOTE
+    tools = [t for t in tool_schemas() if t["function"]["name"] in SUBAGENT_TOOLS]
+    messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+    _THREAD.subagent = True
+    calls = 0
+    try:
+        for step in range(1, SUBAGENT_MAX_STEPS + 1):
+            content, tool_calls, _finish, reasoning = complete(
+                [{"role": "system", "content": system}, *messages],
+                tools,
+                RUN.model,
+                stream=False,
+                thinking=RUN.thinking,
+            )
+            if not tool_calls:
+                report = (content or "").strip() or "(빈 보고서)"
+                return f"[서브에이전트 보고 · {step}단계 · 도구 {calls}회]\n{report}"
+            assistant: dict[str, Any] = {"role": "assistant", "content": content or "", "tool_calls": tool_calls}
+            if reasoning:
+                assistant["reasoning_content"] = reasoning
+            messages.append(assistant)
+            for tc in tool_calls:
+                fn = tc.get("function") or {}
+                name = fn.get("name") or "?"
+                calls += 1
+                if name not in SUBAGENT_TOOLS:
+                    result = f"ERROR: 서브에이전트에서 쓸 수 없는 도구: {name}"
+                else:
+                    result = run_tool(name, fn.get("arguments") or "{}", root, yes=False)
+                messages.append(
+                    {"role": "tool", "tool_call_id": tc.get("id") or "", "name": name, "content": clip(result, 30_000)}
+                )
+        return f"ERROR: 서브에이전트가 {SUBAGENT_MAX_STEPS}단계 안에 끝내지 못했습니다(도구 {calls}회)."
+    except RuntimeError as exc:
+        return f"ERROR: 서브에이전트 API 오류: {exc}"
+    finally:
+        _THREAD.subagent = False
 
 
 def parse_tool_args(raw: str) -> dict[str, Any]:
@@ -3876,24 +3537,34 @@ def run_tool(
     elif name == "grep":
         args = {**args, "mode": "grep"}
         name = "find"
+    elif name == "multi_edit":
+        args = {**args, "action": "replace"}
+        name = "edit"
     try:
         if name == "todo":
-            return tool_todo(args)
-        if name == "read":
-            return tool_read_file(root, args)
-        if name == "edit":
-            return tool_edit(root, args)
-        if name == "find":
-            return tool_find(root, args)
-        if name == "shell":
-            return tool_shell(
+            result = tool_todo(args)
+        elif name == "read":
+            result = tool_read_file(root, args)
+        elif name == "edit":
+            result = tool_edit(root, args)
+        elif name == "find":
+            result = tool_find(root, args)
+        elif name == "shell":
+            result = tool_shell(
                 root, args, yes, auto_safe, approval, auto_workspace, allow_all
             )
-        return f"ERROR: 알 수 없는 도구: {name}"
+        elif name == "web_fetch":
+            result = tool_web_fetch(args)
+        elif name == "task":
+            result = tool_task(root, args)
+        else:
+            return f"ERROR: 알 수 없는 도구: {name}"
     except ValueError as exc:
-        return f"ERROR: {exc}"
+        result = f"ERROR: {exc}"
     except OSError as exc:
-        return f"ERROR: {exc}"
+        result = f"ERROR: {exc}"
+    # 알려진 비밀값(API 키 등)이 결과에 섞였으면 모델에 보내기 전에 가린다.
+    return guard.redact(result, secret_values(root))
 
 
 def summarize_args(name: str, raw_args: str) -> str:
@@ -3901,7 +3572,10 @@ def summarize_args(name: str, raw_args: str) -> str:
     if "_error" in args:
         return raw_args[:80]
     if name == "shell":
-        return intent_summary(str(args.get("command", "")))
+        if args.get("bg_id") and not args.get("command"):
+            return f"{args['bg_id']} {'종료' if args.get('kill') else '출력 확인'}"
+        suffix = " (백그라운드)" if args.get("background") else ""
+        return intent_summary(str(args.get("command", ""))) + suffix
     if name == "todo":
         items = args.get("items")
         if isinstance(items, list):
@@ -3942,6 +3616,10 @@ def summarize_args(name: str, raw_args: str) -> str:
         return " ".join(bits)[:120]
     if name in {"read", "read_file"}:
         return str(args.get("path") or "")
+    if name == "web_fetch":
+        return str(args.get("url") or "")[:120]
+    if name == "task":
+        return str(args.get("description") or args.get("prompt") or "")[:120]
     if "path" in args:
         extra = []
         if args.get("pattern"):
@@ -3953,6 +3631,12 @@ def summarize_args(name: str, raw_args: str) -> str:
     return ", ".join(f"{k}={args[k]}" for k in keys[:4])[:120]
 
 
+def report_retry(attempt: int, total: int, reason: str, delay: float) -> None:
+    """API 재시도 진행 상황(429·5xx·네트워크)을 한 줄로 알린다."""
+    clear_status()
+    print_warn(f"API 재시도 {attempt}/{total} — {reason} · {delay:.1f}초 후", stream=True)
+
+
 def http_json(url: str, payload: dict[str, Any] | None = None, timeout: int = 180) -> Any:
     headers = {
         "Authorization": f"Bearer {api_key()}",
@@ -3961,7 +3645,7 @@ def http_json(url: str, payload: dict[str, Any] | None = None, timeout: int = 18
     data = None if payload is None else json.dumps(payload, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(url, data=data, headers=headers, method="GET" if data is None else "POST")
     try:
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
+        with urlopen_with_retry(req, timeout, on_retry=report_retry) as resp:
             body = resp.read().decode("utf-8")
     except urllib.error.HTTPError as exc:
         err = exc.read().decode("utf-8", errors="replace")
@@ -4011,7 +3695,7 @@ def stream_chat(
             on_delta(kind, text)
 
     try:
-        with urllib.request.urlopen(req, timeout=180) as resp:
+        with urlopen_with_retry(req, 180, on_retry=report_retry) as resp:
             for raw in resp:
                 line = raw.decode("utf-8", errors="replace").strip()
                 if not line.startswith("data:"):
@@ -4215,6 +3899,10 @@ def print_banner(
     if not chat_only:
         label = SHELL_ASK_LABELS.get(ask_mode, ask_mode)
         confirm = f"  {C.dim}{label}{C.reset}"
+        if RUN.confirm_edits:
+            confirm += f"  {C.dim}편집=확인{C.reset}"
+        if RUN.plan_mode:
+            confirm += f"  {C.yellow}{C.bold}PLAN{C.reset}"
     print(
         f"{C.dim}──{C.reset} {mode_color}{C.bold}{mode}{C.reset}"
         f" {C.dim}v{VERSION}{C.reset}"
@@ -4340,6 +4028,11 @@ RATES_LIVE = False
 RATES_OFFLINE = False
 
 
+# 가장 최근 API 호출의 입력 토큰 수(대화 압축 판단용)와 REPL 세션 누적 사용량(/cost)
+LAST_PROMPT_TOKENS = 0
+SESSION_USAGE: dict[str, int] = {}
+
+
 def reset_usage() -> None:
     USAGE_TOTAL.clear()
 
@@ -4348,11 +4041,16 @@ def record_usage(usage: Any) -> None:
     """API 응답의 usage(토큰 사용량)를 누적한다. 없거나 형식이 다르면 무시."""
     if not isinstance(usage, dict):
         return
+    global LAST_PROMPT_TOKENS
     for key in USAGE_KEYS:
         value = usage.get(key)
         if isinstance(value, int) and value > 0:
             USAGE_TOTAL[key] = USAGE_TOTAL.get(key, 0) + value
+            SESSION_USAGE[key] = SESSION_USAGE.get(key, 0) + value
     USAGE_TOTAL["calls"] = USAGE_TOTAL.get("calls", 0) + 1
+    SESSION_USAGE["calls"] = SESSION_USAGE.get("calls", 0) + 1
+    if not in_subagent() and isinstance(usage.get("prompt_tokens"), int):
+        LAST_PROMPT_TOKENS = usage["prompt_tokens"]
 
 
 def http_get_json(url: str, timeout: int = 15) -> Any:
@@ -4676,19 +4374,20 @@ def cost_text(costs: dict[str, float]) -> str:
     return f"{format_krw(abs(krw))} 원" + (f" ({detail})" if detail else "")
 
 
-def usage_lines() -> list[str]:
-    """이번 실행에서 누적한 토큰 사용량 요약(usage 가 없으면 빈 목록)."""
-    prompt = int(USAGE_TOTAL.get("prompt_tokens", 0))
-    completion = int(USAGE_TOTAL.get("completion_tokens", 0))
+def usage_lines(totals: dict[str, int] | None = None) -> list[str]:
+    """누적 토큰 사용량 요약(기본: 이번 실행. usage 가 없으면 빈 목록)."""
+    totals = USAGE_TOTAL if totals is None else totals
+    prompt = int(totals.get("prompt_tokens", 0))
+    completion = int(totals.get("completion_tokens", 0))
     if not prompt and not completion:
         return []
-    total = int(USAGE_TOTAL.get("total_tokens", 0)) or (prompt + completion)
+    total = int(totals.get("total_tokens", 0)) or (prompt + completion)
     parts = [f"입력 {prompt:,}", f"출력 {completion:,}", f"합계 {total:,} 토큰"]
-    hit = int(USAGE_TOTAL.get("prompt_cache_hit_tokens", 0))
-    miss = int(USAGE_TOTAL.get("prompt_cache_miss_tokens", 0))
+    hit = int(totals.get("prompt_cache_hit_tokens", 0))
+    miss = int(totals.get("prompt_cache_miss_tokens", 0))
     if hit or miss:
         parts.append(f"캐시 적중 {hit:,} / 미적중 {miss:,}")
-    calls = int(USAGE_TOTAL.get("calls", 0))
+    calls = int(totals.get("calls", 0))
     if calls:
         parts.append(f"API {calls}회")
     return ["토큰 사용: " + " · ".join(parts)]
@@ -5313,6 +5012,28 @@ def ask_continue_steps(limit: int, extra: int) -> bool:
     return answer in {"y", "yes", "ㅛ"}
 
 
+# 도구 줄에 보여줄 이름
+TOOL_LABELS = {
+    "read": "읽기",
+    "edit": "편집",
+    "find": "탐색",
+    "shell": "셸",
+    "todo": "계획",
+    "web_fetch": "웹",
+    "task": "서브에이전트",
+    "multi_edit": "편집",
+    "read_file": "읽기",
+    "write_file": "쓰기",
+    "str_replace": "치환",
+    "delete_file": "삭제",
+    "list_dir": "목록",
+    "glob": "glob",
+    "grep": "검색",
+}
+# 한 턴에 이것들만 호출되면 병렬로 실행한다(사용자 확인을 묻지 않는 읽기 전용 도구).
+PARALLEL_TOOLS = {"read", "find", "task", "read_file", "list_dir", "glob", "grep"}
+
+
 def cmd_agent(
     prompt: str,
     session: str,
@@ -5352,8 +5073,24 @@ def cmd_agent(
         # 종료 시 소요 비용을 계산할 수 있도록 시작 잔액을 먼저 조회해 캐시한다.
         prefetch_balance()
 
+    RUN.session = session
+    RUN.model = model
+    RUN.thinking = thinking
+    RUN.yes = yes
+    RUN.web_trust = RUN.web_trust or allow_all
+    if not chat_only:
+        # `@파일` 멘션: 내용을 첨부하고 '읽은 파일'로 기록해 바로 편집할 수 있게 한다.
+        prompt, attached = expand_mentions(prompt, root, resolve_in_workspace, on_file=FILES.mark)
+        if attached:
+            print_info("첨부: " + ", ".join(f"@{a}" for a in attached))
+        undo_store(session).begin_turn(prompt)
+
     messages = load_history(history_file)
-    messages.append({"role": "user", "content": prompt})
+    if messages and messages[-1].get("role") == "user":
+        # 직전 턴이 답 없이 끝났으면(알림·중단) 같은 user 메시지로 합친다(연속 user 방지).
+        messages[-1] = {**messages[-1], "content": f"{messages[-1].get('content') or ''}\n\n{prompt}"}
+    else:
+        messages.append({"role": "user", "content": prompt})
     save_history(history_file, messages)
 
     if chat_only:
@@ -5378,202 +5115,223 @@ def cmd_agent(
     step = 0
     step_limit = max_steps
     started = time.monotonic()
-    while True:
-        step += 1
-        if step > step_limit:
-            # 한도 도달: 바로 끝내지 않고 이어서 진행할지 묻는다.
-            if not ask_continue_steps(step_limit, max_steps):
-                print_warn(
-                    f"최대 단계({step_limit})에서 멈췄습니다. "
-                    "--max-steps 로 한도를 늘리거나 이어서 요청을 보내세요.",
-                    stream=True,
-                )
-                return 1
-            step_limit += max_steps
+    try:
+        while True:
+            step += 1
+            if step > step_limit:
+                # 한도 도달: 바로 끝내지 않고 이어서 진행할지 묻는다.
+                if not ask_continue_steps(step_limit, max_steps):
+                    print_warn(
+                        f"최대 단계({step_limit})에서 멈췄습니다. "
+                        "--max-steps 로 한도를 늘리거나 이어서 요청을 보내세요.",
+                        stream=True,
+                    )
+                    return 1
+                step_limit += max_steps
 
-        # 새 단계 자리를 마련한다. 작업 계획이 있으면 계획 블록(그 안의 하위 로그)으로
-        # 진행 상황을 보여주고, 없으면 예전처럼 단계 머리말 아래에 도구 줄을 그린다.
-        global AGENT_STEP
-        AGENT_STEP = step
-        if CURRENT_TODO:
-            refresh_todo_block()
-        else:
-            PANEL.begin(f"{C.dim}⚙️ {step}단계{C.reset}")
+            # 새 단계 자리를 마련한다. 작업 계획이 있으면 계획 블록(그 안의 하위 로그)으로
+            # 진행 상황을 보여주고, 없으면 예전처럼 단계 머리말 아래에 도구 줄을 그린다.
+            global AGENT_STEP
+            AGENT_STEP = step
+            if CURRENT_TODO:
+                refresh_todo_block()
+            else:
+                PANEL.begin(f"{C.dim}⚙️ {step}단계{C.reset}")
 
-        # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
+            # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
 
-        messages = maybe_summarize(
-            session,
-            history_file,
-            messages,
-            model,
-            auto=True,
-        )
-
-        # API 호출 직전 최종 구조 검증
-        repaired_messages = repair_history(messages)
-
-        if len(repaired_messages) != len(messages):
-            print_warn(
-                "API 호출 전 손상된 Tool Calling 메시지를 제거했습니다.",
-                stream=True,
-            )
-
-            messages = repaired_messages
-
-            save_history(
+            messages = maybe_summarize(
+                session,
                 history_file,
                 messages,
-            )
-
-        api_messages = [
-            {
-                "role": "system",
-                "content": system,
-            },
-            *messages,
-        ]
-
-        try:
-            content, tool_calls, finish, reasoning = complete(
-                api_messages,
-                tools,
                 model,
-                stream,
-                thinking,
-                on_delta=progress,
+                auto=True,
             )
-        except RuntimeError as exc:
+            # 오래된 긴 도구 결과는 한꺼번에 비워 맥락을 아낀다(최근 결과는 유지).
+            messages, cleared, saved = clear_old_tool_results(messages)
+            if cleared:
+                print_info(f"오래된 도구 결과 {cleared}개를 비워 {saved:,}자를 줄였습니다 (최근 결과는 유지).")
+                save_history(history_file, messages)
+
+            # API 호출 직전 최종 구조 검증
+            repaired_messages = repair_history(messages)
+
+            if len(repaired_messages) != len(messages):
+                print_warn(
+                    "API 호출 전 손상된 Tool Calling 메시지를 제거했습니다.",
+                    stream=True,
+                )
+
+                messages = repaired_messages
+
+                save_history(
+                    history_file,
+                    messages,
+                )
+
+            api_messages = [
+                {
+                    "role": "system",
+                    "content": system,
+                },
+                *messages,
+            ]
+
+            try:
+                content, tool_calls, finish, reasoning = complete(
+                    api_messages,
+                    tools,
+                    model,
+                    stream,
+                    thinking,
+                    on_delta=progress,
+                )
+            except RuntimeError as exc:
+                clear_status()
+                print_error(f"API 오류: {exc}", stream=True)
+                return 1
+
             clear_status()
-            print_error(f"API 오류: {exc}", stream=True)
-            return 1
 
-        clear_status()
-
-        if not stream and thinking and reasoning:
-            # 비스트리밍 모드: 사고 과정은 기본으로 감추고 요약만 알려준다.
-            if show_thinking:
-                report_reasoning = make_stream_progress(True)
-                report_reasoning("reasoning", reasoning)
-                report_reasoning("end", "")
-            else:
-                print_info(
-                    f"사고 과정 {len(reasoning):,}자 진행 (원문은 --show-thinking)"
-                )
-
-        # Agent mode: execute structured tool calls and continue the loop.
-        if tool_calls and not chat_only:
-            names = [(tc.get("function") or {}).get("name") for tc in tool_calls]
-            if "todo" in names:
-                todo_seen = True
-            if (
-                not todo_seen
-                and not todo_reminded
-                and len([n for n in names if n != "todo"]) >= 2
-            ):
-                # 여러 도구를 쓰는데 계획이 없으면 안내만(차단하지 않음).
-                todo_reminded = True
-                print_info(TODO_REMINDER)
-
-            assistant_message: dict[str, Any] = {
-                "role": "assistant",
-                "content": content or "",
-                "tool_calls": tool_calls,
-            }
-            if reasoning:
-                # tools 사용 시 사고 과정을 함께 되돌려줘야 한다(프로토콜 요구).
-                # 디스크 저장 시에는 strip_reasoning 이 제거한다.
-                assistant_message["reasoning_content"] = reasoning
-            messages.append(assistant_message)
-
-            total = len(tool_calls)
-            for idx, tc in enumerate(tool_calls, 1):
-                fn = tc.get("function") or {}
-                name = fn.get("name") or "?"
-                raw_args = fn.get("arguments") or "{}"
-
-                summary = summarize_args(name, raw_args)
-                counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
-                pretty = {
-                    "read": "읽기",
-                    "edit": "편집",
-                    "find": "탐색",
-                    "shell": "셸",
-                    "todo": "계획",
-                    "read_file": "읽기",
-                    "write_file": "쓰기",
-                    "str_replace": "치환",
-                    "delete_file": "삭제",
-                    "list_dir": "목록",
-                    "glob": "glob",
-                    "grep": "검색",
-                }.get(name, name)
-                slot = tool_line_open(
-                    f"{counter}{C.cyan}🔧 {pretty}{C.reset} {C.dim}{summary}{C.reset}"
-                )
-
-                result = run_tool(
-                    name,
-                    raw_args,
-                    root,
-                    yes,
-                    auto_safe,
-                    approval,
-                    auto_workspace,
-                    allow_all,
-                )
-                preview = result.splitlines()[0][:120] if result else ""
-                if result.startswith("ERROR:"):
-                    tool_line_done(slot, f"{C.red}✗ {preview}{C.reset}")
+            if not stream and thinking and reasoning:
+                # 비스트리밍 모드: 사고 과정은 기본으로 감추고 요약만 알려준다.
+                if show_thinking:
+                    report_reasoning = make_stream_progress(True)
+                    report_reasoning("reasoning", reasoning)
+                    report_reasoning("end", "")
                 else:
-                    tool_line_done(slot, f"{C.green}✓{C.reset} {C.dim}{preview}{C.reset}")
+                    print_info(
+                        f"사고 과정 {len(reasoning):,}자 진행 (원문은 --show-thinking)"
+                    )
 
-                messages.append(
-                    {
-                        "role": "tool",
-                        "tool_call_id": tc.get("id") or "",
-                        "name": name,
-                        "content": clip(result),
-                    }
+            # Agent mode: execute structured tool calls and continue the loop.
+            if tool_calls and not chat_only:
+                names = [(tc.get("function") or {}).get("name") for tc in tool_calls]
+                if "todo" in names:
+                    todo_seen = True
+                if (
+                    not todo_seen
+                    and not todo_reminded
+                    and len([n for n in names if n != "todo"]) >= 2
+                ):
+                    # 여러 도구를 쓰는데 계획이 없으면 안내만(차단하지 않음).
+                    todo_reminded = True
+                    print_info(TODO_REMINDER)
+
+                assistant_message: dict[str, Any] = {
+                    "role": "assistant",
+                    "content": content or "",
+                    "tool_calls": tool_calls,
+                }
+                if reasoning:
+                    # tools 사용 시 사고 과정을 함께 되돌려줘야 한다(프로토콜 요구).
+                    # 디스크 저장 시에는 strip_reasoning 이 제거한다.
+                    assistant_message["reasoning_content"] = reasoning
+                messages.append(assistant_message)
+
+                total = len(tool_calls)
+
+                def open_line(idx: int, tc: dict[str, Any]) -> tuple[str, Any]:
+                    fn = tc.get("function") or {}
+                    name = fn.get("name") or "?"
+                    summary = summarize_args(name, fn.get("arguments") or "{}")
+                    counter = f"{C.dim}[{idx}/{total}]{C.reset} " if total > 1 else ""
+                    pretty = TOOL_LABELS.get(name, name)
+                    return tool_line_open(
+                        f"{counter}{C.cyan}🔧 {pretty}{C.reset} {C.dim}{summary}{C.reset}"
+                    )
+
+                def execute(tc: dict[str, Any]) -> str:
+                    fn = tc.get("function") or {}
+                    return run_tool(
+                        fn.get("name") or "?",
+                        fn.get("arguments") or "{}",
+                        root,
+                        yes,
+                        auto_safe,
+                        approval,
+                        auto_workspace,
+                        allow_all,
+                    )
+
+                def close_line(slot: tuple[str, Any], tc: dict[str, Any], result: str) -> None:
+                    preview = result.splitlines()[0][:120] if result else ""
+                    if result.startswith("ERROR:"):
+                        tool_line_done(slot, f"{C.red}✗ {preview}{C.reset}")
+                    else:
+                        tool_line_done(slot, f"{C.green}✓{C.reset} {C.dim}{preview}{C.reset}")
+                    messages.append(
+                        {
+                            "role": "tool",
+                            "tool_call_id": tc.get("id") or "",
+                            "name": (tc.get("function") or {}).get("name") or "?",
+                            "content": clip(result),
+                        }
+                    )
+
+                names_set = {(tc.get("function") or {}).get("name") for tc in tool_calls}
+                if total > 1 and names_set <= PARALLEL_TOOLS:
+                    # 읽기 전용 호출만 모였으면 병렬로 실행한다(확인 프롬프트가 없는 도구뿐).
+                    slots = [open_line(idx, tc) for idx, tc in enumerate(tool_calls, 1)]
+                    pool = concurrent.futures.ThreadPoolExecutor(max_workers=min(8, total))
+                    try:
+                        futures = [pool.submit(execute, tc) for tc in tool_calls]
+                        for slot, tc, fut in zip(slots, tool_calls, futures):
+                            close_line(slot, tc, fut.result())
+                    finally:
+                        pool.shutdown(wait=False, cancel_futures=True)
+                else:
+                    for idx, tc in enumerate(tool_calls, 1):
+                        slot = open_line(idx, tc)
+                        close_line(slot, tc, execute(tc))
+
+                save_history(history_file, messages)
+                continue
+
+            # Chat mode must never receive structured tool calls because tools=None.
+            # If a provider unexpectedly returns them, report the protocol issue.
+            if tool_calls and chat_only:
+                print_warn(
+                    "채팅 모드에서 예상치 못한 도구 호출을 받았습니다. "
+                    "최종 텍스트만 처리합니다.",
+                    stream=True,
                 )
 
-            save_history(history_file, messages)
-            continue
+            # Final answer: save first, then render exactly once with glow.
+            if content:
+                messages.append({"role": "assistant", "content": content})
+                save_history(history_file, messages)
 
-        # Chat mode must never receive structured tool calls because tools=None.
-        # If a provider unexpectedly returns them, report the protocol issue.
-        if tool_calls and chat_only:
-            print_warn(
-                "채팅 모드에서 예상치 못한 도구 호출을 받았습니다. "
-                "최종 텍스트만 처리합니다.",
-                stream=True,
-            )
+                clear_status()
+                if chat_only:
+                    PANEL.close()
+                else:
+                    PANEL.freeze()  # 마지막 계획(작업 순서)을 화면에 남긴다
+                print()
+                if not chat_only:
+                    # 동작을 마친 뒤 처리 결과(답변)로 연결한다.
+                    elapsed = duration_text(time.monotonic() - started)
+                    print_ok(f"작업 완료 ({step}단계 · {elapsed})")
+                    if not no_balance:
+                        show_balance_footer()
+                print_title("🤖 답변")
+                render_markdown(content)
+                # 답변 블록의 끝을 표시해 다음 프롬프트와 섞이지 않게 한다.
+                print(f"{C.dim}{rule()}{C.reset}")
+                return 0
 
-        # Final answer: save first, then render exactly once with glow.
-        if content:
-            messages.append({"role": "assistant", "content": content})
-            save_history(history_file, messages)
+            print_warn(f"빈 응답 (finish={finish})", stream=True)
+            return 1
+    except KeyboardInterrupt:
+        # Ctrl+C: 이 턴만 멈추고 대화 기록은 API 규격에 맞게 닫아 둔다(세션은 유지).
+        clear_status()
+        PANEL.close()
+        what = finalize_interrupted(messages)
+        save_history(history_file, messages)
+        eprint()
+        print_warn(f"중단했습니다{f' ({what})' if what else ''}. 대화는 저장되었습니다.", stream=True)
+        return 130
 
-            clear_status()
-            if chat_only:
-                PANEL.close()
-            else:
-                PANEL.freeze()  # 마지막 계획(작업 순서)을 화면에 남긴다
-            print()
-            if not chat_only:
-                # 동작을 마친 뒤 처리 결과(답변)로 연결한다.
-                elapsed = duration_text(time.monotonic() - started)
-                print_ok(f"작업 완료 ({step}단계 · {elapsed})")
-                if not no_balance:
-                    show_balance_footer()
-            print_title("🤖 답변")
-            render_markdown(content)
-            # 답변 블록의 끝을 표시해 다음 프롬프트와 섞이지 않게 한다.
-            print(f"{C.dim}{rule()}{C.reset}")
-            return 0
-
-        print_warn(f"빈 응답 (finish={finish})", stream=True)
-        return 1
 
 
 def expand_cli_argv(argv: list[str]) -> list[str]:
@@ -5589,6 +5347,10 @@ def expand_cli_argv(argv: list[str]) -> list[str]:
         return ["--chat", *rest]
     if head in {"repl", "i"}:
         return ["--interactive", *rest]
+    if head == "undo":
+        return ["--undo", *rest]
+    if head == "plan":
+        return ["--plan", *rest]
     if head == "session":
         if not rest or rest[0] in {"ls", "list", "status"}:
             return []  # 세션 목록(인자 없는 llm 과 동일)
@@ -5634,6 +5396,119 @@ def cmd_session_adopt(root: Path, folders: dict[str, str]) -> tuple[dict[str, st
     return folders, pick
 
 
+UNDO_NOTE = "[알림] 사용자가 /undo 로 직전 턴의 파일 편집을 되돌렸습니다: {files}. 해당 파일은 다시 read 한 뒤 작업하세요."
+
+
+def cmd_undo(session: str, history_file: Path, assume_yes: bool = False) -> int:
+    """마지막 턴에 edit 도구로 바꾼 파일을 원래대로 되돌린다."""
+    store = undo_store(session)
+    turn = store.last()
+    if not turn or not turn.get("files"):
+        print_info("되돌릴 편집이 없습니다 (edit 도구로 바꾼 파일만 추적합니다. 셸 변경은 git 으로 되돌리세요).")
+        return 1
+    print_title("↩️  되돌리기")
+    print_info(f"{turn.get('at', '')} · \"{turn.get('prompt', '')}\"")
+    for item in turn["files"]:
+        tag = "새 파일 → 삭제" if item.get("before") is None else "원본 복원"
+        print(f"   {C.dim}·{C.reset} {item.get('rel') or item['path']} {C.dim}({tag}){C.reset}")
+    changed = store.conflicts(turn)
+    if changed:
+        print_warn("편집 뒤에 다시 바뀐 파일이 있습니다(되돌리면 그 변경도 사라짐): " + ", ".join(changed))
+    if not assume_yes:
+        if not sys.stdin.isatty():
+            print_error("확인이 필요합니다. 자동화에서는 llm undo --yes 를 쓰세요.")
+            return 1
+        try:
+            answer = input(f"   되돌릴까요? {C.bold}[y/N]{C.reset}: ").strip().lower()
+        except EOFError:
+            answer = "n"
+        if answer not in {"y", "yes", "ㅛ"}:
+            print_info("취소했습니다.")
+            return 1
+    turn, results = store.undo_last()
+    for line in results:
+        print_ok(line)
+    files = ", ".join(item.get("rel") or item["path"] for item in (turn or {}).get("files", []))
+    messages = load_history(history_file)
+    note = UNDO_NOTE.format(files=files)
+    if messages and messages[-1].get("role") == "user":
+        messages[-1] = {**messages[-1], "content": f"{messages[-1].get('content') or ''}\n\n{note}"}
+    else:
+        messages.append({"role": "user", "content": note})
+    save_history(history_file, messages)
+    return 0
+
+
+REPL_COMMANDS = {
+    "/help": "명령 목록",
+    "/exit": "종료 (빈 줄·Ctrl+D 도 종료)",
+    "/clear": "대화 비우기 (이전 대화는 summaries/ 에 백업)",
+    "/compact": "지금 대화 요약(압축)",
+    "/model": "모델 보기/바꾸기  예) /model deepseek-reasoner",
+    "/cost": "이번 대화형 세션의 토큰 사용량",
+    "/undo": "직전 턴의 파일 편집 되돌리기",
+    "/plan": "plan 모드 켜기/끄기 (읽기 전용 조사 + 계획만)",
+    "/rules": "세션 규칙·프로젝트 지침 보기",
+    "/bg": "백그라운드 셸 작업 목록",
+    "/sync": "대화 기록 올리기",
+    "/chat": "채팅 모드(도구 없음)",
+    "/agent": "에이전트 모드",
+}
+
+
+def ansi_prompt(text: str) -> str:
+    """readline 이 색 코드를 글자 폭으로 세지 않도록 \\001/\\002 로 감싼다."""
+    return ANSI_SEQ_RE.sub(lambda m: f"\001{m.group(0)}\002", text)
+
+
+def setup_readline() -> None:
+    """방향키 편집·입력 히스토리(~/.local/share/llm/repl_history)·/명령 Tab 완성."""
+    try:
+        import readline
+    except ImportError:  # 표준 라이브러리지만 일부 플랫폼엔 없다
+        return
+    import atexit
+
+    hist = HISTORY_DIR / "repl_history"
+    try:
+        readline.read_history_file(str(hist))
+    except OSError:
+        pass
+    readline.set_history_length(1000)
+
+    def save() -> None:
+        try:
+            readline.write_history_file(str(hist))
+        except OSError:
+            pass
+
+    atexit.register(save)
+    commands = sorted(REPL_COMMANDS)
+
+    def complete_cmd(text: str, state: int) -> str | None:
+        options = [c for c in commands if c.startswith(text)] if text.startswith("/") else []
+        return options[state] if state < len(options) else None
+
+    readline.set_completer_delims(" \t\n")
+    readline.set_completer(complete_cmd)
+    readline.parse_and_bind("tab: complete")
+
+
+def read_repl_input(prompt_text: str) -> str:
+    """한 줄 입력. 줄 끝 `\\` 는 다음 줄로 이어지고, `\"\"\"` 로 감싸면 여러 줄 블록."""
+    line = input(ansi_prompt(prompt_text))
+    if line.strip() == '"""':
+        lines: list[str] = []
+        while True:
+            more = input(ansi_prompt(f"{C.dim}...{C.reset} "))
+            if more.strip() == '"""':
+                return "\n".join(lines)
+            lines.append(more)
+    while line.endswith("\\"):
+        line = line[:-1] + "\n" + input(ansi_prompt(f"{C.dim}...{C.reset} "))
+    return line
+
+
 def cmd_repl(
     session: str,
     history_file: Path,
@@ -5645,36 +5520,82 @@ def cmd_repl(
     print_banner(session, root, args.chat, ask_mode=ask_mode, ask_source=ask_source)
     print_continue_status(root, session, history_file)
     print_phase("대화형 모드")
-    print_info("빈 줄·/exit 종료 · /sync 기록 올리기 · /chat|/agent 모드 전환")
+    print_info("/help 명령 목록 · 빈 줄·/exit 종료 · Ctrl+C 는 진행 중인 턴만 중단 · @파일 첨부 · 줄 끝 \\ 여러 줄")
     if not args.no_pull:
         maybe_auto_pull(root, enabled=True)
+    setup_readline()
 
     chat_only = bool(args.chat)
+    model = args.model
     turn = 0
+    interrupted = False
     while True:
         try:
-            mode_tag = "chat" if chat_only else "agent"
-            line = input(f"{C.cyan}llm:{mode_tag}>{C.reset} ").strip()
-        except (EOFError, KeyboardInterrupt):
+            mode_tag = "chat" if chat_only else ("plan" if RUN.plan_mode else "agent")
+            line = read_repl_input(f"{C.cyan}llm:{mode_tag}>{C.reset} ").strip()
+            interrupted = False
+        except KeyboardInterrupt:
+            eprint()
+            if interrupted:
+                print_info("대화형 모드를 끝냅니다.")
+                break
+            interrupted = True
+            print_info("입력을 취소했습니다. 끝내려면 Ctrl+C 를 한 번 더 누르거나 /exit")
+            continue
+        except EOFError:
             eprint()
             print_info("대화형 모드를 끝냅니다.")
             break
         if not line or line in {"/exit", "/quit", ":q"}:
             print_info("대화형 모드를 끝냅니다.")
             break
-        if line == "/sync":
-            cmd_sync_history(root, session)
-            continue
-        if line == "/chat":
-            chat_only = True
-            print_ok("채팅 모드")
-            continue
-        if line == "/agent":
-            chat_only = False
-            print_ok("에이전트 모드")
-            continue
         if line.startswith("/"):
-            print_warn("알 수 없는 명령입니다. /exit /sync /chat /agent")
+            cmd, _, rest = line.partition(" ")
+            rest = rest.strip()
+            if cmd == "/help":
+                for name, desc in REPL_COMMANDS.items():
+                    print(f"  {C.cyan}{pad(name, 10)}{C.reset} {desc}")
+            elif cmd == "/sync":
+                cmd_sync_history(root, session)
+            elif cmd == "/chat":
+                chat_only = True
+                print_ok("채팅 모드")
+            elif cmd == "/agent":
+                chat_only = False
+                print_ok("에이전트 모드")
+            elif cmd == "/plan":
+                RUN.plan_mode = not RUN.plan_mode
+                print_ok("plan 모드 켬 — 읽기 전용 조사 후 계획만 제시합니다" if RUN.plan_mode else "plan 모드 끔 — 계획을 실행할 수 있습니다")
+            elif cmd == "/model":
+                if rest:
+                    model = rest
+                    print_ok(f"모델을 바꿨습니다: {model}")
+                else:
+                    print_info(f"현재 모델: {model}")
+            elif cmd == "/cost":
+                lines = usage_lines(SESSION_USAGE)
+                print_info(lines[0] if lines else "아직 사용량이 없습니다.")
+            elif cmd == "/compact":
+                cmd_summarize(session, history_file, model, force=True)
+            elif cmd == "/clear":
+                old = load_history(history_file)
+                if old:
+                    backup = summaries_dir(session) / f"cleared-{datetime.now():%Y-%m-%dT%H-%M-%S}.json"
+                    backup.parent.mkdir(parents=True, exist_ok=True)
+                    backup.write_text(json.dumps(old, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+                    print_info(f"이전 대화 백업: {backup}")
+                save_history(history_file, [])
+                FILES.clear()
+                reset_todo()
+                print_ok("대화를 비웠습니다.")
+            elif cmd == "/undo":
+                cmd_undo(session, history_file, assume_yes=False)
+            elif cmd == "/rules":
+                cmd_show_rules(root)
+            elif cmd == "/bg":
+                print(bg_manager().summary())
+            else:
+                print_warn("알 수 없는 명령입니다. /help 로 목록을 보세요.")
             continue
 
         turn += 1
@@ -5686,7 +5607,7 @@ def cmd_repl(
             root=root,
             chat_only=chat_only,
             yes=args.yes,
-            model=args.model,
+            model=model,
             max_steps=max(1, args.max_steps),
             stream=not args.no_stream,
             thinking=not args.no_thinking,
@@ -5700,7 +5621,7 @@ def cmd_repl(
             auto_pull=False,
             startup=False,
         )
-        if rc != 0:
+        if rc not in (0, 130):
             print_warn(f"이 턴 종료 코드 {rc} — 다음 입력을 받을 수 있습니다.")
 
     auto_sync_history(root, session)
@@ -5712,7 +5633,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         prog="llm",
         add_help=True,
         description="DeepSeek CLI 에이전트",
-        epilog="서브커맨드: ask | chat | sync | session [ls|adopt] | repl(-i)",
+        epilog="서브커맨드: ask | chat | plan | sync | undo | session [ls|adopt] | repl(-i)",
     )
     parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑, 기존 매핑은 갈아탐)")
     parser.add_argument(
@@ -5758,7 +5679,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         action="store_true",
         help="모델의 사고 과정(reasoning) 원문을 회색으로 실시간 출력",
     )
-    parser.add_argument("--confirm-all", action="store_true", help="모든 셸 명령 확인 (가장 엄격)")
+    parser.add_argument("--confirm-all", action="store_true", help="모든 셸 명령과 파일 편집 확인 (가장 엄격)")
+    parser.add_argument(
+        "--confirm-edits",
+        action="store_true",
+        help="파일 편집마다 diff 를 보여주고 확인 (LLM_CONFIRM_EDITS=1 과 동일)",
+    )
+    parser.add_argument(
+        "--plan",
+        action="store_true",
+        help="plan 모드: 읽기 전용 조사 후 구현 계획만 제시 (llm plan \"질문\")",
+    )
+    parser.add_argument(
+        "--undo",
+        action="store_true",
+        help="직전 턴에 edit 도구로 바꾼 파일 되돌리기 (llm undo, -y 로 확인 생략)",
+    )
     parser.add_argument(
         "--safe",
         action="store_true",
@@ -5848,7 +5784,7 @@ def main(argv: list[str] | None = None) -> int:
 
     inspect_only = (
         args.view or args.run or args.clear or args.delete or args.summarize
-        or args.allow_list or args.allow_clear
+        or args.allow_list or args.allow_clear or args.undo
     )
     # 남의 세션에도 허용되는 "보기만" 하는 명령.
     read_only = bool(args.view or args.allow_list)
@@ -5929,6 +5865,12 @@ def main(argv: list[str] | None = None) -> int:
                 return 0
 
     history_file = history_file_for(session)
+    RUN.session = session
+    RUN.plan_mode = bool(args.plan)
+    RUN.confirm_edits = bool(args.confirm_edits or args.confirm_all or env_flag("LLM_CONFIRM_EDITS"))
+
+    if args.undo:
+        return cmd_undo(session, history_file, assume_yes=args.yes)
 
     if args.interactive:
         return cmd_repl(session, history_file, root, args)

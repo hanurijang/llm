@@ -4,7 +4,7 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
-**버전:** v0.6.0
+**버전:** v0.7.0 — 변경 요약은 [v0.7 변경 사항](#v07-변경-사항)
 
 ## 최소 사용법
 
@@ -29,10 +29,14 @@ llm sync                        # 대화 기록만 원격에
 | 순수 채팅 | `llm chat "질문"` · `llm --chat` |
 | 셸을 더 관대하게 | `llm --trust "질문"` |
 | 셸 전부 확인 | `llm --confirm-all "질문"` |
+| 계획만 세우기(읽기 전용) | `llm plan "질문"` · `llm --plan` · REPL `/plan` |
+| 편집마다 diff 확인 | `llm --confirm-edits "질문"` |
+| 직전 편집 되돌리기 | `llm undo` · REPL `/undo` |
+| 파일 첨부 | `llm "@src/app.py 의 버그 고쳐"` |
 | 대화 기록만 원격에 | `llm sync` |
 | 기록 세션 연결 | `llm session adopt` |
 
-기본값: **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`.
+기본값: **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.
 
 - **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수
 - **채팅 모드**: 도구 없이 순수 대화
@@ -40,6 +44,25 @@ llm sync                        # 대화 기록만 원격에
 - **세션 규칙**: 프로젝트별 지침을 `.llm/rules.md`에 남겨 매 요청에 반영
 - **진행 표시**: 배너에 session/rules/sync/확인 모드 · 이어가기 상태 한 줄 · 단계 `▸`
 - **읽기 전용 셸 자동 실행**: `ls`, `cat`, `git status` 등 안전한 명령은 확인 없이 실행
+- **비밀값 보호**: 셸에 API 키·토큰을 넘기지 않고, `.env`를 드러내는 명령은 항상 확인, 도구 결과의 키는 `[REDACTED]`
+- **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`
+- **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도
+
+## v0.7 변경 사항
+
+Claude Code 같은 클라이언트 동작을 목표로 한 개선입니다.
+
+| 영역 | v0.6 | v0.7 |
+|---|---|---|
+| 비밀값 | `cat .env`·`echo $DEEPSEEK_API_KEY`·`printenv`가 확인 없이 실행되어 키가 모델로 전송 | 비밀 파일·변수 참조 명령은 **항상 확인**(자동 허용·trust 무시), 셸 환경에서 `*_KEY`/`*TOKEN*`/`*SECRET*`/`*PASSWORD*` 제거, 도구 결과의 알려진 키는 `[REDACTED]`, `find grep`은 `.env` 건너뜀 |
+| 중단 | Ctrl+C = 프로세스 종료(REPL도 종료), 결과 없는 도구 호출이 기록에 남음 | **현재 턴만 중단**, 빠진 도구 결과를 '중단됨'으로 채워 기록을 온전히 저장, REPL 계속 |
+| API 오류 | 429/5xx/네트워크 오류 즉시 실패 | 지수 백오프로 최대 4회 재시도(`Retry-After` 준수, `LLM_RETRIES`) |
+| 편집 | 읽지 않은 파일도 덮어씀, diff 없음, 되돌리기 없음 | **read 한 파일만 편집**, 읽은 뒤 바깥 변경 감지, 색 diff 표시, `--confirm-edits`, 턴 단위 `llm undo`/`/undo`, CRLF 보존, `edits` 배열로 원자적 다중 치환 |
+| 모드 | 에이전트/채팅 | + **plan 모드**(읽기 전용 조사 → 계획만) |
+| REPL | `input()` 한 줄, `/exit /sync /chat /agent` | readline(방향키·히스토리·Tab 완성), 여러 줄(`\` 이어쓰기, `"""` 블록), `/help /clear /compact /model /cost /undo /plan /rules /bg` |
+| 맥락 | `.llm/rules.md`만, 문자 수 기준 압축 | `@파일` 첨부, `CLAUDE.md`/`AGENTS.md`(상위 폴더·`~/.claude`) 반영, **실제 토큰 수** 기준 압축, 오래된 긴 도구 결과 일괄 비우기 |
+| 도구 | 5개, 순차 실행, 셸 최대 180초 | + `web_fetch`, `task`(읽기 전용 서브에이전트), 백그라운드 셸, grep `context`/`output`, 읽기 전용 호출 **병렬 실행**, 셸 최대 600초 |
+| 구조 | `agent.py` 6,000줄 단일 파일, 테스트 9개 | `llmlib/` 8개 모듈로 분리(셸 정책·보안·재시도 등), 테스트 40개(셸 정책 표 테스트 포함) |
 
 ---
 
@@ -199,7 +222,7 @@ source ~/.bashrc
 
 ```bash
 which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.6.0) 표시 (API 호출 없음)
+llm                 # 상태 + 버전(v0.7.0) 표시 (API 호출 없음)
 llm --balance       # 키·네트워크 확인
 llm --chat "안녕"   # 모델 응답 확인
 llm "이 폴더 요약해줘"   # 도구까지 확인
@@ -292,7 +315,7 @@ llm --allow-clear
 | `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (이 폴더의 기존 매핑은 갈아탐, 남의 세션은 거부) |
 | `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |
 | `--chat` | 도구 없이 순수 채팅 모드 |
-| `-y, --yes` | 셸 명령 실행 확인 생략 (위험 패턴만 차단) |
+| `-y, --yes` | 셸·편집·웹 요청 확인 생략 (위험 패턴만 차단, 비밀 노출 명령 확인도 생략되므로 주의) |
 | `--safe` | 작업 폴더 안 명령 자동(**기본과 동일**). 구 `--auto-workspace` |
 | `--trust` | sudo·설치·폴더 밖 삭제만 확인(관대). 구 `--allow-all` |
 | `--allow-all` | `--trust` 와 동일(구 옵션) |
@@ -304,7 +327,10 @@ llm --allow-clear
 | `--no-rates` | 실시간 환율 조회를 끄고 가정 환율로 환산 (`LLM_RATES=0`과 동일) |
 | `--no-thinking` | 사고(thinking) 비활성화 (더 빠른 응답, `--chat`에서 유용) |
 | `--show-thinking` | 사고 과정 원문을 회색으로 실시간 출력 (기본은 글자 수만 표시) |
-| `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (모든 셸 명령 확인, 다른 모드·환경변수보다 우선) |
+| `--confirm-all` | 읽기 전용 명령도 확인 후 실행 (모든 셸 명령 + 파일 편집 확인, 다른 모드·환경변수보다 우선) |
+| `--confirm-edits` | 파일 편집마다 diff 를 보여주고 `[y/N/a]` 확인 (`LLM_CONFIRM_EDITS=1`과 동일, `a`=이번 실행 동안 생략) |
+| `--plan` | plan 모드: 편집·쓰기 셸을 막고 읽기 전용 조사 후 구현 계획만 제시 (`llm plan "질문"`) |
+| `--undo` | 직전 턴에 `edit` 도구로 바꾼 파일을 원래대로 (`llm undo`, `-y`로 확인 생략). 셸로 바꾼 파일은 대상 아님 |
 | `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 |
 | `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 |
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
@@ -324,7 +350,7 @@ llm --allow-clear
 표시됩니다.
 
 ```text
-── 에이전트 v0.6.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
+── 에이전트 v0.7.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
 ℹ️  이어가기 · 로컬 12턴 · 원격과 같음
 ▸ 원격 대화 기록 확인
 ```
@@ -347,7 +373,43 @@ llm --run
 # 세션 초기화 / 삭제
 llm --clear
 llm --delete
+
+# 파일을 첨부해 질문 (@경로: 파일 내용, 폴더면 목록)
+llm "@agent.py 의 cmd_agent 흐름 설명해줘"
+
+# 먼저 계획만 받고, 확인 뒤 실행
+llm plan "로그인 기능 추가 방법"
+llm "좋아, 그 계획대로 진행해"
+
+# 직전 턴의 편집 되돌리기
+llm undo
 ```
+
+> 서브커맨드(`ask`/`chat`/`plan`/`sync`/`undo`/`session`/`repl`)는 **첫 번째 인자**일
+> 때만 인식됩니다. 예: `llm undo -s mysession` (O), `llm -s mysession undo` (X, 질문으로 처리)
+
+### 대화형 모드(REPL) 명령
+
+`llm -i`(또는 `llm repl`)에서 쓰는 명령입니다. `/`까지 치고 Tab 을 누르면 완성됩니다.
+
+| 명령 | 설명 |
+|---|---|
+| `/help` | 명령 목록 |
+| `/clear` | 대화 비우기 (이전 대화는 `summaries/<세션>/cleared-*.json`에 백업) |
+| `/compact` | 지금 대화 요약(압축) |
+| `/model [이름]` | 모델 보기/바꾸기 |
+| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 |
+| `/undo` | 직전 턴의 파일 편집 되돌리기 |
+| `/plan` | plan 모드 켜기/끄기 (프롬프트가 `llm:plan>`로 바뀜) |
+| `/rules` | 세션 규칙·프로젝트 지침(CLAUDE.md 등) 보기 |
+| `/bg` | 백그라운드 셸 작업 목록 |
+| `/sync` · `/chat` · `/agent` · `/exit` | 기록 올리기 · 채팅 모드 · 에이전트 모드 · 종료 |
+
+- **Ctrl+C**: 모델 응답·도구 실행 중이면 **그 턴만 중단**하고 프롬프트로 돌아옵니다.
+  입력 중에 누르면 입력만 취소, 연달아 두 번 누르면 종료합니다. `Ctrl+D`/빈 줄도 종료.
+- **여러 줄 입력**: 줄 끝에 `\`를 붙이면 다음 줄로 이어지고, `"""`만 있는 줄로
+  감싸면 블록 전체를 한 번에 보냅니다(붙여넣기용).
+- 입력 히스토리는 `~/.local/share/llm/repl_history`에 저장되어 ↑/↓로 불러옵니다.
 
 > 옵션과 프롬프트를 함께 쓸 때는 프롬프트를 `--`로 구분할 수 있습니다.
 > 예: `llm -s mysession -- "질문"`
@@ -743,6 +805,10 @@ llm --rules
 ```
 
 - 두 위치의 규칙을 합쳐 최대 `MAX_RULES_CHARS`(24,000자)까지 적용합니다.
+- **프로젝트 지침 파일**도 함께 읽습니다(Claude Code·Codex 등과 공용):
+  `~/.claude/CLAUDE.md`(전역) → 홈부터 작업 폴더까지 각 폴더의 `CLAUDE.md`,
+  `AGENTS.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` 순서로, 합계 24,000자까지.
+  끄려면 `LLM_PROJECT_DOCS=0`. `llm --rules`에 적용 중인 파일이 표시됩니다.
 - 규칙이 없으면 모델은 규칙 없이 동작합니다.
 - "규칙을 수정해줘"라고 요청하면 에이전트가 해당 파일을 직접 편집합니다.
 
@@ -774,31 +840,81 @@ llm --rules
 
 ## 에이전트 도구
 
-에이전트 모드에서 모델이 쓰는 도구입니다(v0.5: **5개로 통합**). 경로는
-**워크스페이스 안**만. 예전 이름(`read_file`, `str_replace`, `grep` …)도
+에이전트 모드에서 모델이 쓰는 도구입니다(v0.7: **7개**). 경로는
+**워크스페이스 안**만. 예전 이름(`read_file`, `str_replace`, `grep`, `multi_edit` …)도
 alias로 동작합니다.
 
 | 도구 | 설명 | 주요 인자 |
 |------|------|-----------|
 | `todo` | 짧은 작업 계획(여러 단계일 때) | `goal`, `items` |
-| `read` | 파일 읽기 | `path`, `offset`, `limit` |
-| `edit` | 수정 · `action=replace\|write\|delete` | `path`, `old_string`/`new_string` 또는 `contents` |
-| `find` | 탐색 · `mode=list\|glob\|grep` | `path`, `pattern`, `glob` |
-| `shell` | bash (테스트·git·빌드). 파일 I/O에는 쓰지 말 것 | `command`, `timeout` |
+| `read` | 파일 읽기 (2,000자 넘는 줄은 자름) | `path`, `offset`, `limit` |
+| `edit` | 수정 · `action=replace\|write\|delete`. **기존 파일은 먼저 read** | `path`, `old_string`/`new_string` 또는 `edits`(배열) 또는 `contents` |
+| `find` | 탐색 · `mode=list\|glob\|grep` | `path`, `pattern`, `glob`, grep 전용 `output=content\|files\|count`·`context`·`max_results` |
+| `shell` | bash (테스트·git·빌드). 파일 I/O에는 쓰지 말 것 | `command`, `timeout`(최대 600초), `background`, `bg_id`, `kill` |
+| `web_fetch` | URL 본문을 텍스트로(HTML → 읽기 좋은 텍스트). 호스트별 첫 요청 시 `[y/N/a]` 확인 | `url`, `max_chars` |
+| `task` | 읽기 전용 **서브에이전트**에게 조사를 맡기고 보고서만 받음(메인 맥락 절약) | `description`, `prompt` |
+
+### 편집 안전장치와 되돌리기
+
+- **읽은 파일만 편집**: 에이전트가 `read`(또는 `@멘션` 첨부)하지 않은 기존 파일은
+  `edit`가 거부합니다. 새 파일 작성은 예외. 끄려면 `LLM_EDIT_REQUIRE_READ=0`.
+- **바깥 변경 감지**: 읽은 뒤 사용자·다른 프로그램이 파일을 바꾸면(mtime/크기) 다시
+  읽으라고 돌려보내 덮어쓰기 사고를 막습니다.
+- **diff 표시**: 모든 편집은 색 diff(최대 60줄)를 보여주고, 결과에 `+추가 -삭제`를 남깁니다.
+  `--confirm-edits`(또는 `--confirm-all`)이면 적용 전에 `[y/N/a]`로 묻습니다.
+- **다중 치환**: `edits` 배열은 차례로 적용하며 **하나라도 실패하면 아무것도 바꾸지 않습니다**.
+- **줄바꿈 보존**: CRLF 파일도 그대로 유지(LF로 보낸 치환은 CRLF로 맞춰 적용).
+- **되돌리기**: 턴마다 편집 전 원본을 `~/.local/share/llm/undo/undo_<세션>.json`
+  (최근 20턴, 파일당 2MB까지)에 저장합니다. `llm undo`/`/undo`는 **마지막 편집 턴**의
+  파일을 원래대로(새로 만든 파일은 삭제) 되돌리고, 편집 뒤 다시 바뀐 파일이 있으면
+  경고합니다. 되돌린 사실은 다음 요청에 자동으로 알려 모델이 다시 읽게 합니다.
+  **셸로 바꾼 파일은 추적하지 않으니** git 으로 되돌리세요.
+
+### 병렬 실행·서브에이전트·백그라운드 셸
+
+- 한 응답에 `read`/`find`/`task`만 여러 개 오면 **동시에 실행**합니다(최대 8개).
+  셸·편집·웹처럼 확인이 필요할 수 있는 도구가 섞이면 순서대로 실행합니다.
+- `task` 서브에이전트는 독립된 대화에서 `read`/`find`/읽기 전용 `shell`/`web_fetch`만
+  쓰며(최대 25단계), 편집·비밀 노출 명령·재귀 `task`는 거부됩니다.
+- `shell(background=true)`는 서버·watch 같은 명령을 띄우고 `bg_1` 같은 id를 돌려줍니다.
+  `shell(bg_id="bg_1")`로 새 출력·상태를, `kill=true`로 종료합니다. llm이 끝나면
+  함께 정리됩니다. REPL `/bg`로 목록을 봅니다.
+
+### 맥락 관리
+
+- **토큰 기준 압축**: API가 알려준 실제 입력 토큰이 `LLM_COMPACT_TOKENS`(기본 90,000)를
+  넘으면 문자 수와 무관하게 요약·압축합니다(기존 문자 수·메시지 수 기준도 유지).
+- **오래된 도구 결과 비우기**: 도구 결과 합계가 60,000자를 넘으면 최근 6개를 뺀
+  1,500자 이상 결과를 `[이전 도구 결과 비움: …]`로 **한꺼번에** 바꿔 저장합니다
+  (조금씩 비우면 매 단계 프롬프트 캐시가 깨지므로 일괄 처리).
+- **`@파일` 멘션**: 프롬프트의 `@경로`는 파일 내용(폴더면 목록)을 첨부합니다(최대 10개,
+  60,000자). 이메일(`a@b.com`)·워크스페이스 밖·비밀 파일은 첨부하지 않습니다.
 
 ### 제약
 
 - 경로는 워크스페이스 밖으로 나갈 수 없습니다.
-- `.env`, `credentials.json`, `id_rsa`, `*.pem`, `*.key`, `.ssh/*` 등
-  비밀/자격 증명 파일은 도구로 접근할 수 없습니다.
+- `.env`, `.env.*`(`.env.example` 등 견본 제외), `credentials.json`, `id_rsa`,
+  `*.pem`, `*.key`, `.netrc`, `.npmrc`, `.pypirc`, `.ssh/*` 등
+  비밀/자격 증명 파일은 도구로 접근할 수 없고 `find grep` 결과에서도 빠집니다.
 - 읽기/도구 출력은 각각 `MAX_READ_BYTES`(200KB), `MAX_TOOL_CHARS`(80KB),
-  grep은 `MAX_GREP_HITS`(80)로 제한됩니다. 큰 파일은 offset/limit을 사용합니다.
+  grep은 `MAX_GREP_HITS`(80, `max_results`로 최대 500)로 제한됩니다. 큰 파일은 offset/limit을 사용합니다.
 
 ---
 
 ## 셸 실행과 안전장치
 
 `shell` 도구는 다음 안전장치를 가집니다.
+
+0. **비밀값 보호(v0.7, 모든 모드 공통)**
+   - 셸 하위 프로세스 환경에서 이름에 `API_KEY`·`ACCESS_KEY`·`SECRET`·`TOKEN`·
+     `PASSWORD`·`CREDENTIAL`·`PRIVATE_KEY`가 들어간 변수를 뺍니다. 꼭 넘겨야 하면
+     `LLM_SHELL_KEEP_ENV=GH_TOKEN,NPM_TOKEN`처럼 지정합니다.
+   - `cat .env`, `echo $DEEPSEEK_API_KEY`, `printenv`, `env`, `export -p`,
+     `~/.ssh/*`·`/etc/env/*` 참조처럼 **비밀을 드러낼 수 있는 명령은 자동 허용
+     목록·`--trust`와 상관없이 매번 `🔐` 확인**을 받습니다(`--yes`만 생략, TTY가 아니면 거부).
+   - 모든 도구 결과에서 알려진 비밀값(비밀 이름 환경변수 값, `.env` 파일의 키 값·
+     토큰처럼 생긴 값)을 `[REDACTED]`로 가린 뒤 모델에 보내고 기록에 저장합니다.
+   - 셸은 표준입력이 닫힌 상태(`/dev/null`)로 실행되어 입력 대기로 멈추지 않습니다.
 
 1. **자동 실행 범위(기본값 = safe)** — 작업 폴더 안에서 끝나는 명령은 확인
    없이 실행하고, 폴더 밖·설치·`sudo` 등은 확인합니다(`--safe`). 더 관대하게
@@ -1051,6 +1167,12 @@ alias로 동작합니다.
 | `LLM_AUTO_PULL` | `1`(켜짐) | `0`이면 질의 전 원격 수신 끔 |
 | `LLM_AUTO_PULL_TTL` | `120` | 같은 폴더에서 원격을 다시 확인하기까지의 최소 간격(초) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
+| `LLM_CONFIRM_EDITS` | (꺼짐) | `1`이면 `--confirm-edits` (편집마다 diff 확인) |
+| `LLM_EDIT_REQUIRE_READ` | `1`(켜짐) | `0`이면 읽지 않은 파일 편집 허용(v0.6 동작) |
+| `LLM_RETRIES` | `4` | API 429/5xx/네트워크 오류 재시도 횟수 |
+| `LLM_COMPACT_TOKENS` | `90000` | 실제 입력 토큰이 이 값을 넘으면 대화 압축 |
+| `LLM_PROJECT_DOCS` | (켜짐) | `0`이면 `CLAUDE.md`/`AGENTS.md` 프로젝트 지침을 읽지 않음 |
+| `LLM_SHELL_KEEP_ENV` | (없음) | 셸에 그대로 넘길 비밀 변수 이름(쉼표 구분). 기본은 모두 제거 |
 
 `.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는
 덮어쓰지 않음).
@@ -1082,9 +1204,13 @@ alias로 동작합니다.
 | `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효, 기기 로컬) |
 | `~/.local/share/llm/autopull.json` | 폴더별 마지막 원격 확인 시각 (질의 전 자동 수신 간격 판단, 기기 로컬) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
+| `<작업폴더>/CLAUDE.md`, `AGENTS.md`, `~/.claude/CLAUDE.md` | 프로젝트/전역 지침 (읽기만) |
+| `~/.local/share/llm/undo/undo_<세션>.json` | 턴별 편집 전 원본 (`llm undo`, 최근 20턴, 기기 로컬) |
+| `~/.local/share/llm/repl_history` | REPL 입력 히스토리 (↑/↓) |
+| `$TMPDIR/llm-bg-*/bg_N.log` | 백그라운드 셸 출력 (실행 중에만) |
 
 > **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`rates.json`·
-> `autopull.json`)는 대화 기록 위치와 무관하게 항상 홈에 저장됩니다(경로·환율·
+> `autopull.json`·`undo/`·`repl_history`)는 대화 기록 위치와 무관하게 항상 홈에 저장됩니다(경로·환율·
 > 마지막 확인 시각 같은 이 PC 전용 정보).
 
 대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로
@@ -1097,15 +1223,31 @@ alias로 동작합니다.
 ## 아키텍처
 
 ```
-llm (bash)  →  agent.py (python)
+llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 모듈)
 ```
+
+`llmlib/`(v0.7, 표준 라이브러리만, 전역 상태·UI 의존 없음 → 단위 테스트 대상):
+
+| 모듈 | 역할 |
+|---|---|
+| `shell_policy.py` | 셸 명령 안전 분류(`is_safe_command`·`is_workspace_command`·`needs_confirm_always`), 명령 분해, 의도 요약 |
+| `guard.py` | 비밀 파일/변수 판정, `scrubbed_env`, `command_touches_secret`, 비밀값 수집·`redact` |
+| `netretry.py` | `urlopen_with_retry`(429·5xx·네트워크 지수 백오프, `Retry-After`) |
+| `filestate.py` | `FileTracker`(읽은 파일·외부 변경), `unified_diff`/`diff_stat`, `UndoStore` |
+| `conversation.py` | `finalize_interrupted`(Ctrl+C 후 기록 정리), `clear_old_tool_results` |
+| `context.py` | `expand_mentions`(@파일), `project_doc_files`/`load_project_docs`(CLAUDE.md·AGENTS.md) |
+| `web.py` | `web_fetch` 본문 가져오기·HTML → 텍스트 |
+| `bgshell.py` | 백그라운드 셸 작업 관리(`BgManager`) |
 
 `agent.py`의 주요 구성:
 
 - **진입/CLI**: `main`, `parse_args`, `canonical_folder`, `VERSION`(시작 배너·머리말에
   표시하는 버전 문자열), `load_dotenv`(`LLM_ENV_FILE` → 저장소 `.env` →
   `/etc/env/.env` 순서로 로드, 앞이 우선), `print_banner`(모드·버전·세션·폴더·규칙·확인 모드 한 줄)
-- **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행 → 결과 피드백 반복
+- **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행(읽기 전용은 병렬, `PARALLEL_TOOLS`)
+  → 결과 피드백 반복. `KeyboardInterrupt`는 턴 단위로 잡아 기록을 정리하고 130 반환.
+  `RunState`/`RUN`(plan·편집 확인·웹 허용 등 실행 설정), `FILES`(읽은 파일), `undo_store`
+- **대화형**: `cmd_repl`/`read_repl_input`/`setup_readline`/`REPL_COMMANDS`, `cmd_undo`
 - **API 계층**: `http_json`, `stream_chat`, `complete` (SSE 스트리밍, 비스트림
   폴백, `StreamInterrupted`로 부분 응답 보존, `on_delta`/`make_stream_progress`
   로 사고·본문 진행 표시, `record_usage`/`reset_usage`/`usage_lines`로
@@ -1164,10 +1306,11 @@ llm (bash)  →  agent.py (python)
 0. 세션 결정: 이 폴더의 매핑을 쓰고, 없으면 새 세션을 만든다. 이때 사라진
    폴더의 매핑(고아)이 있으면 이어받을 후보를 보여주고 확인받는다
    (`apply_move_binding` → 이후 세션 안내). 조회/정리 명령도 같은 후보를 안내한다.
-1. 사용자 프롬프트를 세션 기록에 추가하고 저장
+1. `@멘션` 파일을 첨부하고 undo 턴을 시작한 뒤, 사용자 프롬프트를 세션 기록에 추가하고
+   저장(직전 턴이 답 없이 끝났으면 같은 user 메시지로 합침)
 2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시
    (화면에는 출력하지 않음)
-3. 시스템 프롬프트(워크스페이스 정보 + 세션 규칙) 구성. 요약문에 남은 작업
+3. 시스템 프롬프트(워크스페이스 정보 + plan 모드 안내 + CLAUDE.md/AGENTS.md + 세션 규칙) 구성. 요약문에 남은 작업
    계획 스냅샷이 있으면 복원해(`restore_todo`) **같은 계획을 이어감**
 4. 모델 호출 → (사고/작성 진행 상태 한 줄) → 텍스트 또는 도구 호출 수신
 5. 도구 호출이면 `🔧 이름 <의도 요약>` 줄을 열고, 실행 후 같은 줄에
@@ -1261,11 +1404,12 @@ llm (bash)  →  agent.py (python)
 
 1. **표준 라이브러리만** 사용합니다(의존성 추가 금지).
 2. 변경은 **최소**로, 기존 구조와 UI 스타일(아이콘/색상/구분선)을 유지합니다.
-3. 기존 파일 편집은 `edit`(replace), 새 파일은 `edit`(write)로 작성합니다.
+3. 기존 파일 편집은 **먼저 `read`** 한 뒤 `edit`(replace), 새 파일은 `edit`(write)로 작성합니다.
+   새 기능은 가능하면 `llmlib/`에 순수 함수로 두고 `agent.py`는 연결만 합니다.
 4. **기능/CLI 옵션/동작이 바뀌면 `README.md`를 즉시 갱신합니다.**
 5. 한글 응답을 기본으로 합니다.
 6. `.env`, 키 파일 등 비밀 정보는 출력하지 않습니다.
-7. 편집 후에는 가능한 범위에서 검증합니다(문법 검사, 실행 확인 등).
+7. 편집 후에는 `python3 -m py_compile agent.py llmlib/*.py`와 `python3 -m pytest -q tests`로 검증합니다.
 8. **코드 수정 전 `git pull --rebase --autostash`, 검증 통과 후 커밋·`git push`**
    를 수행합니다. 검증 실패·중단 시에는 되돌리고 push하지 않습니다.
    **대화 기록 자동 커밋·push는 기본 꺼짐**입니다(`LLM_AUTO_SYNC=1`이면

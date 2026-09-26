@@ -20,11 +20,11 @@ import agent as llm  # noqa: E402
 
 class Phase1Defaults(unittest.TestCase):
     def test_version(self) -> None:
-        self.assertEqual(llm.VERSION, "0.6.0")
+        self.assertEqual(llm.VERSION, "0.7.0")
 
     def test_tool_schema_names(self) -> None:
         names = [t["function"]["name"] for t in llm.tool_schemas()]
-        self.assertEqual(names, ["todo", "read", "edit", "find", "shell"])
+        self.assertEqual(names, ["todo", "read", "edit", "find", "shell", "web_fetch", "task"])
 
     def test_auto_sync_default_off(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
@@ -69,10 +69,14 @@ class Phase1Defaults(unittest.TestCase):
         self.assertEqual(src, "--trust")
 
     def test_run_tool_aliases(self) -> None:
-        with tempfile.TemporaryDirectory() as tmp:
+        with tempfile.TemporaryDirectory() as tmp, mock.patch.object(
+            llm, "HISTORY_DIR", Path(tmp) / "home"  # undo 기록이 실제 홈에 남지 않게
+        ), mock.patch.object(llm, "UNDO", None):
             root = Path(tmp)
             f = root / "a.txt"
             f.write_text("hello\n", encoding="utf-8")
+            # v0.7: 기존 파일은 먼저 read 해야 편집할 수 있다(구 도구명 read_file 로 확인).
+            self.assertIn("hello", llm.run_tool("read_file", '{"path":"a.txt"}', root, yes=True))
             out = llm.run_tool(
                 "str_replace",
                 '{"path":"a.txt","old_string":"hello","new_string":"hi"}',

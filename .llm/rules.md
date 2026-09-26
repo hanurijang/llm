@@ -6,20 +6,26 @@
 ## 프로젝트
 
 - **llm**: DeepSeek CLI 코딩 에이전트.
-- 구성: `llm`(bash 진입점) + `agent.py`(파이썬 로직).
+- 구성: `llm`(bash 진입점) + `agent.py`(CLI·에이전트 루프·UI) + `llmlib/`(분리 모듈:
+  `shell_policy` 셸 안전 분류, `guard` 비밀 보호, `netretry` API 재시도,
+  `filestate` 편집 추적·undo, `conversation` 중단·결과 정리, `context` @멘션·
+  CLAUDE.md, `web` web_fetch, `bgshell` 백그라운드 셸). 새 기능은 가능하면
+  `llmlib/`에 순수 함수로 두고 `agent.py`는 연결만 한다.
 - **표준 라이브러리만 사용**. 외부 의존성 추가 금지.
 - Python 3.10+ 문법 사용.
 
 ## 코딩 규칙
 
 - 변경은 **최소**로, 기존 구조와 스타일을 유지한다.
-- 기존 파일 편집은 `edit`(action=replace), 새 파일은 `edit`(action=write).
+- 기존 파일 편집은 **먼저 `read`** 한 뒤 `edit`(action=replace, 여러 곳은 `edits`),
+  새 파일은 `edit`(action=write).
 - 탐색은 `find`(mode=list|glob|grep), 읽기는 `read`.
 - 사용자 대면 메시지는 공통 UI 헬퍼(`print_title`, `print_info`, `print_ok`,
   `print_warn`, `print_error`, `print_phase`, `rule`)를 사용해 일관성을 유지한다.
 - 터미널 정렬이 필요한 곳은 한글 등 wide 문자를 고려해 `display_width`/`pad`를
   사용한다.
-- 편집 후 `python3 -m py_compile agent.py` 등으로 검증한다.
+- 편집 후 `python3 -m py_compile agent.py llmlib/*.py`와
+  `python3 -m pytest -q tests`로 검증한다.
 
 ## 작업 계획(todo) 워크플로 (필수)
 
@@ -93,21 +99,22 @@
 ## 체크포인트와 롤백 (필수)
 
 - **코드 수정을 시작하기 전에 원격 최신 상태를 먼저 받는다**:
-  `git pull --rebase --autostash`. 실패(충돌·인증 등)하면 수정을 시작하지 말고
-  원인을 사용자에게 알린다.
+  `git pull --rebase --autostash`. (코드 브랜치 한정. 대화 기록 동기화
+  `llm sync`는 위 규칙대로 ff-only 이며 rebase 하지 않는다 — 둘은 별개다.)
+  실패(충돌·인증 등)하면 수정을 시작하지 말고 원인을 사용자에게 알린다.
 - 이어서 현재 상태를 커밋해 안전 지점(checkpoint)을 만든다. 이미 커밋된
   상태면 생략 가능. 예:
   `git add -A && git commit -m "checkpoint: <작업 요약>"`.
-- 수정이 끝나면 **반드시 `python3 -m py_compile agent.py`로 검증**한다.
+- 수정이 끝나면 **반드시 `python3 -m py_compile agent.py llmlib/*.py`와
+  `python3 -m pytest -q tests`로 검증**한다.
 - **검증을 통과하면 한 줄 요약으로 커밋하고 `git push`까지 수행한다**(자동).
   push가 실패하면 `--force` 등으로 우회하지 말고 원인을 알린다.
 - **검증에 실패하거나 수정이 중단/실패하면 즉시 되돌리고 push하지 않는다**:
   `git restore agent.py`(또는 작업한 파일).
 - 되돌린 뒤에는 사용자에게 **어떤 파일을 왜 되돌렸는지** 알린다.
 - `agent.py`는 편집 대상이자 실행 대상이므로, 문법 오류 상태로 남기지 않는다.
-- 대화 기록은 위 "대화 기록 위치와 동기화"대로 **매 턴 자동 커밋·push**되므로,
-  코드 변경 없이 대화만 한 세션도 별도 절차 없이 원격에 올라간다(자동이
-  실패했을 때만 `llm --sync-history`로 보완).
+- 대화 기록 자동 커밋·push는 **기본 꺼짐**(`LLM_AUTO_SYNC=1`일 때만 종료 시 실행).
+  꺼져 있으면 대화 기록은 로컬에만 있으므로 필요할 때 `llm sync`로 올린다.
 - 커밋 메시지는 무엇을 바꿨는지 한 줄로 요약한다.
 
 ## 답변 마무리 — 동기화 상태 표시 (필수)
@@ -120,9 +127,9 @@
   **코드/파일 목록**(대화 기록 JSON만 바뀐 경우와 코드가 바뀐 경우를 구분),
   그리고 대화 기록 동기화 상태(자동 동기화가 끝나면 올라가고
   `LLM_AUTO_SYNC=0`이면 아직 로컬이라는 사실까지). 예:
-  - `🔁 동기화: 코드 push 완료 · aeff65e "fix(todo): …" · agent.py 85±, README.md 11±, .llm/rules.md 8± · 대화 기록은 턴 종료 시 자동 push`
-  - `🔁 동기화: 규칙 push 완료 · d721695 "rules: …" · .llm/rules.md +15 · 대화 기록은 턴 종료 시 자동 push`
-  - `🔁 동기화: 변경 없음(원격과 동일 · 코드 변경 없이 대화 기록만 자동 push)`
+  - `🔁 동기화: 코드 push 완료 · aeff65e "fix(todo): …" · agent.py 85±, README.md 11±, .llm/rules.md 8± · 대화 기록은 로컬(llm sync 로 올림)`
+  - `🔁 동기화: 규칙 push 완료 · d721695 "rules: …" · .llm/rules.md +15 · 대화 기록은 LLM_AUTO_SYNC=1 이면 종료 시 자동 push`
+  - `🔁 동기화: 변경 없음(원격과 동일 · 코드 변경 없음, 대화 기록은 로컬)`
   - `🔁 동기화: push 실패(<원인>) · 로컬 커밋만 있음(<해시> "…")`
 - 파일 목록은 **코드·문서·규칙 파일을 먼저** 적고, 대화 기록/요약(`.llm/`)은
   "대화 기록 …" 항목으로 묶어 표현한다(길어지면 대표 파일만 적어도 된다).
