@@ -1,7 +1,7 @@
 [
   {
     "role": "user",
-    "content": "[이전 대화 요약] 아래는 이전 대화의 요약입니다. 이후 대화의 맥락으로 사용하세요.\n\n## 사용자 목표/요청\n- **todo goal 버그 수정**: 세션마다 옛 `.env 검증` 작업이 자동으로 goal로 되살아나는 원인을 코드에서 찾아 고칠 것.\n- **답변 마지막 동기화 상태 표시**: 답변 끝에 git push 여부(동기화 상태) 포함, 더 나아가 push한 커밋 해시·제목과 변경 파일(코드) 목록까지 표시.\n- **테스트**: 실제 API로 e2e 검증 요청.\n- **마지막 요청**: `DEFAULT_MAX_STEPS`를 50 → 100으로 변경.\n\n## 결정 사항과 이유\n- **끝난 계획은 복원·이어가기 대상이 아님**: 요약 헤드(0번 메시지)에 남은 옛 계획 블록/스냅샷이 `🎯` 목표로 되살아나는 근본 원인 → `todo_active()`로 전부 done이면 비활성 처리.\n- **저장 시마다 헤드 스냅샷 최신화**: 진행 중 계획은 갱신, 완료 계획은 헤드에서 계획 블록·스탬프 제거(모델이 옛 목표를 못 보게). `--view` 등 계획을 모르는 프로세스는 헤드 불변.\n- **파싱 가능한 마지막 스탬프만 채택**: 도구 출력에 섞인 파싱 불가 스탬프 때문에 멀쩡한 계획을 잃지 않도록.\n- **`goal` 생략 시 옛 목표 미상속**: 이전 계획이 없거나 전부 완료면 `CURRENT_TODO_GOAL=\"\"`.\n- **동기화 줄 규칙**: 코드 변경과 대화 기록만 바뀐 경우를 구분해 표시, push 실패 시 원인 명시(우회 push 금지).\n\n## 생성/수정된 파일과 핵심 코드 변경\n- **`agent.py`** (커밋 `aeff65e`)\n  - `todo_active()` 신설(미완료 있으면 활성, 전부 done이면 비활성).\n  - `refresh_todo_snapshot()` 신설 → `save_history`에서 호출, 헤드 스냅샷 교체·완료 시 제거(본문에 남은 옛 스탬프도 정리).\n  - `restore_todo`: 마지막 파싱 가능 스탬프만 사용, 전부 done이면 미복원.\n  - `tool_todo`: 완료/무계획 시 `goal` 생략이면 옛 목표 물려주지 않음.\n  - 상수 `TODO_PLAN_HEADER` 추가.\n- **`.llm/rules.md`**\n  - `## 답변 마무리 — 동기화 상태 표시 (필수)` 섹션 신설(`d721695`), 이후 push 커밋 해시·제목 + 변경 파일 목록 명시로 확장(`95a48f8`).\n  - todo 「끝난 계획은 되살리지 않는다」 규칙 추가, 갱신 대상 함수 목록에 `todo_active`/`refresh_todo_snapshot` 추가.\n- **`README.md`**: 작업 계획(todo) 섹션·답변 골격 설명에 완료 계획 미복원/스냅샷 최신화, 동기화 줄 설명 반영.\n- **`.llm/history_llm.json`**: 턴 종료 시 자동 커밋·push.\n\n## 검증\n- `python3 -m py_compile agent.py` 통과, 단위 재현 10종(완료 계획 미복원·진행 계획 복원/유지·파싱 불가 스탬프 무시·헤드 최신화/제거·`--view` 불변·구버전 헤드 갱신) 전부 OK.\n- 실제 API e2e(`/tmp/llmreal` + 로컬 bare remote): 동기화 줄 출력·push 동작·옛 goal 미부활·진행 중 계획 복원·시스템 프롬프트 규칙 주입 5종 모두 통과. 셀프테스트 잔여물(`/tmp/llmreal`, bindings 매핑) 정리.\n- 커밋 상태: `aeff65e`, `d721695`, `95a48f8` 모두 push 완료, 원격 대비 앞선 로컬 커밋 0.\n\n## 미해결 과제 (TODO)\n- **`DEFAULT_MAX_STEPS` 50 → 100 변경 미완(진행 중)** — 계획 5단계 중 1단계(원격 pull)만 완료, `agent.py`(96행)는 확인만 하고 아직 수정 안 됨. 남은 단계: `agent.py` 값 변경 → README·`.llm/rules.md` 기본값 설명 갱신 → `py_compile` + pytest 검증 → 커밋·push 후 동기화 상태 보고.\n- (이전 TODO) `raspApi/.env`의 `SLIDES_LLM_API_KEY` 미설정 → 슬라이드 LLM 꺼짐, `raspApi` 대화 PC 간 이전 시 `llm --sync-history` 필요.\n- 참고: 현재 PC는 `/home/jang/codespace/userscript/llm`, 원격 `git@github-hanurijang:hanurijang/llm.git`(이전 턴은 `/home/rasp`에서 진행).\n\n[진행 중인 작업 계획 — 새로 만들지 말고 이 계획을 이어서 갱신하세요]\n🎯 에이전트 루프 기본 최대 단계(DEFAULT_MAX_STEPS)를 50에서 100으로 바꾸고, README·규칙의 관련 설명을 갱신한 뒤 검증·커밋·push한다.\n   ▶ 원격 최신 pull·체크포인트 확인\n   ☐ agent.py DEFAULT_MAX_STEPS 50 → 100\n   ☐ README·.llm/rules.md의 관련 기본값 설명 갱신\n   ☐ py_compile + pytest 검증\n   ☐ 커밋·push 후 동기화 상태 보고\n<!-- llm-todo:{\"goal\": \"에이전트 루프 기본 최대 단계(DEFAULT_MAX_STEPS)를 50에서 100으로 바꾸고, README·규칙의 관련 설명을 갱신한 뒤 검증·커밋·push한다.\", \"items\": [{\"content\": \"원격 최신 pull·체크포인트 확인\", \"status\": \"in_progress\"}, {\"content\": \"agent.py DEFAULT_MAX_STEPS 50 → 100\", \"status\": \"pending\"}, {\"content\": \"README·.llm/rules.md의 관련 기본값 설명 갱신\", \"status\": \"pending\"}, {\"content\": \"py_compile + pytest 검증\", \"status\": \"pending\"}, {\"content\": \"커밋·push 후 동기화 상태 보고\", \"status\": \"pending\"}]} -->"
+    "content": "[이전 대화 요약] 아래는 이전 대화의 요약입니다. 이후 대화의 맥락으로 사용하세요.\n\n## 사용자 목표/요청\n- **todo goal 버그 수정**: 세션마다 옛 `.env 검증` 작업이 자동으로 goal로 되살아나는 원인을 코드에서 찾아 고칠 것.\n- **답변 마지막 동기화 상태 표시**: 답변 끝에 git push 여부(동기화 상태) 포함, 더 나아가 push한 커밋 해시·제목과 변경 파일(코드) 목록까지 표시.\n- **테스트**: 실제 API로 e2e 검증 요청.\n- **마지막 요청**: `DEFAULT_MAX_STEPS`를 50 → 100으로 변경.\n\n## 결정 사항과 이유\n- **끝난 계획은 복원·이어가기 대상이 아님**: 요약 헤드(0번 메시지)에 남은 옛 계획 블록/스냅샷이 `🎯` 목표로 되살아나는 근본 원인 → `todo_active()`로 전부 done이면 비활성 처리.\n- **저장 시마다 헤드 스냅샷 최신화**: 진행 중 계획은 갱신, 완료 계획은 헤드에서 계획 블록·스탬프 제거(모델이 옛 목표를 못 보게). `--view` 등 계획을 모르는 프로세스는 헤드 불변.\n- **파싱 가능한 마지막 스탬프만 채택**: 도구 출력에 섞인 파싱 불가 스탬프 때문에 멀쩡한 계획을 잃지 않도록.\n- **`goal` 생략 시 옛 목표 미상속**: 이전 계획이 없거나 전부 완료면 `CURRENT_TODO_GOAL=\"\"`.\n- **동기화 줄 규칙**: 코드 변경과 대화 기록만 바뀐 경우를 구분해 표시, push 실패 시 원인 명시(우회 push 금지).\n\n## 생성/수정된 파일과 핵심 코드 변경\n- **`agent.py`** (커밋 `aeff65e`)\n  - `todo_active()` 신설(미완료 있으면 활성, 전부 done이면 비활성).\n  - `refresh_todo_snapshot()` 신설 → `save_history`에서 호출, 헤드 스냅샷 교체·완료 시 제거(본문에 남은 옛 스탬프도 정리).\n  - `restore_todo`: 마지막 파싱 가능 스탬프만 사용, 전부 done이면 미복원.\n  - `tool_todo`: 완료/무계획 시 `goal` 생략이면 옛 목표 물려주지 않음.\n  - 상수 `TODO_PLAN_HEADER` 추가.\n- **`.llm/rules.md`**\n  - `## 답변 마무리 — 동기화 상태 표시 (필수)` 섹션 신설(`d721695`), 이후 push 커밋 해시·제목 + 변경 파일 목록 명시로 확장(`95a48f8`).\n  - todo 「끝난 계획은 되살리지 않는다」 규칙 추가, 갱신 대상 함수 목록에 `todo_active`/`refresh_todo_snapshot` 추가.\n- **`README.md`**: 작업 계획(todo) 섹션·답변 골격 설명에 완료 계획 미복원/스냅샷 최신화, 동기화 줄 설명 반영.\n- **`.llm/history_llm.json`**: 턴 종료 시 자동 커밋·push.\n\n## 검증\n- `python3 -m py_compile agent.py` 통과, 단위 재현 10종(완료 계획 미복원·진행 계획 복원/유지·파싱 불가 스탬프 무시·헤드 최신화/제거·`--view` 불변·구버전 헤드 갱신) 전부 OK.\n- 실제 API e2e(`/tmp/llmreal` + 로컬 bare remote): 동기화 줄 출력·push 동작·옛 goal 미부활·진행 중 계획 복원·시스템 프롬프트 규칙 주입 5종 모두 통과. 셀프테스트 잔여물(`/tmp/llmreal`, bindings 매핑) 정리.\n- 커밋 상태: `aeff65e`, `d721695`, `95a48f8` 모두 push 완료, 원격 대비 앞선 로컬 커밋 0.\n\n## 미해결 과제 (TODO)\n- **`DEFAULT_MAX_STEPS` 50 → 100 변경 미완(진행 중)** — 계획 5단계 중 1단계(원격 pull)만 완료, `agent.py`(96행)는 확인만 하고 아직 수정 안 됨. 남은 단계: `agent.py` 값 변경 → README·`.llm/rules.md` 기본값 설명 갱신 → `py_compile` + pytest 검증 → 커밋·push 후 동기화 상태 보고.\n- (이전 TODO) `raspApi/.env`의 `SLIDES_LLM_API_KEY` 미설정 → 슬라이드 LLM 꺼짐, `raspApi` 대화 PC 간 이전 시 `llm --sync-history` 필요.\n- 참고: 현재 PC는 `/home/jang/codespace/userscript/llm`, 원격 `git@github-hanurijang:hanurijang/llm.git`(이전 턴은 `/home/rasp`에서 진행)."
   },
   {
     "role": "assistant",
@@ -354,5 +354,73 @@
     "tool_call_id": "call_00_ET_RBzYiHqyIyr1HI6rWm4V4771",
     "name": "shell",
     "content": "exit 0\n--- stdout ---\n5662:        default=DEFAULT_MAX_STEPS,\n5663-        help=f\"에이전트 루프 최대 횟수 (기본: {DEFAULT_MAX_STEPS}, 도달 시 이어서 진행할지 확인)\",\nDEFAULT_MAX_STEPS = 100\n .llm/history_llm.json         | 1386 +++--------------------------------------\n .llm/summaries/llm/index.json |    9 +\n README.md                     |    4 +-\n agent.py                      |    2 +-\n 4 files changed, 95 insertions(+), 1306 deletions(-)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ULTGdQfaCZffU7Vp8phL0624",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git add -A && git commit -q -m \\\"chore: DEFAULT_MAX_STEPS 50 → 100, README 기본값 갱신\\\" && git push 2>&1 | tail -3 && git show --stat --oneline HEAD | head -8\", \"timeout\": 120}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ULTGdQfaCZffU7Vp8phL0624",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\nTo github-hanurijang:hanurijang/llm.git\n   b69263f..63e9084  main -> main\n63e9084 chore: DEFAULT_MAX_STEPS 50 → 100, README 기본값 갱신\n .llm/history_llm.json                       | 1374 ++-------------------\n .llm/summaries/llm/2026-09-26T15-12-02.json | 1749 +++++++++++++++++++++++++++\n .llm/summaries/llm/2026-09-26T15-12-02.md   |   44 +\n .llm/summaries/llm/index.json               |    9 +\n README.md                                   |    4 +-\n agent.py                                    |    2 +-\n 6 files changed, 1892 insertions(+), 1290 deletions(-)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_7yt1oDo6Crl3pgnXn1cE4874",
+        "type": "function",
+        "function": {
+          "name": "todo",
+          "arguments": "{\"goal\": \"에이전트 루프 기본 최대 단계(DEFAULT_MAX_STEPS)를 50에서 100으로 바꾸고, README·규칙의 관련 설명을 갱신한 뒤 검증·커밋·push한다.\", \"items\": [{\"content\": \"원격 최신 pull·체크포인트 확인\", \"status\": \"done\"}, {\"content\": \"agent.py DEFAULT_MAX_STEPS 50 → 100\", \"status\": \"done\"}, {\"content\": \"README·.llm/rules.md의 관련 기본값 설명 갱신\", \"status\": \"done\"}, {\"content\": \"py_compile + pytest 검증\", \"status\": \"done\"}, {\"content\": \"커밋·push 후 동기화 상태 보고\", \"status\": \"done\"}]}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_7yt1oDo6Crl3pgnXn1cE4874",
+    "name": "todo",
+    "content": "📋 작업 계획 갱신: 총 5개, 완료 5개 · 목표 유지: 에이전트 루프 기본 최대 단계(DEFAULT_MAX_STEPS)를 50에서 100으로 바꾸고, README·규칙의 관련 설명을 갱신한 뒤 검증·커밋·push한다."
+  },
+  {
+    "role": "assistant",
+    "content": "`DEFAULT_MAX_STEPS`를 50 → 100으로 변경하고 README 기본값 설명까지 갱신한 뒤 검증·push 완료했습니다.\n\n## 변경 내용\n- **`agent.py`(96행)**: `DEFAULT_MAX_STEPS = 50` → **`100`** (`--max-steps` 기본값, 상한 도달 시 \"이어서 같은 값만큼 더 진행할지\" 확인하는 단위도 함께 100이 됨).\n- **`README.md`** 2곳: CLI 옵션 표 `--max-steps <N>` 설명과 에이전트 루프 설명의 \"(기본 50)\" → **\"(기본 100)\"**.\n  - `SUBAGENT_MAX_STEPS = 25`, `TODO_MAX_ITEMS = 50` 등 다른 한도는 그대로이며, `.llm/rules.md`에는 이 값이 명시돼 있지 않아 수정 없음.\n\n## 검증\n- `python3 -m py_compile agent.py llmlib/*.py` → **compile OK**\n- `python3 -m pytest -q tests` → **40 passed**\n- 런타임 확인: `import agent; agent.DEFAULT_MAX_STEPS` → **100**, argparse `default=DEFAULT_MAX_STEPS` 그대로 연결됨.\n\n🔁 동기화: 코드 push 완료 · `63e9084` \"chore: DEFAULT_MAX_STEPS 50 → 100, README 기본값 갱신\" · agent.py 1±, README.md 2± · 대화 기록은 같은 커밋에 포함되어 push됨(앞선 로컬 커밋 0)"
+  },
+  {
+    "role": "user",
+    "content": "git 커밋 푸시"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_eFiRybP04ujDzxXabNiA1039",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git status --short && echo \\\"=== 앞선 커밋: $(git rev-list --count origin/main..HEAD) ===\\\"\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_eFiRybP04ujDzxXabNiA1039",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n M .llm/history_llm.json\n=== 앞선 커밋: 0 ===\n"
   }
 ]
