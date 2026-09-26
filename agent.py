@@ -93,7 +93,7 @@ HISTORY_BASE = HISTORY_DIR
 DEFAULT_MODEL = os.environ.get("LLM_MODEL", "deepseek-flash")
 # 에이전트 루프 기본 최대 단계. 한도에 도달하면 이어서 진행할지 묻고,
 # y면 같은 값만큼 한도를 늘려 계속한다.
-DEFAULT_MAX_STEPS = 50
+DEFAULT_MAX_STEPS = 100
 MAX_READ_BYTES = 200_000
 MAX_TOOL_CHARS = 80_000
 MAX_GREP_HITS = 80
