@@ -4,7 +4,7 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
-**버전:** v0.7.0 — 변경 요약은 [v0.7 변경 사항](#v07-변경-사항)
+**버전:** v0.8.0 — 변경 요약은 [v0.8 변경 사항](#v08-변경-사항)
 
 ## 최소 사용법
 
@@ -48,6 +48,18 @@ llm sync                        # 대화 기록만 원격에
 - **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`
 - **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도
 
+## v0.8 변경 사항
+
+터미널 표시와 대화형(REPL) 안전성 위주의 개선입니다.
+
+| 영역 | v0.7 | v0.8 |
+|---|---|---|
+| Markdown 표시 | 외부 `glow` 의존(없으면 원문 출력) | **내장 렌더러**(`llmlib/mdrender.py`) — 제목·목록·표·코드블록·인용 강조, `LLM_RAW`·파이프·비TTY는 원문 유지 |
+| REPL 셸 확인 | 기본 `safe`(작업 폴더 안 자동) | 대화형은 **기본 `all`(전부 확인)** — `--safe/--trust/--yes/--confirm-all`·`LLM_*`를 주면 그쪽 우선, 시작 시 설정 상태 한 줄 표시 |
+| 셸 로그 | 없음 | 프롬프트에서 허용했거나 자동 허용으로 **묻지 않고 실행된** 명령을 세션별 로그(`shell_log_<세션>.jsonl`)에 기록, `llm shell-log [N]`/`--shell-log`·REPL `/log`로 조회, `LLM_SHELL_LOG=0`으로 끔 |
+| 최대 단계 | 50 | **100**(`--max-steps`) |
+| 구조 | `llmlib/` 9개 모듈, 테스트 61개 | `llmlib/` 10개 모듈(`mdrender`·`shelllog` 추가), 테스트 88개 |
+
 ## v0.7 변경 사항
 
 Claude Code 같은 클라이언트 동작을 목표로 한 개선입니다.
@@ -59,11 +71,10 @@ Claude Code 같은 클라이언트 동작을 목표로 한 개선입니다.
 | API 오류 | 429/5xx/네트워크 오류 즉시 실패 | 지수 백오프로 최대 4회 재시도(`Retry-After` 준수, `LLM_RETRIES`) |
 | 편집 | 읽지 않은 파일도 덮어씀, diff 없음, 되돌리기 없음 | **read 한 파일만 편집**, 읽은 뒤 바깥 변경 감지, 색 diff 표시, `--confirm-edits`, 턴 단위 `llm undo`/`/undo`, CRLF 보존, `edits` 배열로 원자적 다중 치환 |
 | 모드 | 에이전트/채팅 | + **plan 모드**(읽기 전용 조사 → 계획만) |
-| REPL | `input()` 한 줄, `/exit /sync /chat /agent` | readline(방향키·히스토리·Tab 완성), 여러 줄(`\` 이어쓰기, `"""` 블록), `/help /clear /compact /model /cost /undo /plan /rules /bg /log` · 셸 확인 기본=전부 확인 |
-| 셸 로그 | — | 허용해 실행된/거부한 명령을 세션별 로그(`shell_log_<세션>.jsonl`)에 남기고 `llm shell-log`(REPL `/log`)로 조회 |
+| REPL | `input()` 한 줄, `/exit /sync /chat /agent` | readline(방향키·히스토리·Tab 완성), 여러 줄(`\` 이어쓰기, `"""` 블록), `/help /clear /compact /model /cost /undo /plan /rules /bg` |
 | 맥락 | `.llm/rules.md`만, 문자 수 기준 압축 | `@파일` 첨부, `CLAUDE.md`/`AGENTS.md`(상위 폴더·`~/.claude`) 반영, **실제 토큰 수** 기준 압축, 오래된 긴 도구 결과 일괄 비우기 |
 | 도구 | 5개, 순차 실행, 셸 최대 180초 | + `web_fetch`, `task`(읽기 전용 서브에이전트), 백그라운드 셸, grep `context`/`output`, 읽기 전용 호출 **병렬 실행**, 셸 최대 600초 |
-| 구조 | `agent.py` 단일 파일, 테스트 9개 | `llmlib/` 10개 모듈로 분리(셸 정책·보안·재시도·Markdown 렌더러·셸 로그 등), 테스트 87개(셸 정책 표·Markdown 렌더러·셸 로그 테스트 포함) |
+| 구조 | `agent.py` 단일 파일, 테스트 9개 | `llmlib/` 9개 모듈로 분리(셸 정책·보안·재시도·맥락·웹·백그라운드 셸), 테스트 61개(셸 정책 표 테스트 포함) |
 
 ---
 
@@ -223,7 +234,7 @@ source ~/.bashrc
 
 ```bash
 which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.7.0) 표시 (API 호출 없음)
+llm                 # 상태 + 버전(v0.8.0) 표시 (API 호출 없음)
 llm --balance       # 키·네트워크 확인
 llm --chat "안녕"   # 모델 응답 확인
 llm "이 폴더 요약해줘"   # 도구까지 확인
@@ -356,7 +367,7 @@ llm shell-log clear
 표시됩니다.
 
 ```text
-── 에이전트 v0.7.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
+── 에이전트 v0.8.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
 ℹ️  이어가기 · 로컬 12턴 · 원격과 같음
 ▸ 원격 대화 기록 확인
 ```
@@ -1293,7 +1304,7 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
 llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 모듈)
 ```
 
-`llmlib/`(v0.7, 표준 라이브러리만, 전역 상태·UI 의존 없음 → 단위 테스트 대상):
+`llmlib/`(v0.7~, 표준 라이브러리만, 전역 상태·UI 의존 없음 → 단위 테스트 대상):
 
 | 모듈 | 역할 |
 |---|---|

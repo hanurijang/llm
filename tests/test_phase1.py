@@ -20,7 +20,15 @@ import agent as llm  # noqa: E402
 
 class Phase1Defaults(unittest.TestCase):
     def test_version(self) -> None:
-        self.assertEqual(llm.VERSION, "0.7.0")
+        self.assertEqual(llm.VERSION, "0.8.0")
+
+    def test_version_matches_readme(self) -> None:
+        """README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신)."""
+        readme = (Path(__file__).resolve().parents[1] / "README.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn(f"**버전:** v{llm.VERSION} ", readme)
+        self.assertIn(f"## v{llm.VERSION.rsplit('.', 1)[0]} 변경 사항", readme)
 
     def test_tool_schema_names(self) -> None:
         names = [t["function"]["name"] for t in llm.tool_schemas()]
