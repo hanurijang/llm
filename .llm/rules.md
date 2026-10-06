@@ -40,6 +40,18 @@
   `tests/test_cliargs.py`, `tests/test_phase1.py`(`test_expand_cli_argv`·
   `test_help_has_subcommands`), README 「사용법 (CLI 옵션)」·「최소 사용법」을 함께 고친다.
 
+## 진입 래퍼(`llm`) 이식성 (필수)
+
+- **`llm`(bash 래퍼)은 `readlink -f` 에 의존하지 않는다.** macOS/BSD 의 readlink 에는
+  `-f` 가 없어서 그것에 기대면 `~/bin/llm` 심볼릭 링크가 깨진다(`python3: can't open
+  file '~/bin/agent.py'`). `BASH_SOURCE` + `readlink` 루프로 링크를 직접 따라간다
+  (상대 링크·다단계 링크 지원, 최대 40 hop).
+- **실행할 Python 은 `LLM_PYTHON`(기본 `python3`)으로 바꾼다.** 못 찾으면 실행기를
+  알려 주는 안내 후 exit 127, 래퍼와 `agent.py` 가 같은 폴더에 없으면 안내 후 exit 1.
+- 이 동작을 바꿀 때는 `llm`(래퍼), `tests/test_launcher.py`, README 「설치 · 실행 파일
+  배치」·「다른 PC에서 시작하기(macOS·다른 환경에서 쓸 때)」·「설정과 환경변수」
+  (`LLM_PYTHON`)·「준비물 체크」를 함께 갱신한다.
+
 ## 코딩 규칙
 
 - 변경은 **최소**로, 기존 구조와 스타일을 유지한다.

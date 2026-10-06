@@ -1,11 +1,30 @@
 #!/bin/bash
 # DeepSeek CLI agent 진입점. 실제 로직은 agent.py.
 
+# 실제 스크립트 위치 찾기: 심볼릭 링크를 직접 따라간다.
+# (macOS/BSD readlink 에는 -f 가 없으므로 readlink -f 에 기대지 않는다.)
 SOURCE="${BASH_SOURCE[0]}"
 if command -v readlink >/dev/null 2>&1; then
-    SOURCE="$(readlink -f "$SOURCE" 2>/dev/null || echo "$SOURCE")"
+    hops=0
+    while [ -L "$SOURCE" ] && [ "$hops" -lt 40 ]; do
+        LINK="$(readlink "$SOURCE")" || break
+        [ -n "$LINK" ] || break
+        case "$LINK" in
+            /*) SOURCE="$LINK" ;;
+            *)  SOURCE="$(cd "$(dirname "$SOURCE")" && pwd)/$LINK" ;;
+        esac
+        hops=$((hops + 1))
+    done
 fi
 DIR="$(cd "$(dirname "$SOURCE")" && pwd)"
+
+# 래퍼와 agent.py 는 같은 폴더에 있어야 한다(잘못된 심볼릭 링크·복사 실패 안내).
+if [ ! -f "$DIR/agent.py" ]; then
+    echo "llm: $DIR/agent.py 를 찾을 수 없습니다." >&2
+    echo "     'llm' 래퍼와 agent.py 를 같은 폴더에 두세요." >&2
+    echo "     (심볼릭 링크가 깨진 경우: ln -sf <저장소>/llm ~/bin/llm)" >&2
+    exit 1
+fi
 
 # 환경변수 파일(.env) 로드: 1) $LLM_ENV_FILE 2) 저장소 폴더의 .env 3) /etc/env/.env
 # 이미 설정된 변수는 건드리지 않으므로 앞 파일이 우선한다(agent.py와 같은 규칙).
@@ -35,4 +54,13 @@ load_env_file "${LLM_ENV_FILE:-}"
 load_env_file "$DIR/.env"
 load_env_file /etc/env/.env
 
-exec python3 -u "$DIR/agent.py" "$@"
+# python 실행기: LLM_PYTHON 으로 바꿀 수 있다(예: macOS 기본 python3 가 3.9 일 때
+# `LLM_PYTHON=python3.12 llm …`). 기본은 python3.
+PYTHON="${LLM_PYTHON:-python3}"
+if ! command -v "$PYTHON" >/dev/null 2>&1; then
+    echo "llm: '$PYTHON' 를 찾을 수 없습니다. Python 3.10+ 를 설치하거나" >&2
+    echo "     LLM_PYTHON=python3.12 llm … 처럼 실행기를 지정하세요." >&2
+    exit 127
+fi
+
+exec "$PYTHON" -u "$DIR/agent.py" "$@"

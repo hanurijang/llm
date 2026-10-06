@@ -4,7 +4,7 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
-**버전:** v0.11.0 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)
+**버전:** v0.11.1 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)
 
 ## 최소 사용법
 
@@ -64,7 +64,8 @@ llm sync                        # 대화 기록만 원격에
 | REPL 안내 | `ℹ️ 대화형 모드` + 여러 `ℹ️` 줄(도움말·1턴·셸·로그) | 헤더에 `완화`·`로그`·`도움말` 행으로 통합 |
 | 이어가기 | `ℹ️ 이어가기 · 로컬 12턴 …` 한 줄 | 헤더의 `이어가기` 행(로컬 턴·미커밋·원격 ahead/behind) |
 | 저장소 위치 | — | 헤더는 `print_banner`(제목·행) + `header_line` + `print_continue_status`, 라벨 폭 `HEADER_LABEL_WIDTH` |
-| 테스트 | 105개 | **106개**(헤더 행·정렬 검사 추가) |
+| `llm` 래퍼 이식성 (v0.11.1) | `readlink -f` 로 자기 위치 해석 → macOS/BSD 처럼 `-f` 가 없는 환경에서 `~/bin/llm` 심볼릭 링크가 깨짐(`agent.py` 못 찾음) | **`readlink -f` 없이** 심볼릭 링크를 직접 따라가 해석(체인·상대 링크 지원, 최대 40 hop). `LLM_PYTHON` 으로 실행기 지정. `agent.py` 가 없으면 안내 후 종료 |
+| 테스트 | 105개 | **111개**(헤더 행·정렬 검사 + 래퍼 이식성 5개) |
 
 ## v0.10 변경 사항
 
@@ -198,6 +199,9 @@ export DEEPSEEK_API_KEY=sk-...
 
 `llm`(bash 래퍼)과 `agent.py`가 같은 폴더에 있어야 합니다.
 `llm` 래퍼는 자기 위치를 기준으로 `agent.py`를 찾습니다.
+심볼릭 링크로 걸어 두어도 링크를 따라가 실제 폴더를 찾습니다
+(`readlink -f` 없이 동작, macOS/BSD 포함). 실행할 Python 실행기는
+`LLM_PYTHON`(기본 `python3`)으로 바꿀 수 있습니다.
 
 ```bash
 # 저장소 위치 (환경에 따라 다름)
@@ -252,6 +256,12 @@ chmod +x ~/codespace/llm/llm
 > - `Permission denied (publickey)`가 나오면 새 PC의 SSH 공개키가 GitHub에
 >   없는 것입니다: `ssh-keygen -t ed25519` → `~/.ssh/id_ed25519.pub` 내용을
 >   GitHub **Settings → SSH keys**에 등록.
+> - **이 저장소의 remote는 계정 별칭을 쓸 수 있습니다**(예:
+>   `git@github-hanurijang:hanurijang/llm.git`). 별칭은 이 PC의 `~/.ssh/config`
+>   에만 있는 개인 설정이라 새 PC에는 따라가지 않습니다. clone이
+>   `Could not resolve hostname github-hanurijang`로 실패하면 ① `~/.ssh/config`
+>   에 같은 `Host` 항목을 넣거나 ② `git@github.com:hanurijang/llm.git`로
+>   clone 하세요(기본 키를 쓸 때). 현재 remote는 `git remote -v`로 확인합니다.
 > - clone은 실행 권한까지 그대로 가져오므로 위 `chmod +x`는 보험입니다.
 >   clone이 아니라 USB·rsync로 폴더를 복사했다면 그 한 줄이 꼭 필요합니다.
 
@@ -280,11 +290,26 @@ source ~/.bashrc
 
 ```bash
 which llm               # → /home/<user>/bin/llm
-llm session ls          # 상태 + 버전(v0.11.0) 표시 (API 호출 없음)
+llm session ls          # 상태 + 버전(v0.11.1) 표시 (API 호출 없음)
 llm balance             # 키·네트워크 확인
 llm ask "안녕"          # 1턴으로 모델 응답 확인
 llm "이 폴더 요약해줘"   # 대화형 시작 + 도구까지 확인
 ```
+
+### macOS·다른 환경에서 쓸 때
+
+Linux/WSL이 아니어도 아래 두 가지만 맞추면 됩니다.
+
+| 상황 | 증상 | 해결 |
+|------|------|------|
+| `~/bin` 심볼릭 링크 | `python3: can't open file '…/agent.py'` | v0.11.1부터 **`readlink -f` 없이** 링크를 해석합니다. 그래도 실패하면 링크가 실제 저장소를 가리키는지 확인: `readlink ~/bin/llm` → 저장소 경로. `ln -sf ~/codespace/llm/llm ~/bin/llm`로 다시 연결 |
+| 기본 `python3` 가 3.9 (macOS 구형) | 실행 즉시 `SyntaxError`(타입 문법) 또는 버전 오류 | `LLM_PYTHON=python3.12 llm …` 처럼 3.10+ 실행기 지정 (Homebrew: `brew install python@3.12`). 영구 설정은 `~/.zshrc`에 `export LLM_PYTHON=python3.12` |
+| 셸 설정 파일 이름 | `llm` 이 새 터미널에서 안 잡힘 | macOS 기본 셸은 zsh — `~/.bashrc` 대신 **`~/.zshrc`** 에 `export PATH="$HOME/bin:$PATH"` |
+| `git`/`ssh` 인증 | clone·`llm sync` 실패 | SSH 별칭은 PC 로컬 설정입니다(위 ① 참고). 키를 등록하거나 `git@github.com:…` 주소 사용 |
+
+`llm` 래퍼는 심볼릭 링크를 **여러 단계 따라가고**(링크→링크→파일), 상대 경로
+링크도 해석합니다. `LLM_PYTHON` 을 바꾼 뒤 `llm --help` 가 사용법을 출력하면
+정상이고, 실행기를 못 찾거나 버전이 낮으면 그 사실을 알려 주는 오류가 나옵니다.
 
 ### 새 PC에서 달라지는 점
 
@@ -309,8 +334,9 @@ llm "이 폴더 요약해줘"   # 대화형 시작 + 도구까지 확인
 
 | 항목 | 확인 명령 | 없을 때 |
 |------|-----------|---------|
-| Python 3.10+ | `python3 -V` | 최신 버전 설치 (3.9 이하면 문법 오류) |
+| Python 3.10+ | `python3 -V` | 최신 버전 설치 (3.9 이하면 문법 오류). macOS에서 여러 버전이면 `LLM_PYTHON=python3.12 llm …` |
 | bash | `bash --version` | Linux/macOS/WSL은 기본 포함 |
+| `readlink` | `readlink ~/bin/llm` | 없어도 `~/bin` 대신 저장소의 `llm` 을 직접 실행하면 동작 (v0.11.1부터 `-f` 불필요) |
 | git (선택) | `git --version` | clone·`mv` 이어받기 안내에만 사용 |
 
 ---
@@ -458,7 +484,7 @@ llm shell log clear
 
 ```text
 
-────────────── ✦ llm v0.11.0 · 대화형 ──────────────
+────────────── ✦ llm v0.11.1 · 대화형 ──────────────
   세션      llm
   폴더      ~/codespace/userscript/llm
   셸        확인=safe(폴더 안)
@@ -527,7 +553,7 @@ llm undo
 
 ```text
 
-────────────── ✦ llm v0.11.0 · 대화형 ──────────────
+────────────── ✦ llm v0.11.1 · 대화형 ──────────────
   세션      llm
   폴더      ~/codespace/userscript/llm
   셸        확인=읽기 전용 자동 (repl 기본)
@@ -1386,6 +1412,7 @@ $ llm shell log            # 또는 REPL 에서 /log  (최근 20건, llm shell l
 | `LLM_AUTO_WORKSPACE` | (미설정) | `1`이면 `--safe`. **미설정 시에도 기본은 safe** |
 | `LLM_RATES` | (미설정) | `0`이면 실시간 환율 끄고 가정 환율 (`--no-rates`) |
 | `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |
+| `LLM_PYTHON` | `python3` | `llm` 래퍼가 실행할 Python 실행기(3.10+). macOS 등에서 기본 `python3`가 3.9일 때 `LLM_PYTHON=python3.12` 처럼 지정 |
 | `LLM_HISTORY` | (미설정) | `home`이면 `~/.local/share/llm/`, 그 외 작업폴더 `.llm/` |
 | `LLM_AUTO_SYNC` | (꺼짐) | `1`/`true`/`yes`/`on` 이면 종료 시 자동 커밋·push |
 | `LLM_AUTO_PULL` | `1`(켜짐) | `0`이면 질의 전 원격 수신 끔 |
