@@ -62,7 +62,7 @@ from llmlib.shell_policy import (
 )
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.11.1"
+VERSION = "0.12.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -4117,6 +4117,12 @@ USAGE_KEYS = (
 # 에이전트 시작 시점에 조회한 잔액 (화폐별 잔액, 원화 환산 합계).
 # 종료 시 소요 비용(시작 - 종료)을 계산하는 데 쓴다.
 START_BALANCE: tuple[dict[str, str], float | None] | None = None
+# 이번 실행에서 **처음** 조회한 잔액(세션 누적 소요 금액의 기준, `/cost`).
+# START_BALANCE 는 턴마다 덮어쓰지만 이 값은 실행 내내 유지한다.
+SESSION_BALANCE_BASE: tuple[dict[str, str], float | None] | None = None
+# `/cost` 가 현재 잔액을 조회할 때 쓸 짧은 캐시(연속 호출로 API를 두드리지 않게).
+COST_BALANCE_CACHE: tuple[float, dict[str, str]] | None = None
+COST_BALANCE_TTL = 5.0  # 초: 이 시간 안에는 같은 잔액을 재사용한다.
 # 활성 환율(1 화폐 = 몇 원). 가정 환율로 시작해 실시간 조회로 갱신된다.
 KRW_RATES: dict[str, float] = dict(CURRENCY_KRW_RATE)
 # 환율 출처 표시(예: `2026-09-12 00:02 · open.er-api.com`). 가정 환율이면 빈 값.
@@ -4383,14 +4389,17 @@ def cmd_balance() -> int:
     return 0
 
 
-def prefetch_balance() -> None:
+def prefetch_balance(quiet: bool = False) -> None:
     """에이전트 시작 전 잔액과 적용 환율을 미리 조회해 캐시한다.
 
     종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 시작 잔액은
     화면에 출력하지 않고(종료 시 시작→종료로만 보여준다) 조용히 캐시만 한다.
-    실패해도 경고만 출력하고 흐름은 막지 않는다.
+    이번 실행에서 **처음** 성공한 조회는 `SESSION_BALANCE_BASE`로도 남겨
+    `/cost` 가 세션 누적 소요 금액을 계산할 수 있게 한다.
+    실패해도 경고만 출력하고 흐름은 막지 않는다(`quiet` 면 경고도 생략 —
+    채팅 모드처럼 턴 푸터를 쓰지 않는 경우).
     """
-    global START_BALANCE
+    global START_BALANCE, SESSION_BALANCE_BASE
     START_BALANCE = None
     if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
         return
@@ -4398,16 +4407,18 @@ def prefetch_balance() -> None:
     try:
         amounts, krw = fetch_balance()
     except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
-        print_warn(f"시작 잔액을 조회하지 못했습니다: {exc}", stream=True)
+        if not quiet:
+            print_warn(f"시작 잔액을 조회하지 못했습니다: {exc}", stream=True)
         return
     START_BALANCE = (amounts, krw)
+    if SESSION_BALANCE_BASE is None:
+        SESSION_BALANCE_BASE = (amounts, krw)
 
 
-def balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:
-    """시작 대비 **화폐별** 소모액(양수면 소모). 계산할 수 없으면 None."""
-    if START_BALANCE is None:
-        return None
-    start_amounts = START_BALANCE[0]
+def balance_cost_from(
+    start_amounts: dict[str, str], end_amounts: dict[str, str]
+) -> dict[str, float] | None:
+    """두 잔액의 **화폐별** 차이(양수면 소모). 계산할 수 없으면 None."""
     costs: dict[str, float] = {}
     for cur in ordered_currencies({**start_amounts, **end_amounts}):
         try:
@@ -4417,6 +4428,13 @@ def balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:
             return None
         costs[cur] = start_v - end_v
     return costs
+
+
+def balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:
+    """시작 대비 **화폐별** 소모액(양수면 소모). 계산할 수 없으면 None."""
+    if START_BALANCE is None:
+        return None
+    return balance_cost_from(START_BALANCE[0], end_amounts)
 
 
 def cost_krw(costs: dict[str, float]) -> float | None:
@@ -4489,6 +4507,58 @@ def usage_lines(totals: dict[str, int] | None = None) -> list[str]:
     if calls:
         parts.append(f"API {calls}회")
     return ["토큰 사용: " + " · ".join(parts)]
+
+
+def current_balance_amounts() -> dict[str, str]:
+    """현재 잔액(화폐별)을 조회한다. 짧은 간격의 반복 호출은 캐시를 쓴다."""
+    global COST_BALANCE_CACHE
+    now = time.monotonic()
+    if COST_BALANCE_CACHE is not None and now - COST_BALANCE_CACHE[0] < COST_BALANCE_TTL:
+        return COST_BALANCE_CACHE[1]
+    load_rates()
+    amounts, _krw = fetch_balance()
+    COST_BALANCE_CACHE = (now, amounts)
+    return amounts
+
+
+def cost_summary_lines(
+    start_amounts: dict[str, str], end_amounts: dict[str, str]
+) -> list[str]:
+    """두 잔액(시작→현재)의 차이를 원화 기준 줄로 만든다(순수 계산)."""
+    costs = balance_cost_from(start_amounts, end_amounts)
+    if costs is None:
+        return ["잔액 형식이 달라 소요 금액을 계산하지 못했습니다."]
+    krw_signed = cost_krw(costs)
+    signed = krw_signed if krw_signed is not None else sum(costs.values())
+    label = "세션 소요 금액" if signed >= 0 else "세션 잔액 증가"
+    lines = [
+        f"{label}: {cost_text(costs)}"
+        f"   (시작 {format_amounts(start_amounts)} → 현재 {format_amounts(end_amounts)})"
+    ]
+    if cost_negligible(costs):
+        lines.append("잔액이 화폐 최소 단위(0.01)로 반올림되어 정확한 금액은 알 수 없습니다.")
+    return lines
+
+
+def session_cost_lines(no_balance: bool = False) -> list[str]:
+    """`/cost` 에 붙일 세션 누적 소요 금액 줄(불가하면 이유를 안내).
+
+    금액은 **세션 시작 잔액 - 현재 잔액**으로만 구한다(토큰 단가표 없음).
+    """
+    if no_balance:
+        return ["금액 표시가 꺼져 있습니다(--no-balance) — 잔액 조회를 하지 않습니다."]
+    if not os.environ.get("DEEPSEEK_API_KEY", "").strip():
+        return ["API 키가 없어 금액을 계산하지 못했습니다."]
+    if SESSION_BALANCE_BASE is None:
+        return [
+            "기준 잔액이 없어 금액을 계산하지 못했습니다"
+            "(잔액 조회 없이 시작했거나 조회에 실패했습니다)."
+        ]
+    try:
+        end_amounts = current_balance_amounts()
+    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
+        return [f"현재 잔액을 조회하지 못해 금액을 계산하지 못했습니다: {exc}"]
+    return cost_summary_lines(SESSION_BALANCE_BASE[0], end_amounts)
 
 
 def show_balance_footer() -> None:
@@ -5221,9 +5291,11 @@ def cmd_agent(
         return cmd_summarize(session, history_file, model, force=True)
 
     reset_usage()
-    if not chat_only and not no_balance:
-        # 종료 시 소요 비용을 계산할 수 있도록 시작 잔액을 먼저 조회해 캐시한다.
-        prefetch_balance()
+    if not no_balance:
+        # 종료 시 소요 비용(그리고 `/cost` 의 세션 소요 금액)을 계산할 수 있도록
+        # 시작 잔액을 먼저 조회해 캐시한다. 채팅 모드는 푸터를 쓰지 않으므로
+        # 조용히(경고 없이) 캐시만 한다.
+        prefetch_balance(quiet=chat_only)
 
     RUN.session = session
     RUN.model = model
@@ -5582,7 +5654,7 @@ REPL_COMMANDS = {
     "/clear": "대화 비우기 (이전 대화는 summaries/ 에 백업)",
     "/compact": "지금 대화 요약(압축)",
     "/model": "모델 보기/바꾸기  예) /model deepseek-reasoner",
-    "/cost": "이번 대화형 세션의 토큰 사용량",
+    "/cost": "이번 대화형 세션의 토큰 사용량·소요 금액",
     "/undo": "직전 턴의 파일 편집 되돌리기",
     "/plan": "plan 모드 켜기/끄기 (읽기 전용 조사 + 계획만)",
     "/rules": "세션 규칙·프로젝트 지침 보기",
@@ -5748,8 +5820,10 @@ def cmd_repl(
                 else:
                     print_info(f"현재 모델: {model}")
             elif cmd == "/cost":
-                lines = usage_lines(SESSION_USAGE)
-                print_info(lines[0] if lines else "아직 사용량이 없습니다.")
+                lines = usage_lines(SESSION_USAGE) or ["아직 사용량이 없습니다."]
+                print_info(lines[0])
+                for extra in session_cost_lines(no_balance=args.no_balance):
+                    print(f"  {C.dim}{extra}{C.reset}")
             elif cmd == "/compact":
                 cmd_summarize(session, history_file, model, force=True)
             elif cmd == "/clear":

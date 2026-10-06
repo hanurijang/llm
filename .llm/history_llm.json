@@ -1,878 +1,650 @@
 [
   {
     "role": "user",
-    "content": "[이전 대화 요약] 아래는 이전 대화의 요약입니다. 이후 대화의 맥락으로 사용하세요.\n\n# 대화 요약\n\n## 사용자 목표/요청\n- **1차 요청**: `llm`으로 실행해 대화형(REPL) 진입 시 **헤더(고정 메시지)를 구조화해 UI 개선**.\n- **2차 질문**: `llm` 프로젝트를 **다른 환경/PC에서 쓰는 사용법이 문서화돼 있는지** 확인.\n- **3차 요청**: 발견된 문제 **진행(수정)** — `llm` 래퍼의 심볼릭 링크 해석 휴대성 개선 + README 다른 PC 절 보강 + v0.11.1.\n\n## 결정 사항과 이유\n- 헤더는 **제목 줄 + 라벨 정렬 행** 구조로 통일(한 줄 몰아찍기 → 행 단위). 한글 wide 문자 정렬 위해 `display_width`/`pad` 사용, 라벨 폭 `HEADER_LABEL_WIDTH`.\n- `llm` 래퍼는 **`readlink -f`에 의존하지 않음**(macOS/BSD에 `-f` 없음) → `-L` + `readlink` 루프로 심볼릭 링크 직접 해석. 이유: 기존 방식은 BSD 환경에서 `~/bin/agent.py`를 못 찾아 실패(재현 확인).\n- **`LLM_PYTHON` 환경변수 지원**(macOS 기본 python3가 3.9일 수 있음).\n- 버전 **0.11.0 → 0.11.1** 예정.\n\n## 생성/수정된 파일과 핵심 코드 변경\n- **`agent.py`** (v0.10 유지 항목 — 커밋 717f7de):\n  - `HEADER_LABEL_WIDTH`·`header_line()` 추가.\n  - `print_banner()` 재작성: 제목 줄(`rule('─', \"✦ llm v… · 대화형|에이전트|채팅\")`) + `세션`/`폴더`/`셸`/`설정` 행, `repl` 인자 추가.\n  - `print_continue_status()`: `이어가기` 행으로 통합.\n  - `cmd_repl`: `완화`/`로그`/`도움말` 행 통합.\n  - 옛 문구 정리: `/log` → `llm shell log`, `필요 시 llm sync`, `llm rules init`, `비우기: llm shell log clear` 등.\n  - 기존 `--help` 오류 수정, `interactive_default`에 `chat`/`plan` 예외(이전 턴).\n- **`llm`(래퍼)** — 이번 턴:\n  - 심볼릭 링크 루프 해석(최대 40 hop), **`LLM_PYTHON`** 지원, python 미존재 시 안내 후 exit 127.\n  - `$DIR/agent.py` 없으면 안내(깨진 링크 대응).\n- **`README.md`**: `v0.11 변경 사항` 표 신설, 시작 헤더 예시·REPL 명령·모듈 설명 갱신.\n- **`.llm/rules.md`**: 헤더 행 구성 규칙 갱신.\n- **`tests/test_phase1.py`**: `test_version` 0.11.0, `test_header_rows_align_and_show_state` 추가 → **106 passed**.\n\n## 검증 및 커밋\n- `py_compile` OK, `pytest` **106 passed**.\n- 커밋/push 완료: `717f7de feat(ui): 대화형 시작 헤더를 제목 줄 + 라벨 정렬 행으로 구조화 (v0.11.0)`.\n- 래퍼 수정은 수동 검증 완료(체인 링크 동작, BSD식 `readlink` 모사 fakebin에서 동작, `LLM_PYTHON` 미존재 안내) — **bash -n OK**.\n\n## 미해결 과제 (TODO)\n- **README**: 「다른 PC에서 시작하기」 절에 **macOS/SSH 별칭 주의**(`Host github-hanurijang` 등) + **`LLM_PYTHON`** 안내, 환경변수 표 추가, v0.11.1 버전/표 갱신.\n- **`.llm/rules.md`·`VERSION` → 0.11.1** 갱신.\n- **테스트 추가**: BSD식 `readlink`(=`-f` 미지원) 환경에서 래퍼 동작 테스트 정식화.\n- `py_compile`·`pytest` 검증 후 **커밋/push**.\n- 로컬 미커밋: `.llm/history_llm.json`, 요약 파일들(규칙대로 `llm sync` 필요)."
+    "content": "[이전 대화 요약] 아래는 이전 대화의 요약입니다. 이후 대화의 맥락으로 사용하세요.\n\n# 대화 요약\n\n## 사용자 목표/요청\n- **v0.11.1 진행**: `llm` 래퍼가 `readlink -f` 없는 환경(macOS/BSD)에서도 동작하도록 수정 + README 「다른 PC」 절 보강.\n- **질문**: 대화형 REPL에서 `/agent` 입력 시 `/chat`과의 차이.\n- **질문**: `/cost` 입력 시 금액이 안 나오고 토큰만 나오는 이유.\n- **요청**: `/cost` 개선을 **권장 방식으로 적용**.\n\n## 결정 사항과 이유\n- `llm` 래퍼는 `readlink -f`에 의존하지 않음 → `BASH_SOURCE` + `readlink` 루프로 심볼릭 링크 직접 해석(상대·다단계 링크, 최대 40 hop). 이유: `-f` 미지원 환경에서 `~/bin/llm`이 `agent.py`를 못 찾음(재현 확인).\n- **`LLM_PYTHON` 환경변수** 지원(기본 `python3`). macOS 기본 python3가 3.9일 수 있음.\n- `/cost` 금액은 **토큰 단가표가 없어** 잔액 차이 방식(**세션 시작 잔액 − 현재 잔액, 원화 환산**)으로 계산. 불가 시 이유를 안내 줄로 표시(권장 방식 채택).\n- `/chat` vs `/agent`: `chat_only` 변수 하나로 토글. chat=도구/`@파일`/undo/셸/todo/잔액 없음, 프롬프트 `llm:chat>`; agent=도구·규칙·편집·잔액 활성, `llm:agent>`. 모드 전환은 대화 기록·plan 모드를 바꾸지 않음.\n\n## 생성/수정된 파일과 핵심 코드 변경\n- **`llm`(래퍼)**: `readlink -f` 제거 → `readlink` 루프 해석, `LLM_PYTHON` 지정(미존재 시 안내 후 exit 127), `agent.py` 없으면 안내 후 exit 1.\n- **`agent.py`**:\n  - v0.11.1: `VERSION = \"0.11.1\"`.\n  - `/cost` 개선: `SESSION_BALANCE_BASE`(세션 기준 잔액)·`COST_BALANCE_CACHE`(5초 TTL)·`COST_BALANCE_TTL` 추가, `balance_cost_from`·`current_balance_amounts`·`cost_summary_lines`·`session_cost_lines` 구현.\n  - `prefetch_balance(quiet=False)`로 확장(첫 성공 조회를 세션 기준 잔액으로 기록), `/cost` 핸들러가 `session_cost_lines` 출력하도록 연결, REPL_COMMANDS 설명 갱신.\n- **`README.md`**: v0.11.1 버전 표기, 이식성 행, 「설치·실행 파일 배치」 링크 해석·`LLM_PYTHON`, 「① 코드 가져오기」 SSH 별칭(`github-hanurijang`) 주의, 새 절 「macOS·다른 환경에서 쓸 때」, 「준비물 체크」·「설정과 환경변수」에 `LLM_PYTHON`, 배너 예 v0.11.1.\n- **`.llm/rules.md`**: 「진입 래퍼(`llm`) 이식성 (필수)」 절 추가.\n- **테스트**: `tests/test_launcher.py` 신설 5개(체인 링크/BSD식 readlink/agent.py 누락/LLM_PYTHON 미존재·지정), `tests/test_phase1.py` 버전 0.11.1, `tests/test_cost.py` 신설 13개(잔액 차이 계산·불가 안내·캐시·기준 잔액).\n\n## 검증 및 커밋\n- v0.11.1: `py_compile` OK, 전체 **111 passed**, 커밋/push 완료 → `522ac5b`(717f7de→522ac5b).\n- `/cost` 개선: `tests/test_cost.py` **13 passed**, `python3 -m py_compile agent.py` OK(전체 스위트·커밋 아직).\n\n## 미해결 과제 (TODO)\n- **VERSION 0.12.0** 미적용(현재 0.11.1) 및 README `/cost` 표·잔액 절·v0.12 변경 표·함수 목록·배너 예 갱신 필요.\n- `/cost` 개선분 **전체 `pytest` 검증 후 커밋/push** 필요.\n- 로컬 미커밋: `.llm/history_llm.json`, 요약 파일들(규칙대로 `llm sync` 필요).\n\n[진행 중인 작업 계획 — 새로 만들지 말고 이 계획을 이어서 갱신하세요]\n🎯 `/cost`가 세션 누적 소요 금액(세션 시작 잔액 − 현재 잔액, 원화 환산)까지 보여주도록 개선하고, 불가할 때 이유를 안내한다(권장: 잔액 차이 방식 + 안내 줄).\n   ✅ agent.py: SESSION_BALANCE_BASE·잔액 캐시·balance_cost_from·cost_summary_lines·session_cost_lines 구현, /cost 핸들러 연결\n   ✅ VERSION 0.12.0 · README(/cost 표·잔액 절·v0.12 표·함수 목록·배너 예)\n   ✅ 테스트 추가(금액 줄 순수 계산·불가 안내)\n   ▶ py_compile·pytest 검증 후 커밋/push\n<!-- llm-todo:{\"goal\": \"`/cost`가 세션 누적 소요 금액(세션 시작 잔액 − 현재 잔액, 원화 환산)까지 보여주도록 개선하고, 불가할 때 이유를 안내한다(권장: 잔액 차이 방식 + 안내 줄).\", \"items\": [{\"content\": \"agent.py: SESSION_BALANCE_BASE·잔액 캐시·balance_cost_from·cost_summary_lines·session_cost_lines 구현, /cost 핸들러 연결\", \"status\": \"done\"}, {\"content\": \"VERSION 0.12.0 · README(/cost 표·잔액 절·v0.12 표·함수 목록·배너 예)\", \"status\": \"done\"}, {\"content\": \"테스트 추가(금액 줄 순수 계산·불가 안내)\", \"status\": \"done\"}, {\"content\": \"py_compile·pytest 검증 후 커밋/push\", \"status\": \"in_progress\"}]} -->"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_FA67hMHqtRpldUDxYt5e5729",
+        "id": "call_00_THx0zpEkwoNA5LZzNYxc2679",
         "type": "function",
         "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git remote -v && echo \\\"=== bash version\\\" && bash --version | head -1 && echo \\\"=== test readlink -f fallback\\\" && (cd /tmp && ln -sf \\\"$OLDPWD/llm\\\" /tmp/llm-lnk 2>/dev/null; readlink -f /tmp/llm-lnk; echo \\\"---bsd-sim---\\\"; bash -c 'SOURCE=/tmp/llm-lnk; echo \\\"$SOURCE\\\"') && rm -f /tmp/llm-lnk\", \"timeout\": 60}"
+          "name": "read",
+          "arguments": "{\"limit\": 70, \"offset\": 900, \"path\": \"README.md\"}"
+        }
+      },
+      {
+        "id": "call_01_IfHqygggQcdwTkslWh8n1617",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 45, \"offset\": 1548, \"path\": \"README.md\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_FA67hMHqtRpldUDxYt5e5729",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\norigin\tgit@github-hanurijang:hanurijang/llm.git (fetch)\norigin\tgit@github-hanurijang:hanurijang/llm.git (push)\n=== bash version\nGNU bash, 버전 5.2.21(1)-release (x86_64-pc-linux-gnu)\n=== test readlink -f fallback\n/home/jang/codespace/userscript/llm/llm\n---bsd-sim---\n/tmp/llm-lnk\n"
+    "tool_call_id": "call_00_THx0zpEkwoNA5LZzNYxc2679",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1696 lines)\n   900|- 요약 시 계획을 함께 실었으면 `ℹ️ 진행 중인 작업 계획을 요약에 함께 실어\n   901|  이어갑니다.`로 안내합니다.\n   902|\n   903|### 잔액·소요 비용 표시 (`--no-balance`)\n   904|\n   905|에이전트 모드는 **시작할 때 잔액을 조용히 조회해 캐시**하고(화면에는 표시하지\n   906|않음. 실패하면 경고만), 정상 종료하면(`작업 완료 (N단계)`) **최종 답변 직전에**\n   907|아래를 `--balance`와 같은 형식으로 보여줍니다.\n   908|\n   909|```text\n   910|──────────────────────── 💵 DeepSeek 잔액 정보 ────────────────────────\n   911|  위안화 (CNY)  2.95 CNY\n   912|  미국달러 (USD)  0.99 USD\n   913|  원화 (KRW)  1,916.25 원  (환산)\n   914|────────────────────────────────────────────────────────────────────────\n   915|  적용 환율(실시간): 1 CNY = 199.43 KRW · 1 USD = 1,341.35 KRW   (Sat, 12 Sep 2026 00:02:31 +0000)\n   916|  소요 비용: 23.38 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 종료 2.95 CNY · 0.99 USD)\n   917|  토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회\n   918|```\n   919|\n   920|- **계정 잔액은 화폐별로 존재**할 수 있습니다(위안화 `CNY`, 미국달러 `USD`\n   921|  등). API가 준 **화폐별 잔액을 그대로** 보여주며, 없는 화폐는 표시하지\n   922|  않습니다(지어내지 않음).\n   923|- **환산해 보여주는 화폐는 원화(KRW) 하나**입니다. `원화 (KRW)` 줄이 화폐별\n   924|  잔액을 원화로 환산한 합계이고(옆에 `(환산)` 표시), 화폐별 금액은 각 줄에\n   925|  그대로 나옵니다.\n   926|- **환율은 실시간으로 조회**합니다(참고용): `RATE_URL`\n   927|  (`https://open.er-api.com/v6/latest/USD`, 키 불필요)에서 `1 USD` 기준 전 화폐\n   928|  시세를 받아 교차 환산해 `1 화폐 = 몇 원`을 만들고, 화면에는 `적용\n   929|  환율(실시간): …`과 **갱신 시각**을 함께 보여줍니다. 받은 시세는\n   930|  `RATE_CACHE_TTL`(12시간) 동안 `~/.local/share/llm/rates.json`에 캐시해\n   931|  재조회를 아낍니다.\n   932|  - 조회에 실패하면 (1) 캐시된 오래된 시세가 있으면 `(오래된 시세, 갱신 실패: …)`\n   933|    표시와 함께 그 값을 쓰고, (2) 없으면 **가정 환율**로 되돌아갑니다\n   934|    (`적용 환율(가정): …   (가정 환율 (실시간 조회 실패: …))`). 가정 환율은\n   935|    `CURRENCY_KRW_RATE` = `1 CNY = 220 KRW`(`KRW_PER_CNY`) · `1 USD = 1,350 KRW`\n   936|    (`KRW_PER_USD`)입니다.\n   937|  - `--no-rates`(또는 `LLM_RATES=0`)로 실시간 조회를 끄면 항상 가정 환율을\n   938|    씁니다(오프라인/고정값 선호 시).\n   939|  - 실시간 시세가 있으면 가정 환율에 없던 화폐(예: `JPY`)도 환산됩니다. 그래도\n   940|    모르는 화폐가 섞이면 그 줄에 `(환율 미지정)`을 붙이고 원화 합계는 `?`가\n   941|    됩니다.\n   942|- **소요 비용** = 시작 잔액 − 종료 잔액(화폐별로 계산해 원화로 환산).\n   943|  - 계정에 화폐가 하나뿐이면 그 화폐로도 보여줍니다: `0.05 CNY (11.00 원)`,\n   944|    `0.01 USD (13.50 원)`. 여러 화폐면 원화 합계를 앞세우고 화폐별 내역을\n   945|    괄호에 붙입니다: `24.50 원 (0.05 CNY · 0.01 USD)`.\n   946|  - 잔액이 **화폐 최소 단위(0.01)로만** 오므로, 환산액이 그 절반에도 못 미치면\n   947|    구분할 수 없습니다. 그때는 `소요 비용: 0.01 미만`과 함께 \"정확한 비용은 알\n   948|    수 없습니다\" 안내를 붙이고, 잔액이 늘었으면 `잔액 증가`로 표기합니다.\n   949|- **토큰 사용량**은 API 응답의 `usage`를 누적한 값입니다(입력/출력/합계,\n   950|  프롬프트 캐시 적중·미적중, API 호출 횟수). 스트리밍에서도 받도록\n   951|  `stream_options.include_usage`를 켭니다. 제공되지 않는 모델/버전에서는\n   952|  이 줄이 생략됩니다.\n   953|- 시작 잔액 조회에 실패하면 소요 비용만 생략하고 종료 잔액은 그대로 보여줍니다.\n   954|  종료 잔액 조회도 실패하면 경고만 출력하고 답변은 정상 표시됩니다.\n   955|- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\n   956|  한 번을 아낌). `--chat` 모드에서는 표시하지 않습니다.\n   957|\n   958|---\n   959|\n   960|## 세션 규칙\n   961|\n   962|프로젝트별 지침을 대화 기록과 별개로 코드 저장소에 남길 수 있습니다.\n   963|규칙은 **매 API 요청의 시스템 프롬프트에 포함**되어 모델이 따릅니다.\n   964|\n   965|### 파일 위치\n   966|\n   967|```\n   968|<작업폴더>/.llm/rules.md        # 기본 규칙 파일\n   969|<작업폴더>/.llm/rules/*.md      # 추가 규칙 (파일명 사전순으로 병합)\n... [727 more lines; use offset/limit]"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_IfHqygggQcdwTkslWh8n1617",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1696 lines)\n  1548|  (매핑 없이 `.llm/`에 기록만 있으면 `llm -s <이름>` 안내)\n  1549|- **작업 계획(todo)**: `tool_todo`/`render_todo`(목표 + 번호 매긴 항목 + 항목별\n  1550|  하위 작업 로그를 화면에 그리기), `todo_block_lines`/`refresh_todo_block`\n  1551|  (블록 구성·다시 그리기), `todo_log_open`/`todo_log_close`/`tool_line_open`/\n  1552|  `tool_line_done`(도구 줄을 항목 하위 로그로 연결), `todo_rows`(상한 초과 시\n  1553|  완료 항목부터 접기), `reset_todo`/`restore_todo`/\n  1554|  `todo_plan_text`/`todo_stamp`(요약·다음 실행을 넘어 같은 계획 이어가기)\n  1555|- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `prefetch_balance`/`balance_cost`(화폐별 소모액)/`cost_krw`/\n  1556|  `cost_negligible`/`cost_text`/`show_balance_footer`(시작 잔액 캐시 → 종료 시\n  1557|  소요 비용·토큰 표시), `fetch_balance`/`amounts_krw`(API가 준 화폐별 잔액 + 원화\n  1558|  환산)/`ordered_currencies`/`format_amounts`/`format_krw`/`print_balance_block`,\n  1559|  `load_rates`/`rates_enabled`/`rates_from_usd`/`read_rate_cache`/`write_rate_cache`/\n  1560|  `krw_rate`(실시간 환율 조회·캐시, 실패 시 가정 환율 `CURRENCY_KRW_RATE` =\n  1561|  `KRW_PER_CNY`/`KRW_PER_USD` 폴백), `http_get_json`(키 없는 제3자 API 조회),\n  1562|  `StepPanel`/`PANEL`(작업 계획 블록·도구 줄 제자리 갱신), `render_markdown`(내장 렌더러 호출, `llmlib/mdrender.py`),\n  1563|  `print_title`/`print_info`/`print_ok`/\n  1564|  `print_warn`/`print_error`(출력 뒤 계획 블록 다시 그리기), `rule`(구분선, 한글 폭 고려)\n  1565|\n  1566|### 처리 흐름 (에이전트 모드)\n  1567|\n  1568|0. 세션 결정: 이 폴더의 매핑을 쓰고, 없으면 새 세션을 만든다. 이때 사라진\n  1569|   폴더의 매핑(고아)이 있으면 이어받을 후보를 보여주고 확인받는다\n  1570|   (`apply_move_binding` → 이후 세션 안내). 조회/정리 명령도 같은 후보를 안내한다.\n  1571|1. `@멘션` 파일을 첨부하고 undo 턴을 시작한 뒤, 사용자 프롬프트를 세션 기록에 추가하고\n  1572|   저장(직전 턴이 답 없이 끝났으면 같은 user 메시지로 합침)\n  1573|2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시\n  1574|   (화면에는 출력하지 않음)\n  1575|3. 시스템 프롬프트(워크스페이스 정보 + plan 모드 안내 + CLAUDE.md/AGENTS.md + 세션 규칙) 구성. 요약문에 남은 작업\n  1576|   계획 스냅샷이 있으면 복원해(`restore_todo`) **같은 계획을 이어감**\n  1577|4. 모델 호출 → (사고/작성 진행 상태 한 줄) → 텍스트 또는 도구 호출 수신\n  1578|5. 도구 호출이면 `🔧 이름 <의도 요약>` 줄을 열고, 실행 후 같은 줄에\n  1579|   `✓/✗ 결과 요약`을 붙여 **그 자리에서 갱신**한 뒤 결과를 대화에 추가해 4로\n  1580|   반복 (셸은 확인이 필요할 때만 명령 원문 프롬프트). 계획(todo)이 있으면 이\n  1581|   줄이 **진행 중인 항목의 하위 로그**로 붙고, 없으면 단계 머리말 아래에 그린다\n  1582|6. 단계 시작 시 대화가 커졌으면 요약하고, 진행 중인 작업 계획(목표 + 항목)을\n  1583|   요약문에 함께 실어 다음 단계에서도 같은 계획을 이어감\n  1584|7. 최종 텍스트 응답을 저장하고 내장 렌더러로 Markdown 출력 (앞에 `작업 완료 (N단계)`,\n  1585|   잔액·소요 비용·토큰 사용량 푸터). 작업 계획 블록은 지우지 않고 화면에 남긴다\n  1586|\n  1587|반복이 `--max-steps`(기본 100)에 도달하면 곧바로 끝내지 않고 **이어서 같은\n  1588|횟수만큼 더 진행할지 `[y/N]`으로 묻는다**(`ask_continue_steps`). `y`면 한도를\n  1589|같은 값만큼 늘려 계속하고, `N`이면 그때까지의 기록을 저장한 채 멈춘다.\n  1590|대화 기록은 저장돼 있으므로 이어서 요청을 보내면 계속 진행된다. TTY가\n  1591|아닌 환경(파이프·자동화)에서는 물어볼 수 없으므로 자동으로 중단한다.\n  1592|\n... [104 more lines; use offset/limit]"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_aRfh5O1Phns1fhhCrXD22926",
+        "id": "call_00_9FBzgK7lASSIUP7XCxpd4006",
         "type": "function",
         "function": {
           "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -rn \\\"github-hanurijang\\\\|ssh/config\\\\|Host \\\" README.md .llm/rules.md | head -20; echo \\\"=== ~/.ssh/config host aliases (names only)\\\"; grep -n \\\"^Host \\\" ~/.ssh/config 2>/dev/null | head\", \"timeout\": 60}"
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && head -20 tests/test_improvements.py && grep -n \\\"^class\\\" tests/test_improvements.py tests/test_phase1.py | head -30\", \"timeout\": 60}"
+        }
+      },
+      {
+        "id": "call_01_GIj7OBWBA0neAqNXUs445421",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 18, \"offset\": 5578, \"path\": \"agent.py\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_aRfh5O1Phns1fhhCrXD22926",
+    "tool_call_id": "call_00_9FBzgK7lASSIUP7XCxpd4006",
     "name": "shell",
-    "content": "ERROR: 비밀값을 드러낼 수 있는 명령이라 실행하지 않았습니다(비밀 파일  ~/.ssh/config host aliases (names only))."
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_6ZQq7LuFsgyW1qylzrmx0055",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -rn \\\"github-hanurijang\\\\|ssh/config\\\" README.md .llm/rules.md | head -20\", \"timeout\": 60}"
-        }
-      }
-    ]
+    "content": "exit 0\n--- stdout ---\n#!/usr/bin/env python3\n\"\"\"v0.7 개선 사항: 편집 안전장치 · undo · 중단 처리 · 재시도 · 맥락 관리 · 새 도구.\"\"\"\n\nfrom __future__ import annotations\n\nimport io\nimport json\nimport os\nimport sys\nimport tempfile\nimport time\nimport unittest\nimport urllib.error\nfrom pathlib import Path\nfrom unittest import mock\n\nsys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n\nimport agent as llm  # noqa: E402\nfrom llmlib import conversation, netretry, web  # noqa: E402\ntests/test_improvements.py:24:class Isolated(unittest.TestCase):\ntests/test_improvements.py:48:class EditSafety(Isolated):\ntests/test_improvements.py:125:class ToolsAndSecrets(Isolated):\ntests/test_improvements.py:199:class Conversation(unittest.TestCase):\ntests/test_improvements.py:240:class Retry(unittest.TestCase):\ntests/test_improvements.py:273:class Cli(unittest.TestCase):\ntests/test_phase1.py:21:class Phase1Defaults(unittest.TestCase):\ntests/test_phase1.py:130:class Phase2Cli(unittest.TestCase):\n"
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ET_6ZQq7LuFsgyW1qylzrmx0055",
-    "name": "shell",
-    "content": "exit 0"
+    "tool_call_id": "call_01_GIj7OBWBA0neAqNXUs445421",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/agent.py (6194 lines)\n  5578|\n  5579|REPL_COMMANDS = {\n  5580|    \"/help\": \"명령 목록\",\n  5581|    \"/exit\": \"종료 (빈 줄·Ctrl+D 도 종료)\",\n  5582|    \"/clear\": \"대화 비우기 (이전 대화는 summaries/ 에 백업)\",\n  5583|    \"/compact\": \"지금 대화 요약(압축)\",\n  5584|    \"/model\": \"모델 보기/바꾸기  예) /model deepseek-reasoner\",\n  5585|    \"/cost\": \"이번 대화형 세션의 토큰 사용량\",\n  5586|    \"/undo\": \"직전 턴의 파일 편집 되돌리기\",\n  5587|    \"/plan\": \"plan 모드 켜기/끄기 (읽기 전용 조사 + 계획만)\",\n  5588|    \"/rules\": \"세션 규칙·프로젝트 지침 보기\",\n  5589|    \"/bg\": \"백그라운드 셸 작업 목록\",\n  5590|    \"/log\": \"셸 허용/실행 로그 (llm shell log [N|clear])\",\n  5591|    \"/sync\": \"대화 기록 올리기\",\n  5592|    \"/chat\": \"채팅 모드(도구 없음)\",\n  5593|    \"/agent\": \"에이전트 모드\",\n  5594|}\n  5595|\n... [599 more lines; use offset/limit]"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_QnOTvsOEnC0iGZR6uNs70758",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /tmp && rm -rf lnktest && mkdir -p lnktest/fakebin lnktest/bin && cat > lnktest/fakebin/readlink <<'EOF'\\n#!/bin/bash\\n# BSD readlink 모사: -f 미지원\\ncase \\\"$1\\\" in -f) echo \\\"readlink: illegal option -- f\\\" >&2; exit 1;; esac\\nexec /usr/bin/readlink \\\"$@\\\"\\nEOF\\nchmod +x lnktest/fakebin/readlink && ln -sf /home/jang/codespace/userscript/llm/llm lnktest/bin/llm && PATH=/tmp/lnktest/fakebin:/tmp/lnktest/bin:$PATH bash -c 'llm --help >/dev/null 2>/tmp/lnktest/err; echo \\\"exit=$?\\\"; head -3 /tmp/lnktest/err'\", \"timeout\": 120}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_QnOTvsOEnC0iGZR6uNs70758",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\nexit=2\npython3: can't open file '/tmp/lnktest/bin/agent.py': [Errno 2] No such file or directory\n"
-  },
-  {
-    "role": "assistant",
-    "content": "네, **문서화돼 있습니다.** README에 \"다른 PC에서 시작하기\" 절이 따로 있고, 환경변수·데이터 위치·문제 해결까지 이어집니다. 다만 **\"다른 환경(OS)\" 기준으로는 두 가지 빈틈**을 찾았습니다.\n\n**README에 기록된 내용 (이식 관련)**\n- 「요구 사항」/「설치」 — Python 3.10+, bash, `.env` 로드 순서(`LLM_ENV_FILE` → 저장소 `.env` → `/etc/env/.env`), `llm`+`agent.py` 같은 폴더, `~/bin` 심볼릭 링크 + PATH 등록 (README 149–233줄)\n- 「**다른 PC에서 시작하기**」 — ① clone(SSH 키 안내 포함) → ② `.env` → ③ PATH → ④ 확인(`llm session ls` / `balance` / `ask`), 그리고 「새 PC에서 달라지는 점」(홈 보조 파일은 자동 생성, 기록은 `.llm/`에 있어 clone만으로 따라옴, `~/.local/share/llm/bindings.json`은 복사 금지, 폴더 이름 유지 / `llm -s`) + 「준비물 체크」 표 (236–315줄)\n- 「대화 기록 동기화 (다른 PC에서 이어가기)」, 「파일/데이터 위치」(572–, 1417–), 「설정과 환경변수」표(1378–), 문제 해결 「다른 PC에서 대화가 안 보임」「기록 병합 충돌」(1614–)\n- `.llm/rules.md`(세션 규칙)와 `.llm/history_llm.json`(기록)은 **저장소에 커밋**되므로 다른 PC에서 clone하면 그대로 따라옵니다 (`git ls-files .llm`로 확인).\n\n**발견한 빈틈 (다른 환경 = macOS/BSD 등)**\n1. **`~/bin/llm` 심볼릭 링크가 BSD 환경에서 깨집니다(재현 확인).** `llm` 래퍼는 `readlink -f`로 자기 위치를 찾는데, `-f`가 없는 readlink(구형 macOS 등)면 폴백이 심볼릭 링크 경로를 그대로 써서 `python3: can't open file '~/bin/agent.py'`로 실패합니다(테스트로 재현). README의 설치 방식 자체가 Linux/WSL 전제입니다.\n2. **clone URL과 실제 remote 불일치 안내 없음.** 실제 remote는 SSH 별칭을 씁니다(`git@github-hanurijang:hanurijang/llm.git`). README는 `git@github.com:...`로만 안내해서, 계정을 여러 개 쓰며 `~/.ssh/config`의 `Host github-hanurijang` 별칭에 의존하는 경우 **새 PC에 그 설정도 필요하다**는 언급이 빠져 있습니다.\n3. (작은 것) macOS 기본 `python3`가 3.9일 수 있다는 점은 「준비물 체크」 표에 일반적으로만 적혀 있고 macOS/Homebrew 언급은 없습니다.\n\n**제안**: ① `llm` 래퍼를 `readlink -f` 없이도 동작하는 심볼릭 링크 해석(`test -L` + `readlink` 루프)으로 고치고(버그 수정 → v0.11.1), ② README 「다른 PC에서 시작하기」에 **macOS/SSH 별칭 주의** 소절을 추가하겠습니다. 진행할까요? (지금은 조사만 해서 파일 변경·커밋 없음)\n\n🔁 동기화: 변경 없음(원격과 동일 · 코드 변경 없음, 대화 기록은 로컬 — `llm sync` 로 올림)"
-  },
-  {
-    "role": "user",
-    "content": "진행"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_iZAqfgJTkjC0oPFqJal13409",
+        "id": "call_00_ET_2vDauxJVadY2YtkBp2Ir2411",
         "type": "function",
         "function": {
           "name": "todo",
-          "arguments": "{\"goal\": \"llm 래퍼가 readlink -f 없는 환경(macOS 등)에서도 심볼릭 링크를 해석하도록 고치고, README 다른 PC 절에 macOS/SSH 별칭 주의와 LLM_PYTHON 안내를 추가한 뒤 v0.11.1로 올려 검증·커밋한다.\", \"items\": [{\"content\": \"llm 래퍼: 휴대용 심볼릭 링크 해석 + LLM_PYTHON 지원\", \"status\": \"in_progress\"}, {\"content\": \"테스트 추가(BSD식 readlink 에서도 동작)\", \"status\": \"pending\"}, {\"content\": \"README: 다른 PC 절 macOS/SSH 별칭·LLM_PYTHON, 환경변수 표, v0.11.1 버전/표\", \"status\": \"pending\"}, {\"content\": \".llm/rules.md·VERSION 0.11.1 갱신\", \"status\": \"pending\"}, {\"content\": \"py_compile·pytest 검증 후 커밋/push\", \"status\": \"pending\"}]}"
+          "arguments": "{\"goal\": \"`/cost`가 세션 누적 소요 금액(세션 시작 잔액 − 현재 잔액, 원화 환산)까지 보여주도록 개선하고, 불가할 때 이유를 안내한다(권장: 잔액 차이 방식 + 안내 줄).\", \"items\": [{\"content\": \"agent.py: SESSION_BALANCE_BASE·잔액 캐시·balance_cost_from·cost_summary_lines·session_cost_lines 구현, /cost 핸들러 연결\", \"status\": \"in_progress\"}, {\"content\": \"VERSION 0.12.0 · README(/cost 표·잔액 절·v0.12 표·함수 목록·배너 예)\", \"status\": \"pending\"}, {\"content\": \"테스트 추가(금액 줄 순수 계산·불가 안내)\", \"status\": \"pending\"}, {\"content\": \"py_compile·pytest 검증 후 커밋/push\", \"status\": \"pending\"}]}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_iZAqfgJTkjC0oPFqJal13409",
+    "tool_call_id": "call_00_ET_2vDauxJVadY2YtkBp2Ir2411",
     "name": "todo",
-    "content": "📋 작업 계획 갱신: 총 5개, 완료 0개 · 진행 중: llm 래퍼: 휴대용 심볼릭 링크 해석 + LLM_PYTHON 지원 · 목표 유지: llm 래퍼가 readlink -f 없는 환경(macOS 등)에서도 심볼릭 링크를 해석하도록 고치고, README 다른 PC 절에 macOS/SSH 별칭 주의와 LLM_PYTHON 안내를 추가한 뒤 v0.11.1로 올려 검증·커밋한다."
+    "content": "📋 작업 계획 갱신: 총 4개, 완료 0개 · 진행 중: agent.py: SESSION_BALANCE_BASE·잔액 캐시·balance_cost_from·cost_summary_lines·session_cost_lines 구현, /cost 핸들러 연결 · 목표 유지: `/cost`가 세션 누적 소요 금액(세션 시작 잔액 − 현재 잔액, 원화 환산)까지 보여주도록 개선하고, 불가할 때 이유를 안내한다(권장: 잔액 차이 방식 + 안내 줄)."
+  },
+  {
+    "role": "assistant",
+    "content": "Now let me check where `START_BALANCE` is declared and implement.",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_wSRGioXRq3B9r4bPqUWa1645",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"context\": 6, \"max_results\": 15, \"mode\": \"grep\", \"path\": \"agent.py\", \"pattern\": \"START_BALANCE: |^START_BALANCE\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_wSRGioXRq3B9r4bPqUWa1645",
+    "name": "find",
+    "content": "agent.py-4113-    \"total_tokens\",\nagent.py-4114-    \"prompt_cache_hit_tokens\",\nagent.py-4115-    \"prompt_cache_miss_tokens\",\nagent.py-4116-)\nagent.py-4117-# 에이전트 시작 시점에 조회한 잔액 (화폐별 잔액, 원화 환산 합계).\nagent.py-4118-# 종료 시 소요 비용(시작 - 종료)을 계산하는 데 쓴다.\nagent.py:4119:START_BALANCE: tuple[dict[str, str], float | None] | None = None\nagent.py-4120-# 활성 환율(1 화폐 = 몇 원). 가정 환율로 시작해 실시간 조회로 갱신된다.\nagent.py-4121-KRW_RATES: dict[str, float] = dict(CURRENCY_KRW_RATE)\nagent.py-4122-# 환율 출처 표시(예: `2026-09-12 00:02 · open.er-api.com`). 가정 환율이면 빈 값.\nagent.py-4123-RATES_INFO = \"\"\nagent.py-4124-# 실시간 환율을 쓸 수 있는지(성공 여부)와, 조회를 끄는 스위치(`--no-rates`).\nagent.py-4125-RATES_LIVE = False"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_ET_PL2U3Pqw5lXWb2KoAQJf5341",
+        "id": "call_00_ET_nqd4Z36w8KNbv8uFjOHr9862",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"# 에이전트 시작 시점에 조회한 잔액 (화폐별 잔액, 원화 환산 합계).\\n# 종료 시 소요 비용(시작 - 종료)을 계산하는 데 쓴다.\\nSTART_BALANCE: tuple[dict[str, str], float | None] | None = None\\n# 이번 실행에서 **처음** 조회한 잔액(세션 누적 소요 금액의 기준, `/cost`).\\n# START_BALANCE 는 턴마다 덮어쓰지만 이 값은 실행 내내 유지한다.\\nSESSION_BALANCE_BASE: tuple[dict[str, str], float | None] | None = None\\n# `/cost` 가 현재 잔액을 조회할 때 쓸 짧은 캐시(연속 호출로 API를 두드리지 않게).\\nCOST_BALANCE_CACHE: tuple[float, dict[str, str]] | None = None\", \"old_string\": \"# 에이전트 시작 시점에 조회한 잔액 (화폐별 잔액, 원화 환산 합계).\\n# 종료 시 소요 비용(시작 - 종료)을 계산하는 데 쓴다.\\nSTART_BALANCE: tuple[dict[str, str], float | None] | None = None\"}, {\"new_string\": \"def prefetch_balance(quiet: bool = False) -> None:\\n    \\\"\\\"\\\"에이전트 시작 전 잔액과 적용 환율을 미리 조회해 캐시한다.\\n\\n    종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 시작 잔액은\\n    화면에 출력하지 않고(종료 시 시작→종료로만 보여준다) 조용히 캐시만 한다.\\n    이번 실행에서 **처음** 성공한 조회는 `SESSION_BALANCE_BASE`로도 남겨\\n    `/cost` 가 세션 누적 소요 금액을 계산할 수 있게 한다.\\n    실패해도 경고만 출력하고 흐름은 막지 않는다(`quiet` 면 경고도 생략 —\\n    채팅 모드처럼 턴 푸터를 쓰지 않는 경우).\\n    \\\"\\\"\\\"\\n    global START_BALANCE, SESSION_BALANCE_BASE\\n    START_BALANCE = None\\n    if not os.environ.get(\\\"DEEPSEEK_API_KEY\\\", \\\"\\\").strip():\\n        return\\n    load_rates()\\n    try:\\n        amounts, krw = fetch_balance()\\n    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등\\n        if not quiet:\\n            print_warn(f\\\"시작 잔액을 조회하지 못했습니다: {exc}\\\", stream=True)\\n        return\\n    START_BALANCE = (amounts, krw)\\n    if SESSION_BALANCE_BASE is None:\\n        SESSION_BALANCE_BASE = (amounts, krw)\\n\\n\\ndef balance_cost_from(\\n    start_amounts: dict[str, str], end_amounts: dict[str, str]\\n) -> dict[str, float] | None:\\n    \\\"\\\"\\\"두 잔액의 **화폐별** 차이(양수면 소모). 계산할 수 없으면 None.\\\"\\\"\\\"\\n    costs: dict[str, float] = {}\\n    for cur in ordered_currencies({**start_amounts, **end_amounts}):\\n        try:\\n            start_v = float(start_amounts.get(cur, \\\"0\\\") or \\\"0\\\")\\n            end_v = float(end_amounts.get(cur, \\\"0\\\") or \\\"0\\\")\\n        except (TypeError, ValueError):\\n            return None\\n        costs[cur] = start_v - end_v\\n    return costs\\n\\n\\ndef balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:\\n    \\\"\\\"\\\"시작 대비 **화폐별** 소모액(양수면 소모). 계산할 수 없으면 None.\\\"\\\"\\\"\\n    if START_BALANCE is None:\\n        return None\\n    return balance_cost_from(START_BALANCE[0], end_amounts)\", \"old_string\": \"def prefetch_balance() -> None:\\n    \\\"\\\"\\\"에이전트 시작 전 잔액과 적용 환율을 미리 조회해 캐시한다.\\n\\n    종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 시작 잔액은\\n    화면에 출력하지 않고(종료 시 시작→종료로만 보여준다) 조용히 캐시만 한다.\\n    실패해도 경고만 출력하고 흐름은 막지 않는다.\\n    \\\"\\\"\\\"\\n    global START_BALANCE\\n    START_BALANCE = None\\n    if not os.environ.get(\\\"DEEPSEEK_API_KEY\\\", \\\"\\\").strip():\\n        return\\n    load_rates()\\n    try:\\n        amounts, krw = fetch_balance()\\n    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등\\n        print_warn(f\\\"시작 잔액을 조회하지 못했습니다: {exc}\\\", stream=True)\\n        return\\n    START_BALANCE = (amounts, krw)\\n\\n\\ndef balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:\\n    \\\"\\\"\\\"시작 대비 **화폐별** 소모액(양수면 소모). 계산할 수 없으면 None.\\\"\\\"\\\"\\n    if START_BALANCE is None:\\n        return None\\n    start_amounts = START_BALANCE[0]\\n    costs: dict[str, float] = {}\\n    for cur in ordered_currencies({**start_amounts, **end_amounts}):\\n        try:\\n            start_v = float(start_amounts.get(cur, \\\"0\\\") or \\\"0\\\")\\n            end_v = float(end_amounts.get(cur, \\\"0\\\") or \\\"0\\\")\\n        except (TypeError, ValueError):\\n            return None\\n        costs[cur] = start_v - end_v\\n    return costs\"}], \"path\": \"agent.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_nqd4Z36w8KNbv8uFjOHr9862",
+    "name": "edit",
+    "content": "updated agent.py (+28 -11, 6211 lines) · 2 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_SAxT5Y40lCkBf3X3v2hc7991",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"# `/cost` 가 현재 잔액을 조회할 때 쓸 짧은 캐시(연속 호출로 API를 두드리지 않게).\\nCOST_BALANCE_CACHE: tuple[float, dict[str, str]] | None = None\\nCOST_BALANCE_TTL = 5.0  # 초: 이 시간 안에는 같은 잔액을 재사용한다.\", \"old_string\": \"# `/cost` 가 현재 잔액을 조회할 때 쓸 짧은 캐시(연속 호출로 API를 두드리지 않게).\\nCOST_BALANCE_CACHE: tuple[float, dict[str, str]] | None = None\"}, {\"new_string\": \"def current_balance_amounts() -> dict[str, str]:\\n    \\\"\\\"\\\"현재 잔액(화폐별)을 조회한다. 짧은 간격의 반복 호출은 캐시를 쓴다.\\\"\\\"\\\"\\n    global COST_BALANCE_CACHE\\n    now = time.monotonic()\\n    if COST_BALANCE_CACHE is not None and now - COST_BALANCE_CACHE[0] < COST_BALANCE_TTL:\\n        return COST_BALANCE_CACHE[1]\\n    load_rates()\\n    amounts, _krw = fetch_balance()\\n    COST_BALANCE_CACHE = (now, amounts)\\n    return amounts\\n\\n\\ndef cost_summary_lines(\\n    start_amounts: dict[str, str], end_amounts: dict[str, str]\\n) -> list[str]:\\n    \\\"\\\"\\\"두 잔액(시작→현재)의 차이를 원화 기준 줄로 만든다(순수 계산).\\\"\\\"\\\"\\n    costs = balance_cost_from(start_amounts, end_amounts)\\n    if costs is None:\\n        return [\\\"잔액 형식이 달라 소요 금액을 계산하지 못했습니다.\\\"]\\n    krw_signed = cost_krw(costs)\\n    signed = krw_signed if krw_signed is not None else sum(costs.values())\\n    label = \\\"세션 소요 금액\\\" if signed >= 0 else \\\"세션 잔액 증가\\\"\\n    lines = [\\n        f\\\"{label}: {cost_text(costs)}\\\"\\n        f\\\"   (시작 {format_amounts(start_amounts)} → 현재 {format_amounts(end_amounts)})\\\"\\n    ]\\n    if cost_negligible(costs):\\n        lines.append(\\\"잔액이 화폐 최소 단위(0.01)로 반올림되어 정확한 금액은 알 수 없습니다.\\\")\\n    return lines\\n\\n\\ndef session_cost_lines(no_balance: bool = False) -> list[str]:\\n    \\\"\\\"\\\"`/cost` 에 붙일 세션 누적 소요 금액 줄(불가하면 이유를 안내).\\n\\n    금액은 **세션 시작 잔액 - 현재 잔액**으로만 구한다(토큰 단가표 없음).\\n    \\\"\\\"\\\"\\n    if no_balance:\\n        return [\\\"금액 표시가 꺼져 있습니다(--no-balance) — 잔액 조회를 하지 않습니다.\\\"]\\n    if not os.environ.get(\\\"DEEPSEEK_API_KEY\\\", \\\"\\\").strip():\\n        return [\\\"API 키가 없어 금액을 계산하지 못했습니다.\\\"]\\n    if SESSION_BALANCE_BASE is None:\\n        return [\\n            \\\"기준 잔액이 없어 금액을 계산하지 못했습니다\\\"\\n            \\\"(잔액 조회 없이 시작했거나 조회에 실패했습니다).\\\"\\n        ]\\n    try:\\n        end_amounts = current_balance_amounts()\\n    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등\\n        return [f\\\"현재 잔액을 조회하지 못해 금액을 계산하지 못했습니다: {exc}\\\"]\\n    return cost_summary_lines(SESSION_BALANCE_BASE[0], end_amounts)\\n\\n\\ndef show_balance_footer() -> None:\", \"old_string\": \"def show_balance_footer() -> None:\"}], \"path\": \"agent.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_SAxT5Y40lCkBf3X3v2hc7991",
+    "name": "edit",
+    "content": "updated agent.py (+53 -0, 6264 lines) · 2 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "Now wire the `/cost` handler and the cmd_agent prefetch guard.",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_kyhwfq7mLPKmqxZVJkjv5034",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"    reset_usage()\\n    if not no_balance:\\n        # 종료 시 소요 비용(그리고 `/cost` 의 세션 소요 금액)을 계산할 수 있도록\\n        # 시작 잔액을 먼저 조회해 캐시한다. 채팅 모드는 푸터를 쓰지 않으므로\\n        # 조용히(경고 없이) 캐시만 한다.\\n        prefetch_balance(quiet=chat_only)\", \"old_string\": \"    reset_usage()\\n    if not chat_only and not no_balance:\\n        # 종료 시 소요 비용을 계산할 수 있도록 시작 잔액을 먼저 조회해 캐시한다.\\n        prefetch_balance()\"}, {\"new_string\": \"            elif cmd == \\\"/cost\\\":\\n                lines = usage_lines(SESSION_USAGE) or [\\\"아직 사용량이 없습니다.\\\"]\\n                print_info(lines[0])\\n                for extra in session_cost_lines(no_balance=args.no_balance):\\n                    print(f\\\"  {C.dim}{extra}{C.reset}\\\")\", \"old_string\": \"            elif cmd == \\\"/cost\\\":\\n                lines = usage_lines(SESSION_USAGE)\\n                print_info(lines[0] if lines else \\\"아직 사용량이 없습니다.\\\")\"}, {\"new_string\": \"    \\\"/cost\\\": \\\"이번 대화형 세션의 토큰 사용량·소요 금액\\\",\", \"old_string\": \"    \\\"/cost\\\": \\\"이번 대화형 세션의 토큰 사용량\\\",\"}], \"path\": \"agent.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_kyhwfq7mLPKmqxZVJkjv5034",
+    "name": "edit",
+    "content": "updated agent.py (+10 -6, 6268 lines) · 3 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_bEAhsHCf651hiUB4Y27I3250",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"no_balance\\\" agent.py | head -30 && python3 -m py_compile agent.py && echo compile-ok\", \"timeout\": 120}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_bEAhsHCf651hiUB4Y27I3250",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n4543:def session_cost_lines(no_balance: bool = False) -> list[str]:\n4548:    if no_balance:\n5276:    no_balance: bool = False,\n5294:    if not no_balance:\n5539:                    if not no_balance:\n5825:                for extra in session_cost_lines(no_balance=args.no_balance):\n5876:            no_balance=args.no_balance or turn > 1,\n6255:        no_balance=args.no_balance,\ncompile-ok\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_kzZJMcueuzKBl5su5BZf7557",
         "type": "function",
         "function": {
           "name": "read",
-          "arguments": "{\"path\": \"llm\"}"
+          "arguments": "{\"limit\": 18, \"offset\": 5866, \"path\": \"agent.py\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ET_PL2U3Pqw5lXWb2KoAQJf5341",
+    "tool_call_id": "call_00_kzZJMcueuzKBl5su5BZf7557",
     "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/llm (38 lines)\n     1|#!/bin/bash\n     2|# DeepSeek CLI agent 진입점. 실제 로직은 agent.py.\n     3|\n     4|SOURCE=\"${BASH_SOURCE[0]}\"\n     5|if command -v readlink >/dev/null 2>&1; then\n     6|    SOURCE=\"$(readlink -f \"$SOURCE\" 2>/dev/null || echo \"$SOURCE\")\"\n     7|fi\n     8|DIR=\"$(cd \"$(dirname \"$SOURCE\")\" && pwd)\"\n     9|\n    10|# 환경변수 파일(.env) 로드: 1) $LLM_ENV_FILE 2) 저장소 폴더의 .env 3) /etc/env/.env\n    11|# 이미 설정된 변수는 건드리지 않으므로 앞 파일이 우선한다(agent.py와 같은 규칙).\n    12|load_env_file() {\n    13|    local file=\"$1\" line key val\n    14|    [ -f \"$file\" ] || return 0\n    15|    while IFS= read -r line || [ -n \"$line\" ]; do\n    16|        line=\"${line#\"${line%%[![:space:]]*}\"}\"   # 앞 공백 제거\n    17|        case \"$line\" in ''|'#'*) continue ;; esac\n    18|        case \"$line\" in *=*) ;; *) continue ;; esac\n    19|        key=\"${line%%=*}\"\n    20|        val=\"${line#*=}\"\n    21|        key=\"${key%\"${key##*[![:space:]]}\"}\"      # 키 뒤 공백 제거\n    22|        case \"$key\" in export\\ *) key=\"${key#export }\";; esac\n    23|        [[ \"$key\" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || continue\n    24|        [ -n \"${!key+x}\" ] && continue            # 이미 있으면 유지(앞 파일 우선)\n    25|        val=\"${val#\"${val%%[![:space:]]*}\"}\"      # 값 앞 공백 제거\n    26|        case \"$val\" in\n    27|            \\\"*\\\") val=\"${val#\\\"}\"; val=\"${val%\\\"}\" ;;\n    28|            \\'*\\') val=\"${val#\\'}\"; val=\"${val%\\'}\" ;;\n    29|        esac\n    30|        export \"$key=$val\"\n    31|    done < \"$file\"\n    32|}\n    33|\n    34|load_env_file \"${LLM_ENV_FILE:-}\"\n    35|load_env_file \"$DIR/.env\"\n    36|load_env_file /etc/env/.env\n    37|\n    38|exec python3 -u \"$DIR/agent.py\" \"$@\""
+    "content": "/home/jang/codespace/userscript/llm/agent.py (6268 lines)\n  5866|            max_steps=max(1, args.max_steps),\n  5867|            stream=not args.no_stream,\n  5868|            thinking=not args.no_thinking,\n  5869|            show_thinking=args.show_thinking,\n  5870|            # repl 기본(readonly)도 읽기 전용 명령은 조용히 실행한다.\n  5871|            auto_safe=not args.confirm_all,\n  5872|            auto_workspace=auto_workspace,\n  5873|            allow_all=allow_all,\n  5874|            ask_mode=ask_mode,\n  5875|            ask_source=ask_source,\n  5876|            no_balance=args.no_balance or turn > 1,\n  5877|            auto_pull=False,\n  5878|            startup=False,\n  5879|        )\n  5880|        if rc not in (0, 130):\n  5881|            print_warn(f\"이 턴 종료 코드 {rc} — 다음 입력을 받을 수 있습니다.\")\n  5882|\n  5883|    auto_sync_history(root, session)\n... [385 more lines; use offset/limit]"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_ET_AEVYUTQKNUKg3yIl77Pz7214",
+        "id": "call_00_cRNQ7qIa0sns7rKpCxvq7741",
         "type": "function",
         "function": {
           "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"# 실제 스크립트 위치 찾기: 심볼릭 링크를 직접 따라간다.\\n# (macOS/BSD readlink 에는 -f 가 없으므로 readlink -f 에 기대지 않는다.)\\nSOURCE=\\\"${BASH_SOURCE[0]}\\\"\\nif command -v readlink >/dev/null 2>&1; then\\n    hops=0\\n    while [ -L \\\"$SOURCE\\\" ] && [ \\\"$hops\\\" -lt 40 ]; do\\n        LINK=\\\"$(readlink \\\"$SOURCE\\\")\\\" || break\\n        [ -n \\\"$LINK\\\" ] || break\\n        case \\\"$LINK\\\" in\\n            /*) SOURCE=\\\"$LINK\\\" ;;\\n            *)  SOURCE=\\\"$(cd \\\"$(dirname \\\"$SOURCE\\\")\\\" && pwd)/$LINK\\\" ;;\\n        esac\\n        hops=$((hops + 1))\\n    done\\nfi\\nDIR=\\\"$(cd \\\"$(dirname \\\"$SOURCE\\\")\\\" && pwd)\\\"\", \"old_string\": \"SOURCE=\\\"${BASH_SOURCE[0]}\\\"\\nif command -v readlink >/dev/null 2>&1; then\\n    SOURCE=\\\"$(readlink -f \\\"$SOURCE\\\" 2>/dev/null || echo \\\"$SOURCE\\\")\\\"\\nfi\\nDIR=\\\"$(cd \\\"$(dirname \\\"$SOURCE\\\")\\\" && pwd)\\\"\"}, {\"new_string\": \"# python 실행기: LLM_PYTHON 으로 바꿀 수 있다(예: macOS 기본 python3 가 3.9 일 때\\n# `LLM_PYTHON=python3.12 llm …`). 기본은 python3.\\nPYTHON=\\\"${LLM_PYTHON:-python3}\\\"\\nif ! command -v \\\"$PYTHON\\\" >/dev/null 2>&1; then\\n    echo \\\"llm: '$PYTHON' 를 찾을 수 없습니다. Python 3.10+ 를 설치하거나\\\" >&2\\n    echo \\\"     LLM_PYTHON=python3.12 llm … 처럼 실행기를 지정하세요.\\\" >&2\\n    exit 127\\nfi\\n\\nexec \\\"$PYTHON\\\" -u \\\"$DIR/agent.py\\\" \\\"$@\\\"\", \"old_string\": \"exec python3 -u \\\"$DIR/agent.py\\\" \\\"$@\\\"\"}], \"path\": \"llm\"}"
+          "arguments": "{\"action\": \"write\", \"contents\": \"#!/usr/bin/env python3\\n\\\"\\\"\\\"`/cost` 세션 누적 소요 금액(잔액 차이) 계산과 불가 안내 테스트.\\\"\\\"\\\"\\n\\nfrom __future__ import annotations\\n\\nimport sys\\nimport unittest\\nfrom pathlib import Path\\nfrom unittest import mock\\n\\nsys.path.insert(0, str(Path(__file__).resolve().parents[1]))\\n\\nimport agent as llm  # noqa: E402\\n\\n\\nclass CostMath(unittest.TestCase):\\n    \\\"\\\"\\\"잔액 차이 → 금액 줄(순수 계산).\\\"\\\"\\\"\\n\\n    def test_balance_cost_from_single_currency(self) -> None:\\n        costs = llm.balance_cost_from({\\\"CNY\\\": \\\"3.00\\\"}, {\\\"CNY\\\": \\\"2.95\\\"})\\n        self.assertIsNotNone(costs)\\n        assert costs is not None\\n        self.assertAlmostEqual(costs[\\\"CNY\\\"], 0.05, places=6)\\n\\n    def test_balance_cost_from_bad_format_is_none(self) -> None:\\n        self.assertIsNone(llm.balance_cost_from({\\\"CNY\\\": \\\"??\\\"}, {\\\"CNY\\\": \\\"1.00\\\"}))\\n\\n    def test_summary_lines_show_money_and_range(self) -> None:\\n        lines = llm.cost_summary_lines({\\\"CNY\\\": \\\"3.00\\\"}, {\\\"CNY\\\": \\\"2.95\\\"})\\n        self.assertEqual(len(lines), 1)\\n        self.assertIn(\\\"세션 소요 금액\\\", lines[0])\\n        self.assertIn(\\\"시작\\\", lines[0])\\n        self.assertIn(\\\"현재\\\", lines[0])\\n\\n    def test_summary_lines_flag_negligible_amount(self) -> None:\\n        \\\"\\\"\\\"0.01 미만이면 금액을 지어내지 않고 안내 줄을 덧붙인다.\\\"\\\"\\\"\\n        lines = llm.cost_summary_lines({\\\"CNY\\\": \\\"3.00\\\"}, {\\\"CNY\\\": \\\"3.00\\\"})\\n        self.assertEqual(lines[0].count(\\\"0.01 미만\\\"), 1)\\n        self.assertEqual(len(lines), 2)\\n        self.assertIn(\\\"정확한 금액은 알 수 없습니다\\\", lines[1])\\n\\n    def test_summary_lines_label_balance_increase(self) -> None:\\n        lines = llm.cost_summary_lines({\\\"CNY\\\": \\\"1.00\\\"}, {\\\"CNY\\\": \\\"3.00\\\"})\\n        self.assertIn(\\\"세션 잔액 증가\\\", lines[0])\\n\\n\\nclass SessionCostLines(unittest.TestCase):\\n    \\\"\\\"\\\"`/cost` 에 붙는 금액 줄(불가하면 이유 안내).\\\"\\\"\\\"\\n\\n    def setUp(self) -> None:\\n        self._env = mock.patch.dict(\\\"os.environ\\\", {\\\"DEEPSEEK_API_KEY\\\": \\\"k\\\"}, clear=False)\\n        self._env.start()\\n        self.addCleanup(self._env.stop)\\n        base = llm.SESSION_BALANCE_BASE\\n        self.addCleanup(setattr, llm, \\\"SESSION_BALANCE_BASE\\\", base)\\n        llm.SESSION_BALANCE_BASE = ({\\\"CNY\\\": \\\"3.00\\\"}, 600.0)\\n        self.addCleanup(setattr, llm, \\\"COST_BALANCE_CACHE\\\", llm.COST_BALANCE_CACHE)\\n        llm.COST_BALANCE_CACHE = None\\n\\n    def test_amount_uses_balance_difference(self) -> None:\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", lambda: ({\\\"CNY\\\": \\\"2.95\\\"}, 590.0)):\\n                lines = llm.session_cost_lines()\\n        self.assertIn(\\\"세션 소요 금액\\\", lines[0])\\n\\n    def test_no_balance_flag_explains_reason(self) -> None:\\n        lines = llm.session_cost_lines(no_balance=True)\\n        self.assertEqual(len(lines), 1)\\n        self.assertIn(\\\"--no-balance\\\", lines[0])\\n\\n    def test_missing_api_key_explains_reason(self) -> None:\\n        with mock.patch.dict(\\\"os.environ\\\", {\\\"DEEPSEEK_API_KEY\\\": \\\"\\\"}):\\n            lines = llm.session_cost_lines()\\n        self.assertIn(\\\"API 키\\\", lines[0])\\n\\n    def test_missing_base_balance_explains_reason(self) -> None:\\n        llm.SESSION_BALANCE_BASE = None\\n        lines = llm.session_cost_lines()\\n        self.assertIn(\\\"기준 잔액\\\", lines[0])\\n\\n    def test_fetch_failure_explains_reason(self) -> None:\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", side_effect=OSError(\\\"boom\\\")):\\n                lines = llm.session_cost_lines()\\n        self.assertIn(\\\"조회하지 못해\\\", lines[0])\\n\\n    def test_repeated_call_uses_cache(self) -> None:\\n        calls = []\\n\\n        def fake_fetch():\\n            calls.append(1)\\n            return ({\\\"CNY\\\": \\\"2.95\\\"}, 590.0)\\n\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", fake_fetch):\\n                llm.session_cost_lines()\\n                llm.session_cost_lines()\\n        self.assertEqual(len(calls), 1)\\n\\n\\nclass PrefetchBase(unittest.TestCase):\\n    \\\"\\\"\\\"시작 잔액 조회가 세션 기준 잔액을 한 번만 기록하는지.\\\"\\\"\\\"\\n\\n    def setUp(self) -> None:\\n        for name in (\\\"START_BALANCE\\\", \\\"SESSION_BALANCE_BASE\\\", \\\"COST_BALANCE_CACHE\\\"):\\n            self.addCleanup(setattr, llm, name, getattr(llm, name))\\n        self._env = mock.patch.dict(\\\"os.environ\\\", {\\\"DEEPSEEK_API_KEY\\\": \\\"k\\\"}, clear=False)\\n        self._env.start()\\n        self.addCleanup(self._env.stop)\\n\\n    def test_first_fetch_becomes_base(self) -> None:\\n        llm.START_BALANCE = None\\n        llm.SESSION_BALANCE_BASE = None\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", lambda: ({\\\"CNY\\\": \\\"3.00\\\"}, 600.0)):\\n                llm.prefetch_balance()\\n                llm.START_BALANCE = None  # 다음 턴이 시작 잔액을 다시 조회한 상황\\n                with mock.patch.object(\\n                    llm, \\\"fetch_balance\\\", lambda: ({\\\"CNY\\\": \\\"2.50\\\"}, 500.0)\\n                ):\\n                    llm.prefetch_balance()\\n        assert llm.SESSION_BALANCE_BASE is not None\\n        self.assertEqual(llm.SESSION_BALANCE_BASE[0], {\\\"CNY\\\": \\\"3.00\\\"})\\n\\n    def test_quiet_prefetch_suppresses_warning(self) -> None:\\n        llm.START_BALANCE = None\\n        llm.SESSION_BALANCE_BASE = None\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", side_effect=OSError(\\\"down\\\")):\\n                with mock.patch.object(llm, \\\"print_warn\\\") as warn:\\n                    llm.prefetch_balance(quiet=True)\\n                    self.assertFalse(warn.called)\\n                    llm.prefetch_balance()\\n                    self.assertTrue(warn.called)\\n\\n\\nif __name__ == \\\"__main__\\\":\\n    unittest.main()\\n\", \"path\": \"tests/test_cost.py\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ET_AEVYUTQKNUKg3yIl77Pz7214",
+    "tool_call_id": "call_00_cRNQ7qIa0sns7rKpCxvq7741",
     "name": "edit",
-    "content": "updated llm (+22 -2, 58 lines) · 2 replacements"
+    "content": "wrote tests/test_cost.py (+138 -0, 138 lines)"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_ET_ybY0WuXb1GThSwugu9MO2186",
+        "id": "call_00_ET_JWQ4DIA1SoggV8BYiLF18974",
         "type": "function",
         "function": {
           "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && bash -n llm && echo \\\"syntax ok\\\" && ln -sf /home/jang/codespace/userscript/llm/llm /tmp/lnktest/bin/llm && PATH=/tmp/lnktest/fakebin:/tmp/lnktest/bin:$PATH bash -c 'llm --help 2>&1 | head -3' && echo \\\"=== normal\\\" && ./llm --help 2>&1 | head -3\", \"timeout\": 120}"
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 -m pytest -q tests/test_cost.py 2>&1 | tail -25\", \"timeout\": 300}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ET_ybY0WuXb1GThSwugu9MO2186",
+    "tool_call_id": "call_00_ET_JWQ4DIA1SoggV8BYiLF18974",
     "name": "shell",
-    "content": "exit 0\n--- stdout ---\nsyntax ok\nusage: llm [-h] [-s SESSION] [--ref 세션] [--chat] [-i] [--once]\n           [--list-sessions] [-y] [--model MODEL] [--max-steps MAX_STEPS]\n           [--no-stream] [--no-balance] [--no-rates] [--no-thinking]\n=== normal\nusage: llm [-h] [-s SESSION] [--ref 세션] [--chat] [-i] [--once]\n           [--list-sessions] [-y] [--model MODEL] [--max-steps MAX_STEPS]\n           [--no-stream] [--no-balance] [--no-rates] [--no-thinking]\n"
+    "content": "exit 0\n--- stdout ---\n.............                                                            [100%]\n13 passed in 0.03s\n"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_XhF46kFeYzC5Ox4fO4Ca7970",
+        "id": "call_00_58IWdIYEL1ASqiDvL4YB1379",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"0\\\\.11\\\\.1\\\\|VERSION\\\" agent.py tests/test_phase1.py README.md | head -40\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_58IWdIYEL1ASqiDvL4YB1379",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\nagent.py:65:VERSION = \"0.11.1\"\nagent.py:183:RATE_CACHE_VERSION = 1\nagent.py:3974:    print(f\"{C.bold}{C.cyan}{rule('─', f'✦ llm v{VERSION} · {mode}')}{C.reset}\")\nagent.py:4220:    if not isinstance(data, dict) or data.get(\"version\") != RATE_CACHE_VERSION:\nagent.py:4247:                    \"version\": RATE_CACHE_VERSION,\nagent.py:5163:    print_title(f\"💡 DeepSeek LLM CLI v{VERSION}\")\ntests/test_phase1.py:23:        self.assertEqual(llm.VERSION, \"0.11.1\")\ntests/test_phase1.py:26:        \"\"\"README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신).\"\"\"\ntests/test_phase1.py:30:        self.assertIn(f\"**버전:** v{llm.VERSION} \", readme)\ntests/test_phase1.py:31:        self.assertIn(f\"## v{llm.VERSION.rsplit('.', 1)[0]} 변경 사항\", readme)\nREADME.md:7:**버전:** v0.11.1 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)\nREADME.md:67:| `llm` 래퍼 이식성 (v0.11.1) | `readlink -f` 로 자기 위치 해석 → macOS/BSD 처럼 `-f` 가 없는 환경에서 `~/bin/llm` 심볼릭 링크가 깨짐(`agent.py` 못 찾음) | **`readlink -f` 없이** 심볼릭 링크를 직접 따라가 해석(체인·상대 링크 지원, 최대 40 hop). `LLM_PYTHON` 으로 실행기 지정. `agent.py` 가 없으면 안내 후 종료 |\nREADME.md:293:llm session ls          # 상태 + 버전(v0.11.1) 표시 (API 호출 없음)\nREADME.md:305:| `~/bin` 심볼릭 링크 | `python3: can't open file '…/agent.py'` | v0.11.1부터 **`readlink -f` 없이** 링크를 해석합니다. 그래도 실패하면 링크가 실제 저장소를 가리키는지 확인: `readlink ~/bin/llm` → 저장소 경로. `ln -sf ~/codespace/llm/llm ~/bin/llm`로 다시 연결 |\nREADME.md:339:| `readlink` | `readlink ~/bin/llm` | 없어도 `~/bin` 대신 저장소의 `llm` 을 직접 실행하면 동작 (v0.11.1부터 `-f` 불필요) |\nREADME.md:487:────────────── ✦ llm v0.11.1 · 대화형 ──────────────\nREADME.md:556:────────────── ✦ llm v0.11.1 · 대화형 ──────────────\nREADME.md:1501:  `canonical_folder`, `VERSION`(시작 헤더·머리말에\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_yOczNpYDwgMnZpKcQ5242749",
         "type": "function",
         "function": {
           "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"DIR=\\\"$(cd \\\"$(dirname \\\"$SOURCE\\\")\\\" && pwd)\\\"\\n\\n# 래퍼와 agent.py 는 같은 폴더에 있어야 한다(잘못된 심볼릭 링크·복사 실패 안내).\\nif [ ! -f \\\"$DIR/agent.py\\\" ]; then\\n    echo \\\"llm: $DIR/agent.py 를 찾을 수 없습니다.\\\" >&2\\n    echo \\\"     'llm' 래퍼와 agent.py 를 같은 폴더에 두세요.\\\" >&2\\n    echo \\\"     (심볼릭 링크가 깨진 경우: ln -sf <저장소>/llm ~/bin/llm)\\\" >&2\\n    exit 1\\nfi\", \"old_string\": \"DIR=\\\"$(cd \\\"$(dirname \\\"$SOURCE\\\")\\\" && pwd)\\\"\"}], \"path\": \"llm\"}"
+          "arguments": "{\"edits\": [{\"new_string\": \"VERSION = \\\"0.12.0\\\"\", \"old_string\": \"VERSION = \\\"0.11.1\\\"\"}], \"path\": \"agent.py\"}"
         }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_XhF46kFeYzC5Ox4fO4Ca7970",
-    "name": "edit",
-    "content": "updated llm (+8 -0, 66 lines) · 1 replacement"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
+      },
       {
-        "id": "call_00_ET_q1Xahd6M8eJrwSpubflK8515",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /tmp && rm -rf ltest && mkdir -p ltest/bin ltest/fakebin && ln -sf /home/jang/codespace/userscript/llm/llm ltest/bin/llm2 && ln -sf /tmp/ltest/bin/llm2 ltest/bin/llm && ln -sf /home/jang/codespace/userscript/llm/llm ltest/bin/llmbroken && bash -c '\\necho \\\"--- chain link:\\\"; /tmp/ltest/bin/llm --help 2>&1 | head -1\\necho \\\"--- broken link dir check:\\\"; ln -sf /tmp/ltest/nope /tmp/ltest/bin/llmbad; /tmp/ltest/bin/llmbad --help 2>&1 | head -3\\necho \\\"--- LLM_PYTHON bad:\\\"; LLM_PYTHON=python9 /tmp/ltest/bin/llm --help 2>&1 | head -3\\n'\", \"timeout\": 120}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_q1Xahd6M8eJrwSpubflK8515",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n--- chain link:\nusage: llm [-h] [-s SESSION] [--ref 세션] [--chat] [-i] [--once]\n--- broken link dir check:\nbash: 줄 3: /tmp/ltest/bin/llmbad: 그런 파일이나 디렉터리가 없습니다\n--- LLM_PYTHON bad:\nllm: 'python9' 를 찾을 수 없습니다. Python 3.10+ 를 설치하거나\n     LLM_PYTHON=python3.12 llm … 처럼 실행기를 지정하세요.\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_YK4npObMvXV821AE5deF8810",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && ls tests && sed -n '1,20p' tests/test_phase1.py && sed -n '1,25p' tests/test_cliargs.py\", \"timeout\": 60}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_YK4npObMvXV821AE5deF8810",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n__pycache__\ntest_cliargs.py\ntest_improvements.py\ntest_mdrender.py\ntest_phase1.py\ntest_shell_policy.py\ntest_shelllog.py\n#!/usr/bin/env python3\n\"\"\"Phase 1 UX: 도구 통합 · 셸 기본 safe · AUTO_SYNC 기본 off.\"\"\"\n\nfrom __future__ import annotations\n\nimport os\nimport tempfile\nimport unittest\nfrom pathlib import Path\nfrom types import SimpleNamespace\nfrom unittest import mock\n\n# 저장소 루트에서 import\nimport sys\n\nsys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n\nimport agent as llm  # noqa: E402\n\n\n\"\"\"CLI 서브커맨드 확장(llmlib/cliargs)과 기본 실행 형태 테스트.\"\"\"\n\nfrom __future__ import annotations\n\nimport sys\nimport unittest\nfrom pathlib import Path\n\nsys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n\nfrom llmlib import cliargs  # noqa: E402\n\n\nclass Expand(unittest.TestCase):\n    def expand(self, argv: list[str]) -> list[str]:\n        out, err = cliargs.expand(argv)\n        self.assertIsNone(err, f\"오류: {err}\")\n        return out\n\n    def test_plain_passthrough(self) -> None:\n        self.assertEqual(self.expand([\"프로젝트 요약해줘\"]), [\"프로젝트 요약해줘\"])\n        self.assertEqual(self.expand([]), [])\n        self.assertEqual(self.expand([\"-s\", \"a\", \"질문\"]), [\"-s\", \"a\", \"질문\"])\n\n    def test_run_modes(self) -> None:\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_mwieZfaaZygKmRL2RPQl7806",
+        "id": "call_01_ET_j1OTkenDvcO37sWzRCAA5029",
         "type": "function",
         "function": {
           "name": "read",
-          "arguments": "{\"path\": \"tests/test_shelllog.py\", \"limit\": 40}"
+          "arguments": "{\"limit\": 14, \"offset\": 20, \"path\": \"tests/test_phase1.py\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_mwieZfaaZygKmRL2RPQl7806",
+    "tool_call_id": "call_00_ET_yOczNpYDwgMnZpKcQ5242749",
+    "name": "edit",
+    "content": "updated agent.py (+1 -1, 6268 lines) · 1 replacement"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_ET_j1OTkenDvcO37sWzRCAA5029",
     "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/tests/test_shelllog.py (362 lines)\n     1|#!/usr/bin/env python3\n     2|\"\"\"셸 허용/실행 로그(shelllog)와 repl 기본 확인 모드 테스트.\"\"\"\n     3|\n     4|from __future__ import annotations\n     5|\n     6|import argparse\n     7|import contextlib\n     8|import io\n     9|import sys\n    10|import tempfile\n    11|import unittest\n    12|from pathlib import Path\n    13|from unittest import mock\n    14|\n    15|sys.path.insert(0, str(Path(__file__).resolve().parents[1]))\n    16|\n    17|import agent as llm  # noqa: E402\n    18|from llmlib import shelllog  # noqa: E402\n    19|\n    20|\n    21|def _capture(fn) -> str:\n    22|    buf = io.StringIO()\n    23|    with contextlib.redirect_stdout(buf):\n    24|        fn()\n    25|    return buf.getvalue()\n    26|\n    27|\n    28|class LogFile(unittest.TestCase):\n    29|    \"\"\"경로·세션 이름 정리.\"\"\"\n    30|\n    31|    def test_log_path_uses_session(self) -> None:\n    32|        self.assertEqual(\n    33|            shelllog.log_path(Path(\"/tmp/h\"), \"llm\").name, \"shell_log_llm.jsonl\"\n    34|        )\n    35|\n    36|    def test_sanitize_blocks_path_traversal(self) -> None:\n    37|        self.assertEqual(shelllog.sanitize(\"../../evil\"), \"evil\")\n    38|        self.assertEqual(shelllog.sanitize(\"a/b c\"), \"a_b_c\")\n    39|        self.assertEqual(shelllog.sanitize(\"\"), \"default\")\n    40|        self.assertEqual(shelllog.sanitize(\"...\"), \"default\")\n... [322 more lines; use offset/limit]"
+    "content": "/home/jang/codespace/userscript/llm/tests/test_phase1.py (167 lines)\n    20|\n    21|class Phase1Defaults(unittest.TestCase):\n    22|    def test_version(self) -> None:\n    23|        self.assertEqual(llm.VERSION, \"0.11.1\")\n    24|\n    25|    def test_version_matches_readme(self) -> None:\n    26|        \"\"\"README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신).\"\"\"\n    27|        readme = (Path(__file__).resolve().parents[1] / \"README.md\").read_text(\n    28|            encoding=\"utf-8\"\n    29|        )\n    30|        self.assertIn(f\"**버전:** v{llm.VERSION} \", readme)\n    31|        self.assertIn(f\"## v{llm.VERSION.rsplit('.', 1)[0]} 변경 사항\", readme)\n    32|\n    33|    def test_header_rows_align_and_show_state(self) -> None:\n... [134 more lines; use offset/limit]"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_ET_VdtEb69YJFCAAdcpIxXv3354",
+        "id": "call_00_ET_Er3DstPI9j6P0Fk2rApj6980",
         "type": "function",
         "function": {
           "name": "edit",
-          "arguments": "{\"action\": \"write\", \"path\": \"tests/test_launcher.py\", \"contents\": \"#!/usr/bin/env python3\\n\\\"\\\"\\\"`llm` bash 래퍼의 이식성 테스트: 심볼릭 링크 해석(BSD readlink) · LLM_PYTHON.\\\"\\\"\\\"\\n\\nfrom __future__ import annotations\\n\\nimport os\\nimport shutil\\nimport subprocess\\nimport sys\\nimport tempfile\\nimport unittest\\nfrom pathlib import Path\\n\\nROOT = Path(__file__).resolve().parents[1]\\nWRAPPER = ROOT / \\\"llm\\\"\\n\\nFAKE_BSD_READLINK = \\\"\\\"\\\"#!/bin/bash\\n# BSD/macOS 구형 readlink 모사: -f 를 지원하지 않는다.\\ncase \\\"$1\\\" in -f) echo \\\"readlink: illegal option -- f\\\" >&2; exit 1 ;; esac\\nexec /usr/bin/readlink \\\"$@\\\"\\n\\\"\\\"\\\"\\n\\n\\ndef _has_readlink() -> bool:\\n    return bool(shutil.which(\\\"readlink\\\"))\\n\\n\\n@unittest.skipUnless(shutil.which(\\\"bash\\\"), \\\"bash 필요\\\")\\n@unittest.skipUnless(_has_readlink(), \\\"readlink 필요\\\")\\nclass LauncherResolution(unittest.TestCase):\\n    \\\"\\\"\\\"래퍼가 심볼릭 링크를 직접 따라가 agent.py 를 찾는지.\\\"\\\"\\\"\\n\\n    def _run(\\n        self, argv: list[str], path_prepend: list[str] | None = None, **env_extra: str\\n    ) -> subprocess.CompletedProcess:\\n        env = dict(os.environ)\\n        env.pop(\\\"LLM_PYTHON\\\", None)\\n        if path_prepend:\\n            env[\\\"PATH\\\"] = os.pathsep.join([*path_prepend, env.get(\\\"PATH\\\", \\\"\\\")])\\n        env.update(env_extra)\\n        return subprocess.run(\\n            argv, capture_output=True, text=True, env=env, timeout=120\\n        )\\n\\n    def test_symlink_chain_finds_agent(self) -> None:\\n        with tempfile.TemporaryDirectory() as tmp:\\n            bin_dir = Path(tmp) / \\\"bin\\\"\\n            bin_dir.mkdir()\\n            first = bin_dir / \\\"llm-real\\\"\\n            first.symlink_to(WRAPPER)\\n            link = bin_dir / \\\"llm\\\"\\n            link.symlink_to(first)\\n            proc = self._run([str(link), \\\"--help\\\"])\\n            self.assertEqual(proc.returncode, 0, proc.stderr)\\n            self.assertIn(\\\"usage: llm\\\", proc.stdout)\\n\\n    def test_works_without_readlink_dash_f(self) -> None:\\n        \\\"\\\"\\\"readlink -f 없는 환경(macOS/BSD)에서도 동작해야 한다.\\\"\\\"\\\"\\n        with tempfile.TemporaryDirectory() as tmp:\\n            fakebin = Path(tmp) / \\\"fakebin\\\"\\n            fakebin.mkdir()\\n            fake = fakebin / \\\"readlink\\\"\\n            fake.write_text(FAKE_BSD_READLINK)\\n            fake.chmod(0o755)\\n            bin_dir = Path(tmp) / \\\"bin\\\"\\n            bin_dir.mkdir()\\n            link = bin_dir / \\\"llm\\\"\\n            link.symlink_to(WRAPPER)\\n            proc = self._run([str(link), \\\"--help\\\"], path_prepend=[str(fakebin)])\\n            self.assertEqual(proc.returncode, 0, proc.stderr)\\n            self.assertIn(\\\"usage: llm\\\", proc.stdout)\\n            self.assertNotIn(\\\"illegal option\\\", proc.stderr)\\n\\n    def test_missing_agent_next_to_wrapper(self) -> None:\\n        \\\"\\\"\\\"agent.py 가 없는 폴더에 래퍼만 있으면 안내하고 중단한다.\\\"\\\"\\\"\\n        with tempfile.TemporaryDirectory() as tmp:\\n            lonely = Path(tmp) / \\\"llm\\\"\\n            shutil.copy2(WRAPPER, lonely)\\n            lonely.chmod(0o755)\\n            proc = self._run([str(lonely), \\\"--help\\\"])\\n            self.assertEqual(proc.returncode, 1)\\n            self.assertIn(\\\"agent.py\\\", proc.stderr)\\n\\n    def test_llm_python_override(self) -> None:\\n        with tempfile.TemporaryDirectory() as tmp:\\n            bin_dir = Path(tmp) / \\\"bin\\\"\\n            bin_dir.mkdir()\\n            link = bin_dir / \\\"llm\\\"\\n            link.symlink_to(WRAPPER)\\n            proc = self._run([str(link), \\\"--help\\\"], LLM_PYTHON=\\\"python9-does-not-exist\\\")\\n            self.assertEqual(proc.returncode, 127)\\n            self.assertIn(\\\"LLM_PYTHON\\\", proc.stderr)\\n\\n    def test_llm_python_override_is_used(self) -> None:\\n        with tempfile.TemporaryDirectory() as tmp:\\n            bin_dir = Path(tmp) / \\\"bin\\\"\\n            bin_dir.mkdir()\\n            link = bin_dir / \\\"llm\\\"\\n            link.symlink_to(WRAPPER)\\n            proc = self._run([str(link), \\\"--help\\\"], LLM_PYTHON=sys.executable)\\n            self.assertEqual(proc.returncode, 0, proc.stderr)\\n            self.assertIn(\\\"usage: llm\\\", proc.stdout)\\n\\n\\nif __name__ == \\\"__main__\\\":\\n    unittest.main()\\n\"}"
+          "arguments": "{\"edits\": [{\"new_string\": \"        self.assertEqual(llm.VERSION, \\\"0.12.0\\\")\", \"old_string\": \"        self.assertEqual(llm.VERSION, \\\"0.11.1\\\")\"}], \"path\": \"tests/test_phase1.py\"}"
         }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_VdtEb69YJFCAAdcpIxXv3354",
-    "name": "edit",
-    "content": "wrote tests/test_launcher.py (+106 -0, 106 lines)"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
+      },
       {
-        "id": "call_00_ET_Sxa02IOgFlzS0gNXQGbv9328",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 -m pytest -q tests/test_launcher.py 2>&1 | tail -20\", \"timeout\": 300}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_Sxa02IOgFlzS0gNXQGbv9328",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n.....                                                                    [100%]\n5 passed in 0.34s\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_lwPtFnyb3vxknCH9vAtK3168",
-        "type": "function",
-        "function": {
-          "name": "todo",
-          "arguments": "{\"items\": [{\"content\": \"llm 래퍼: 휴대용 심볼릭 링크 해석 + LLM_PYTHON 지원\", \"status\": \"done\"}, {\"content\": \"테스트 추가(BSD식 readlink 에서도 동작)\", \"status\": \"done\"}, {\"content\": \"README: 다른 PC 절 macOS/SSH 별칭·LLM_PYTHON, 환경변수 표, v0.11.1 버전/표\", \"status\": \"in_progress\"}, {\"content\": \".llm/rules.md·VERSION 0.11.1 갱신\", \"status\": \"pending\"}, {\"content\": \"py_compile·pytest 검증 후 커밋/push\", \"status\": \"pending\"}]}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_lwPtFnyb3vxknCH9vAtK3168",
-    "name": "todo",
-    "content": "📋 작업 계획 갱신: 총 5개, 완료 2개 · 진행 중: README: 다른 PC 절 macOS/SSH 별칭·LLM_PYTHON, 환경변수 표, v0.11.1 버전/표 · 목표 유지: llm 래퍼가 readlink -f 없는 환경(macOS 등)에서도 심볼릭 링크를 해석하도록 고치고, README 다른 PC 절에 macOS/SSH 별칭 주의와 LLM_PYTHON 안내를 추가한 뒤 v0.11.1로 올려 검증·커밋한다."
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_qK1fl3IugdwTRwMTbfvH3145",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"^#\\\\|^##\\\\|^###\\\" README.md | head -60 && echo \\\"=== version\\\" && grep -n \\\"버전:\\\\|버전\\\\*\\\\*\\\" README.md | head\", \"timeout\": 60}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_qK1fl3IugdwTRwMTbfvH3145",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n1:# llm — DeepSeek CLI 에이전트\n9:## 최소 사용법\n12:# API 키(저장소 폴더 .env)\n15:# PATH (한 번)\n19:# 작업할 프로젝트 폴더에서\n55:## v0.11 변경 사항\n69:## v0.10 변경 사항\n85:## v0.9 변경 사항\n97:## v0.8 변경 사항\n109:## v0.7 변경 사항\n127:## 목차\n149:## 요구 사항\n163:## 설치\n165:### 1. API 키 설정\n183:# .env 형식\n197:### 2. 실행 파일 배치\n203:# 저장소 위치 (환경에 따라 다름)\n205:# 또는\n211:### 3. 전역 명령으로 등록 (권장)\n236:## 다른 PC에서 시작하기\n242:### ① 코드 가져오기\n258:### ② API 키 넣기\n270:### ③ 전역 명령 등록\n279:### ④ 확인 (위에서부터 차례로)\n289:### 새 PC에서 달라지는 점\n308:### 준비물 체크\n318:## 빠른 시작\n321:# 이 폴더에서 에이전트에게 질문 (도구 자동 사용)\n324:# 파일 내용을 읽고 고치도록 요청\n327:# 한 번만 묻고 바로 끝내기(대화형으로 들어가지 않음)\n330:# 도구 없이 순수 채팅\n333:# 셸 명령 확인 생략 (자동화/신뢰 환경)\n336:# 기본값: 작업 폴더 안 명령은 확인 없이(safe). 밖·설치 등은 확인\n339:# 더 관대하게: sudo·설치·폴더 밖 삭제만 확인\n342:# 모델의 사고 과정 원문까지 보고 싶을 때 (기본은 도구 진행만 표시)\n345:# 읽기 전용 명령도 매번 확인 (자동 실행 비활성)\n348:# 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업\n351:# 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기\n355:# 확인 프롬프트에서 허용해 자동 실행된 셸 명령 기록 보기 / 비우기\n365:## 사용법 (CLI 옵션)\n367:### 기본 실행\n381:### 서브커맨드\n412:### 옵션\n473:### 사용 예\n476:# 세션 이름을 명시적으로 고정 (이 폴더에 바인딩, 기존 매핑은 갈아탐)\n479:# 다른 폴더 세션의 대화 내용 보기 (읽기 전용)\n482:# 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업\n485:# 최근 답변의 스크립트를 추출해 실행\n488:# 세션 초기화 / 삭제\n492:# 파일을 첨부해 질문 (@경로: 파일 내용, 폴더면 목록)\n495:# 먼저 계획만 받고, 확인 뒤 실행\n499:# 직전 턴의 편집 되돌리기\n507:### 대화형 모드(REPL) 명령\n555:## 세션과 폴더 매핑\n572:### 대화 기록 동기화 (다른 PC에서 이어가기)\n627:### 소유와 권한\n646:### 폴더를 옮기거나 이름을 바꾼 경우 (`mv`)\n682:### 다른 세션 맥락 참조 (`--ref`)\n700:## 대화 요약과 백업\n731:## 응답 표시와 사고 과정\n=== version\n7:**버전:** v0.11.0 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_7MHOmhU5Yk1gkWTFnFJj8616",
+        "id": "call_01_ET_nQr9jDzRS4AMlb9RXh4y3371",
         "type": "function",
         "function": {
           "name": "read",
-          "arguments": "{\"path\": \"README.md\", \"offset\": 1, \"limit\": 70}"
+          "arguments": "{\"limit\": 50, \"offset\": 30, \"path\": \"README.md\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ET_7MHOmhU5Yk1gkWTFnFJj8616",
-    "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/README.md (1669 lines)\n     1|# llm — DeepSeek CLI 에이전트\n     2|\n     3|터미널에서 DeepSeek API를 사용해 파일 읽기/편집, 검색, 셸 실행을 수행하는\n     4|경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의\n     5|패키지 설치가 필요 없습니다.\n     6|\n     7|**버전:** v0.11.0 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)\n     8|\n     9|## 최소 사용법\n    10|\n    11|```bash\n    12|# API 키(저장소 폴더 .env)\n    13|printf 'DEEPSEEK_API_KEY=sk-...\\n' > .env && chmod 600 .env\n    14|\n    15|# PATH (한 번)\n    16|ln -sf \"$(pwd)/llm\" ~/bin/llm   # 또는 이 레포의 llm 경로\n    17|export PATH=\"$HOME/bin:$PATH\"\n    18|\n    19|# 작업할 프로젝트 폴더에서\n    20|llm                             # 인자 없으면 대화형(여러 턴)으로 시작\n    21|llm \"이 프로젝트 구조 요약해줘\"   # 대화형 시작 + 첫 턴 실행\n    22|llm ask \"이 함수 설명해줘\"        # 1턴만 하고 종료\n    23|llm sync                        # 대화 기록만 원격에\n    24|```\n    25|\n    26|> 파이프·리다이렉션(`llm \"질문\" | tee log`)처럼 터미널이 아니면 대화형으로\n    27|> 들어가지 않고 **1턴만** 실행합니다. 스크립트에서는 `llm ask`를 쓰면 분명합니다.\n    28|\n    29|| 하고 싶은 일 | 명령 |\n    30||---|---|\n    31|| 대화형(여러 턴, **기본**) | `llm` · `llm -i` · `llm repl` · `llm agent` |\n    32|| 1턴만 (도구 사용) | `llm ask \"질문\"` · `llm --once \"질문\"` |\n    33|| 순수 채팅 | `llm chat \"질문\"` · `llm --chat` |\n    34|| 셸을 더 관대하게 | `llm --trust \"질문\"` |\n    35|| 셸 전부 확인 | `llm --confirm-all \"질문\"` |\n    36|| 계획만 세우기(읽기 전용) | `llm plan \"질문\"` · `llm --plan` · REPL `/plan` |\n    37|| 편집마다 diff 확인 | `llm --confirm-edits \"질문\"` |\n    38|| 직전 편집 되돌리기 | `llm undo` · REPL `/undo` |\n    39|| 파일 첨부 | `llm \"@src/app.py 의 버그 고쳐\"` |\n    40|| 대화 기록만 원격에 | `llm sync` |\n    41|| 세션 목록/연결 | `llm session ls` · `llm session adopt` |\n    42|\n    43|기본값: **실행=대화형(터미널)** · **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.\n    44|\n    45|- **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수\n    46|- **채팅 모드**: 도구 없이 순수 대화\n    47|- **세션**: 폴더별로 대화 기록을 자동 연결·보존\n    48|- **세션 규칙**: 프로젝트별 지침을 `.llm/rules.md`에 남겨 매 요청에 반영\n    49|- **진행 표시**: 시작 헤더(제목 줄 + `세션`/`폴더`/`셸`/`설정`/`이어가기`/`완화`/`로그`/`도움말` 행) · 단계 `▸`\n    50|- **읽기 전용 셸 자동 실행**: `ls`, `cat`, `git status` 등 안전한 명령은 확인 없이 실행\n    51|- **비밀값 보호**: 셸에 API 키·토큰을 넘기지 않고, `.env`를 드러내는 명령은 항상 확인, 도구 결과의 키는 `[REDACTED]`\n    52|- **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`\n    53|- **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도\n    54|\n    55|## v0.11 변경 사항\n    56|\n    57|대화형(`llm`) 진입 화면을 다듬었습니다. 한 줄에 몰아 찍던 시작 배너를\n    58|**제목 줄 + 라벨 정렬 행** 구조로 바꾸고, 설정·셸 확인·로그·도움말을 행으로\n    59|나눠 보여 줍니다.\n    60|\n    61|| 영역 | v0.10 | v0.11 |\n    62||---|---|---|\n    63|| 시작 배너 | 한 줄: `── 대화형 v0.10.0  session=…  root=…  rules=…  sync=…  확인=…` | **구조화된 헤더** — 제목 줄 `✦ llm v0.11.0 · 대화형` 아래에 `세션`·`폴더`·`셸`·`설정`·`이어가기` 행 |\n    64|| REPL 안내 | `ℹ️ 대화형 모드` + 여러 `ℹ️` 줄(도움말·1턴·셸·로그) | 헤더에 `완화`·`로그`·`도움말` 행으로 통합 |\n    65|| 이어가기 | `ℹ️ 이어가기 · 로컬 12턴 …` 한 줄 | 헤더의 `이어가기` 행(로컬 턴·미커밋·원격 ahead/behind) |\n    66|| 저장소 위치 | — | 헤더는 `print_banner`(제목·행) + `header_line` + `print_continue_status`, 라벨 폭 `HEADER_LABEL_WIDTH` |\n    67|| 테스트 | 105개 | **106개**(헤더 행·정렬 검사 추가) |\n    68|\n    69|## v0.10 변경 사항\n    70|\n... [1599 more lines; use offset/limit]"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_Bp5VwaYB94WYwekEY3By0992",
-        "type": "function",
-        "function": {
-          "name": "read",
-          "arguments": "{\"limit\": 100, \"offset\": 147, \"path\": \"README.md\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_Bp5VwaYB94WYwekEY3By0992",
-    "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/README.md (1669 lines)\n   147|---\n   148|\n   149|## 요구 사항\n   150|\n   151|| 항목 | 설명 |\n   152||------|------|\n   153|| Python | 3.10 이상 (`str \\| None` 등 최신 타입 문법 사용) |\n   154|| 셸 | bash (셸 도구는 `/bin/bash`로 실행) |\n   155|| API 키 | `DEEPSEEK_API_KEY` 필요 |\n   156|| 터미널 | 색·Markdown 강조를 위해 TTY 권장. 외부 도구 없이 **내장 렌더러** 사용 |\n   157|\n   158|의존 패키지는 없습니다. `urllib`, `json`, `subprocess` 등 표준 라이브러리만\n   159|사용합니다.\n   160|\n   161|---\n   162|\n   163|## 설치\n   164|\n   165|### 1. API 키 설정\n   166|\n   167|`agent.py`와 `llm` 래퍼는 시작 시 아래 순서로 `.env`를 자동으로 읽습니다\n   168|(**앞이 우선**, 이미 설정된 환경변수는 덮어쓰지 않음).\n   169|\n   170|1. `LLM_ENV_FILE`로 지정한 경로\n   171|2. **저장소 폴더의 `.env`** — `llm`/`agent.py`가 있는 폴더 (권장)\n   172|3. `/etc/env/.env` — 시스템 공용(예전 방식)\n   173|\n   174|가장 간단한 방법은 저장소 폴더에 `.env`를 만드는 것입니다.\n   175|\n   176|```bash\n   177|cd ~/codespace/llm   # 또는 ~/codespace/workbayNext/llm (WSL에서 WN 옆 클론)\n   178|printf 'DEEPSEEK_API_KEY=sk-...\\n' > .env\n   179|chmod 600 .env\n   180|```\n   181|\n   182|```dotenv\n   183|# .env 형식\n   184|DEEPSEEK_API_KEY=sk-...\n   185|```\n   186|\n   187|> `.gitignore`에 `.env`가 들어 있어 **커밋·push 되지 않습니다**(키 유출 방지).\n   188|> 저장소를 복사해도 `.env`는 따라가지 않으므로 새 PC에서는 한 번 다시\n   189|> 만들어야 합니다.\n   190|\n   191|`.env` 파일이 없으면 일반 환경변수로 지정해도 됩니다.\n   192|\n   193|```bash\n   194|export DEEPSEEK_API_KEY=sk-...\n   195|```\n   196|\n   197|### 2. 실행 파일 배치\n   198|\n   199|`llm`(bash 래퍼)과 `agent.py`가 같은 폴더에 있어야 합니다.\n   200|`llm` 래퍼는 자기 위치를 기준으로 `agent.py`를 찾습니다.\n   201|\n   202|```bash\n   203|# 저장소 위치 (환경에 따라 다름)\n   204|~/codespace/llm/\n   205|# 또는\n   206|~/codespace/workbayNext/llm/\n   207|├── llm          # 실행 진입점 (bash)\n   208|└── agent.py     # 실제 로직 (python)\n   209|```\n   210|\n   211|### 3. 전역 명령으로 등록 (권장)\n   212|\n   213|`~/bin`은 사용자 전역 명령을 두는 관례적인 경로입니다. 여기에 심볼릭 링크를\n   214|걸고 PATH에 등록하면 어디서든 `llm`으로 실행할 수 있습니다.\n   215|\n   216|```bash\n   217|mkdir -p ~/bin\n   218|ln -sf ~/codespace/llm/llm ~/bin/llm   # 실제 클론 경로로\n   219|echo 'export PATH=\"$HOME/bin:$PATH\"' >> ~/.bashrc\n   220|source ~/.bashrc\n   221|```\n   222|\n   223|동작 확인:\n   224|\n   225|```bash\n   226|which llm          # → /home/<user>/bin/llm\n   227|readlink ~/bin/llm # → /home/<user>/codespace/userscript/llm/llm\n   228|llm                # 인자 없이 실행하면 대화형(REPL) 시작 (비TTY는 1턴)\n   229|```\n   230|\n   231|> `~/bin`이 PATH에 없으면 새 셸에서 `llm`을 찾지 못합니다. 위 `export PATH`\n   232|> 한 줄이 영구 등록의 핵심입니다.\n   233|\n   234|---\n   235|\n   236|## 다른 PC에서 시작하기\n   237|\n   238|새 PC에서는 **① 코드 가져오기 → ② API 키 넣기 → ③ PATH 등록 → ④ 확인** 순서로\n   239|하면 끝입니다. 아래 명령을 위에서부터 그대로 복사해 붙여넣으세요\n   240|(`<user>`는 새 PC의 사용자 이름).\n   241|\n   242|### ① 코드 가져오기\n   243|\n   244|GitHub(비공개)에 있으므로 clone 하면 됩니다.\n   245|\n   246|```bash\n... [1423 more lines; use offset/limit]"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_E3VzIUxTF3NSVussEgpL8985",
-        "type": "function",
-        "function": {
-          "name": "read",
-          "arguments": "{\"limit\": 85, \"offset\": 242, \"path\": \"README.md\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_E3VzIUxTF3NSVussEgpL8985",
-    "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/README.md (1669 lines)\n   242|### ① 코드 가져오기\n   243|\n   244|GitHub(비공개)에 있으므로 clone 하면 됩니다.\n   245|\n   246|```bash\n   247|mkdir -p ~/codespace\n   248|git clone git@github.com:hanurijang/llm.git ~/codespace/llm\n   249|chmod +x ~/codespace/llm/llm\n   250|```\n   251|\n   252|> - `Permission denied (publickey)`가 나오면 새 PC의 SSH 공개키가 GitHub에\n   253|>   없는 것입니다: `ssh-keygen -t ed25519` → `~/.ssh/id_ed25519.pub` 내용을\n   254|>   GitHub **Settings → SSH keys**에 등록.\n   255|> - clone은 실행 권한까지 그대로 가져오므로 위 `chmod +x`는 보험입니다.\n   256|>   clone이 아니라 USB·rsync로 폴더를 복사했다면 그 한 줄이 꼭 필요합니다.\n   257|\n   258|### ② API 키 넣기\n   259|\n   260|```bash\n   261|cd ~/codespace/llm\n   262|printf 'DEEPSEEK_API_KEY=sk-여기에-본인-키\\n' > .env\n   263|chmod 600 .env\n   264|```\n   265|\n   266|> sudo 없이 됩니다. `.env`는 `.gitignore`에 있어 커밋되지 않습니다.\n   267|> 저장소 폴더의 `.env`(권장)나 `/etc/env/.env`, `~/.bashrc` export 어느\n   268|> 쪽이든 인식합니다(앞이 우선).\n   269|\n   270|### ③ 전역 명령 등록\n   271|\n   272|```bash\n   273|mkdir -p ~/bin\n   274|ln -sf ~/codespace/llm/llm ~/bin/llm\n   275|echo 'export PATH=\"$HOME/bin:$PATH\"' >> ~/.bashrc\n   276|source ~/.bashrc\n   277|```\n   278|\n   279|### ④ 확인 (위에서부터 차례로)\n   280|\n   281|```bash\n   282|which llm               # → /home/<user>/bin/llm\n   283|llm session ls          # 상태 + 버전(v0.11.0) 표시 (API 호출 없음)\n   284|llm balance             # 키·네트워크 확인\n   285|llm ask \"안녕\"          # 1턴으로 모델 응답 확인\n   286|llm \"이 폴더 요약해줘\"   # 대화형 시작 + 도구까지 확인\n   287|```\n   288|\n   289|### 새 PC에서 달라지는 점\n   290|\n   291|- **홈의 보조 파일은 자동 생성**: `~/.local/share/llm/`(폴더 매핑·셸 허용\n   292|  목록·환율 캐시)는 첫 실행 때 만들어집니다. 따로 만들 필요가 없습니다.\n   293|- **대화 기록은 저장소와 함께 옵니다**: 기록이 `<작업폴더>/.llm/`에 있어\n   294|  `git pull`(또는 clone)만 하면 이전 PC의 대화가 그대로 이어집니다.\n   295|  다른 PC에서 작업했다면 **첫 질의 때 원격 최신 기록을 자동으로 받아온 뒤**\n   296|  이어가고(`LLM_AUTO_PULL=0`/`--no-pull`이면 끔). 대화 기록 **자동\n   297|  커밋·push는 기본 꺼짐**입니다. 켤 때만 `LLM_AUTO_SYNC=1`, 수동은\n   298|  `llm sync`. clone 직후 `.llm/history_*` 가 하나이거나 폴더명과\n   299|  같으면 **세션을 자동으로 연결**합니다.\n   300|- **저장소 폴더 이름을 같게 유지**하세요(README의 설치 경로 그대로면 자동).\n   301|  세션 이름이 폴더 이름에서 만들어지므로, 이름이 다르면 `llm -s <이름>`으로\n   302|  지정하거나 `llm session view`가 알려주는 `-s` 안내를 따르면 됩니다.\n   303|- **`bindings.json`은 복사하지 마세요.** 예전 PC의 절대 경로가 들어 있어\n   304|  \"다른 폴더에 바인딩됨\" 경고가 납니다. `mv`로 폴더를 옮긴 경우에는 실행 시\n   305|  이어받을 후보를 물어봅니다.\n   306|- `.llm/rules.md`(세션 규칙)는 저장소에 들어 있어 clone하면 함께 옵니다.\n   307|\n   308|### 준비물 체크\n   309|\n   310|| 항목 | 확인 명령 | 없을 때 |\n   311||------|-----------|---------|\n   312|| Python 3.10+ | `python3 -V` | 최신 버전 설치 (3.9 이하면 문법 오류) |\n   313|| bash | `bash --version` | Linux/macOS/WSL은 기본 포함 |\n   314|| git (선택) | `git --version` | clone·`mv` 이어받기 안내에만 사용 |\n   315|\n   316|---\n   317|\n   318|## 빠른 시작\n   319|\n   320|```bash\n   321|# 이 폴더에서 에이전트에게 질문 (도구 자동 사용)\n   322|llm \"이 프로젝트 구조를 요약해줘\"\n   323|\n   324|# 파일 내용을 읽고 고치도록 요청\n   325|llm \"agent.py의 확인 프롬프트 문구를 더 친절하게 다듬어줘\"\n   326|\n... [1343 more lines; use offset/limit]"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_xC3IIE1f32U0bFm9GRjC5467",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"LLM_ENV_FILE\\\\|## 설정과 환경변수\\\" README.md | head && sed -n '1400,1470p' README.md\", \"timeout\": 60}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_xC3IIE1f32U0bFm9GRjC5467",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n170:1. `LLM_ENV_FILE`로 지정한 경로\n1378:## 설정과 환경변수\n1388:| `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |\n1405:1. `LLM_ENV_FILE`로 지정한 경로\n1475:  표시하는 버전 문자열), `load_dotenv`(`LLM_ENV_FILE` → 저장소 `.env` →\n| `LLM_SHELL_LOG` | `1`(켜짐) | `0`이면 셸 허용/실행 로그를 남기지 않음 (`llm shell log` 조회는 유지) |\n\n`.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는\n덮어쓰지 않음).\n\n1. `LLM_ENV_FILE`로 지정한 경로\n2. 저장소 폴더의 `.env` (`llm`/`agent.py`가 있는 폴더)\n3. `/etc/env/.env` (시스템 공용 폴백)\n\n`LLM_AUTO_WORKSPACE=1`이 남아 있어 확인(`y/N`)이 자주 뜬다면 저장소 폴더의\n`.env`(또는 `/etc/env/.env`)에서 그 줄을 지우거나 `0`으로 바꾸세요. 이번 실행만\n바꾸려면 `llm --trust`(관대)나 `llm --confirm-all`처럼\n**CLI 옵션을 직접 주면 환경변수를 이깁니다**. 현재 모드는 시작 헤더의\n`셸` 행(`확인=…`)에서 바로 확인할 수 있습니다.\n\n---\n\n## 파일/데이터 위치\n\n| 경로 | 용도 |\n|------|------|\n| `<저장소>/.env` | API 키 등 환경변수 (자동 로드, `.gitignore` 제외 대상) |\n| `/etc/env/.env` | API 키 등 환경변수 (자동 로드, 시스템 공용 폴백) |\n| `<작업폴더>/.llm/history_<세션>.json` | 세션별 대화 기록 (**기본**, 저장소에 커밋해 다른 PC와 동기화) |\n| `<작업폴더>/.llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 (기본, `llm sync` 커밋 대상) |\n| `~/.local/share/llm/history_<세션>.json` | 대화 기록 (예전 위치, `LLM_HISTORY=home`일 때만. 옮기면 `*.migrated`로 남음) |\n| `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (기기 로컬, 경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |\n| `~/.local/share/llm/summaries/<세션>/` | 요약 백업 (`LLM_HISTORY=home`일 때만) |\n| `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답, 기기 로컬) |\n| `~/.local/share/llm/shell_log_<세션>.jsonl` | 허용·자동 실행·거부한 셸 명령 로그 (최근 500건, `llm shell log`, 기기 로컬) |\n| `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효, 기기 로컬) |\n| `~/.local/share/llm/autopull.json` | 폴더별 마지막 원격 확인 시각 (질의 전 자동 수신 간격 판단, 기기 로컬) |\n| `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |\n| `<작업폴더>/CLAUDE.md`, `AGENTS.md`, `~/.claude/CLAUDE.md` | 프로젝트/전역 지침 (읽기만) |\n| `~/.local/share/llm/undo/undo_<세션>.json` | 턴별 편집 전 원본 (`llm undo`, 최근 20턴, 기기 로컬) |\n| `~/.local/share/llm/repl_history` | 대화형 입력 히스토리 (↑/↓) |\n| `$TMPDIR/llm-bg-*/bg_N.log` | 백그라운드 셸 출력 (실행 중에만) |\n\n> **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`shell_log_*.jsonl`·`rates.json`·\n> `autopull.json`·`undo/`·`repl_history`)는 대화 기록 위치와 무관하게 항상 홈에 저장됩니다(경로·환율·\n> 마지막 확인 시각 같은 이 PC 전용 정보).\n\n대화 기록 저장은 임시 파일에 쓴 뒤 `replace`하는 방식으로 원자적으로\n처리됩니다. 중간에 끊긴(도구 호출만 있고 결과가 없는) 턴은 로드 시 자동\n정리됩니다. 사고 과정(`reasoning_content`)은 API 프로토콜상 같은 턴에서만\n되돌려주고, 디스크에는 저장하지 않습니다(`strip_reasoning`).\n\n---\n\n## 아키텍처\n\n```\nllm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 모듈)\n```\n\n`llmlib/`(v0.7~, 표준 라이브러리만, 전역 상태·UI 의존 없음 → 단위 테스트 대상):\n\n| 모듈 | 역할 |\n|---|---|\n| `shell_policy.py` | 셸 명령 안전 분류(`is_safe_command`·`is_workspace_command`·`needs_confirm_always`), 명령 분해, 의도 요약, 권한 상승(`sudo` 등) 판별·목적 요약(`privilege_head`/`privilege_target`/`privilege_purpose`/`privilege_segments`) |\n| `guard.py` | 비밀 파일/변수 판정, `scrubbed_env`, `command_touches_secret`, 비밀값 수집·`redact` |\n| `netretry.py` | `urlopen_with_retry`(429·5xx·네트워크 지수 백오프, `Retry-After`) |\n| `filestate.py` | `FileTracker`(읽은 파일·외부 변경), `unified_diff`/`diff_stat`, `UndoStore` |\n| `conversation.py` | `finalize_interrupted`(Ctrl+C 후 기록 정리), `clear_old_tool_results` |\n| `context.py` | `expand_mentions`(@파일), `project_doc_files`/`load_project_docs`(CLAUDE.md·AGENTS.md) |\n| `web.py` | `web_fetch` 본문 가져오기·HTML → 텍스트 |\n| `mdrender.py` | 외부 도구 없이 터미널용 Markdown 렌더링(헤딩·목록·코드·인용·표·인라인 강조, 한글 폭 정렬) |\n| `bgshell.py` | 백그라운드 셸 작업 관리(`BgManager`) |\n| `shelllog.py` | 셸 허용/실행 로그(`ShellLog`, `log_path`, `rows`/`tally`) |\n| `cliargs.py` | 서브커맨드 → 옵션 펼치기(`expand`: `shell log`, `session view 이름` 등), 기본 실행 형태 판단(`wants_repl`) |\n\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_sIfnXJo8OQdktVjnPeLW9797",
-        "type": "function",
-        "function": {
-          "name": "read",
-          "arguments": "{\"limit\": 30, \"offset\": 1376, \"path\": \"README.md\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_sIfnXJo8OQdktVjnPeLW9797",
-    "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/README.md (1669 lines)\n  1376|---\n  1377|\n  1378|## 설정과 환경변수\n  1379|\n  1380|| 이름 | 기본값 | 설명 |\n  1381||------|--------|------|\n  1382|| `DEEPSEEK_API_KEY` | (없음) | **필수**. API 키 |\n  1383|| `LLM_MODEL` | `deepseek-flash` | 기본 모델 |\n  1384|| `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(내장)을 끄고 원문 출력, 도구 결과 제자리 갱신도 끔(로그로 출력) |\n  1385|| `LLM_ALLOW_ALL` / `LLM_SHELL_TRUST` | (미설정) | `1`이면 `--trust`(관대). CLI가 우선 |\n  1386|| `LLM_AUTO_WORKSPACE` | (미설정) | `1`이면 `--safe`. **미설정 시에도 기본은 safe** |\n  1387|| `LLM_RATES` | (미설정) | `0`이면 실시간 환율 끄고 가정 환율 (`--no-rates`) |\n  1388|| `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |\n  1389|| `LLM_HISTORY` | (미설정) | `home`이면 `~/.local/share/llm/`, 그 외 작업폴더 `.llm/` |\n  1390|| `LLM_AUTO_SYNC` | (꺼짐) | `1`/`true`/`yes`/`on` 이면 종료 시 자동 커밋·push |\n  1391|| `LLM_AUTO_PULL` | `1`(켜짐) | `0`이면 질의 전 원격 수신 끔 |\n  1392|| `LLM_AUTO_PULL_TTL` | `120` | 같은 폴더에서 원격을 다시 확인하기까지의 최소 간격(초) |\n  1393|| `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |\n  1394|| `LLM_CONFIRM_EDITS` | (꺼짐) | `1`이면 `--confirm-edits` (편집마다 diff 확인) |\n  1395|| `LLM_EDIT_REQUIRE_READ` | `1`(켜짐) | `0`이면 읽지 않은 파일 편집 허용(v0.6 동작) |\n  1396|| `LLM_RETRIES` | `4` | API 429/5xx/네트워크 오류 재시도 횟수 |\n  1397|| `LLM_COMPACT_TOKENS` | `90000` | 실제 입력 토큰이 이 값을 넘으면 대화 압축 |\n  1398|| `LLM_PROJECT_DOCS` | (켜짐) | `0`이면 `CLAUDE.md`/`AGENTS.md` 프로젝트 지침을 읽지 않음 |\n  1399|| `LLM_SHELL_KEEP_ENV` | (없음) | 셸에 그대로 넘길 비밀 변수 이름(쉼표 구분). 기본은 모두 제거 |\n  1400|| `LLM_SHELL_LOG` | `1`(켜짐) | `0`이면 셸 허용/실행 로그를 남기지 않음 (`llm shell log` 조회는 유지) |\n  1401|\n  1402|`.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는\n  1403|덮어쓰지 않음).\n  1404|\n  1405|1. `LLM_ENV_FILE`로 지정한 경로\n... [264 more lines; use offset/limit]"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_QH6POfWI9jHniMaW6hUn0928",
-        "type": "function",
-        "function": {
-          "name": "edit",
-          "arguments": "{\"edits\": [{\"old_string\": \"**버전:** v0.11.0 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)\", \"new_string\": \"**버전:** v0.11.1 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)\"}, {\"old_string\": \"| 저장소 위치 | — | 헤더는 `print_banner`(제목·행) + `header_line` + `print_continue_status`, 라벨 폭 `HEADER_LABEL_WIDTH` |\\n| 테스트 | 105개 | **106개**(헤더 행·정렬 검사 추가) |\", \"new_string\": \"| 저장소 위치 | — | 헤더는 `print_banner`(제목·행) + `header_line` + `print_continue_status`, 라벨 폭 `HEADER_LABEL_WIDTH` |\\n| `llm` 래퍼 이식성 (v0.11.1) | `readlink -f` 로 자기 위치 해석 → macOS/BSD 처럼 `-f` 가 없는 환경에서 `~/bin/llm` 심볼릭 링크가 깨짐(`agent.py` 못 찾음) | **`readlink -f` 없이** 심볼릭 링크를 직접 따라가 해석(체인·상대 링크 지원, 최대 40 hop). `LLM_PYTHON` 으로 실행기 지정. `agent.py` 가 없으면 안내 후 종료 |\\n| 테스트 | 105개 | **111개**(헤더 행·정렬 검사 + 래퍼 이식성 5개) |\"}, {\"old_string\": \"```bash\\nmkdir -p ~/codespace\\ngit clone git@github.com:hanurijang/llm.git ~/codespace/llm\\nchmod +x ~/codespace/llm/llm\\n```\\n\\n> - `Permission denied (publickey)`가 나오면 새 PC의 SSH 공개키가 GitHub에\\n>   없는 것입니다: `ssh-keygen -t ed25519` → `~/.ssh/id_ed25519.pub` 내용을\\n>   GitHub **Settings → SSH keys**에 등록.\", \"new_string\": \"```bash\\nmkdir -p ~/codespace\\ngit clone git@github.com:hanurijang/llm.git ~/codespace/llm\\nchmod +x ~/codespace/llm/llm\\n```\\n\\n> - `Permission denied (publickey)`가 나오면 새 PC의 SSH 공개키가 GitHub에\\n>   없는 것입니다: `ssh-keygen -t ed25519` → `~/.ssh/id_ed25519.pub` 내용을\\n>   GitHub **Settings → SSH keys**에 등록.\\n> - **이 저장소의 remote는 계정 별칭을 쓸 수 있습니다**(예:\\n>   `git@github-hanurijang:hanurijang/llm.git`). 별칭은 이 PC의 `~/.ssh/config`\\n>   에만 있는 개인 설정이라 새 PC에는 따라가지 않습니다. clone이\\n>   `Could not resolve hostname github-hanurijang`로 실패하면 ① `~/.ssh/config`\\n>   에 같은 `Host` 항목을 넣거나 ② `git@github.com:hanurijang/llm.git`로\\n>   clone 하세요(기본 키를 쓸 때). 현재 remote는 `git remote -v`로 확인합니다.\"}, {\"old_string\": \"```bash\\nwhich llm               # → /home/<user>/bin/llm\\nllm session ls          # 상태 + 버전(v0.11.0) 표시 (API 호출 없음)\\nllm balance             # 키·네트워크 확인\\nllm ask \\\"안녕\\\"          # 1턴으로 모델 응답 확인\\nllm \\\"이 폴더 요약해줘\\\"   # 대화형 시작 + 도구까지 확인\\n```\\n\\n### 새 PC에서 달라지는 점\", \"new_string\": \"```bash\\nwhich llm               # → /home/<user>/bin/llm\\nllm session ls          # 상태 + 버전(v0.11.1) 표시 (API 호출 없음)\\nllm balance             # 키·네트워크 확인\\nllm ask \\\"안녕\\\"          # 1턴으로 모델 응답 확인\\nllm \\\"이 폴더 요약해줘\\\"   # 대화형 시작 + 도구까지 확인\\n```\\n\\n### macOS·다른 환경에서 쓸 때\\n\\nLinux/WSL이 아니어도 아래 두 가지만 맞추면 됩니다.\\n\\n| 상황 | 증상 | 해결 |\\n|------|------|------|\\n| `~/bin` 심볼릭 링크 | `python3: can't open file '…/agent.py'` | v0.11.1부터 **`readlink -f` 없이** 링크를 해석합니다. 그래도 실패하면 링크가 실제 저장소를 가리키는지 확인: `readlink ~/bin/llm` → 저장소 경로. `ln -sf ~/codespace/llm/llm ~/bin/llm`로 다시 연결 |\\n| 기본 `python3` 가 3.9 (macOS 구형) | 실행 즉시 `SyntaxError`(타입 문법) 또는 버전 오류 | `LLM_PYTHON=python3.12 llm …` 처럼 3.10+ 실행기 지정 (Homebrew: `brew install python@3.12`). 영구 설정은 `~/.zshrc`에 `export LLM_PYTHON=python3.12` |\\n| 셸 설정 파일 이름 | `llm` 이 새 터미널에서 안 잡힘 | macOS 기본 셸은 zsh — `~/.bashrc` 대신 **`~/.zshrc`** 에 `export PATH=\\\"$HOME/bin:$PATH\\\"` |\\n| `git`/`ssh` 인증 | clone·`llm sync` 실패 | SSH 별칭은 PC 로컬 설정입니다(위 ① 참고). 키를 등록하거나 `git@github.com:…` 주소 사용 |\\n\\n`llm` 래퍼는 심볼릭 링크를 **여러 단계 따라가고**(링크→링크→파일), 상대 경로\\n링크도 해석합니다. 실제로 쓰는 Python 실행기는 배너·`llm session ls` 대신\\n`llm --version`·오류 메시지로 확인할 수 있습니다.\\n\\n### 새 PC에서 달라지는 점\"}, {\"old_string\": \"| 항목 | 확인 명령 | 없을 때 |\\n|------|-----------|---------|\\n| Python 3.10+ | `python3 -V` | 최신 버전 설치 (3.9 이하면 문법 오류) |\\n| bash | `bash --version` | Linux/macOS/WSL은 기본 포함 |\\n| git (선택) | `git --version` | clone·`mv` 이어받기 안내에만 사용 |\", \"new_string\": \"| 항목 | 확인 명령 | 없을 때 |\\n|------|-----------|---------|\\n| Python 3.10+ | `python3 -V` | 최신 버전 설치 (3.9 이하면 문법 오류). macOS에서 여러 버전이면 `LLM_PYTHON=python3.12 llm …` |\\n| bash | `bash --version` | Linux/macOS/WSL은 기본 포함 |\\n| `readlink` | `readlink ~/bin/llm` | 없어도 `~/bin` 대신 저장소의 `llm` 을 직접 실행하면 동작 (v0.11.1부터 `-f` 불필요) |\\n| git (선택) | `git --version` | clone·`mv` 이어받기 안내에만 사용 |\"}, {\"old_string\": \"| `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |\", \"new_string\": \"| `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |\\n| `LLM_PYTHON` | `python3` | `llm` 래퍼가 실행할 Python 실행기(3.10+). macOS 등에서 기본 `python3`가 3.9일 때 `LLM_PYTHON=python3.12` 처럼 지정 |\"}], \"path\": \"README.md\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_QH6POfWI9jHniMaW6hUn0928",
-    "name": "edit",
-    "content": "updated README.md (+28 -4, 1693 lines) · 6 replacements"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_AZQLPcHOE6L3dL1i4RmX6972",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n '\\\"--version\\\"\\\\|--version' agent.py llmlib/cliargs.py | head\", \"timeout\": 60}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_AZQLPcHOE6L3dL1i4RmX6972",
-    "name": "shell",
-    "content": "exit 0"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ZIF35VZZp5PByKUkWIfV6261",
-        "type": "function",
-        "function": {
-          "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"`llm` 래퍼는 심볼릭 링크를 **여러 단계 따라가고**(링크→링크→파일), 상대 경로\\n링크도 해석합니다. `LLM_PYTHON` 을 바꾼 뒤 `llm --help` 가 사용법을 출력하면\\n정상이고, 실행기를 못 찾거나 버전이 낮으면 그 사실을 알려 주는 오류가 나옵니다.\", \"old_string\": \"`llm` 래퍼는 심볼릭 링크를 **여러 단계 따라가고**(링크→링크→파일), 상대 경로\\n링크도 해석합니다. 실제로 쓰는 Python 실행기는 배너·`llm session ls` 대신\\n`llm --version`·오류 메시지로 확인할 수 있습니다.\"}], \"path\": \"README.md\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ZIF35VZZp5PByKUkWIfV6261",
-    "name": "edit",
-    "content": "updated README.md (+2 -2, 1693 lines) · 1 replacement"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_rlHf3W3RdQ5jJiIbkSei3955",
-        "type": "function",
-        "function": {
-          "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"`llm`(bash 래퍼)과 `agent.py`가 같은 폴더에 있어야 합니다.\\n`llm` 래퍼는 자기 위치를 기준으로 `agent.py`를 찾습니다.\\n심볼릭 링크로 걸어 두어도 링크를 따라가 실제 폴더를 찾습니다\\n(`readlink -f` 없이 동작, macOS/BSD 포함). 실행할 Python 실행기는\\n`LLM_PYTHON`(기본 `python3`)으로 바꿀 수 있습니다.\", \"old_string\": \"`llm`(bash 래퍼)과 `agent.py`가 같은 폴더에 있어야 합니다.\\n`llm` 래퍼는 자기 위치를 기준으로 `agent.py`를 찾습니다.\"}], \"path\": \"README.md\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_rlHf3W3RdQ5jJiIbkSei3955",
-    "name": "edit",
-    "content": "updated README.md (+3 -0, 1696 lines) · 1 replacement"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_y8JzUygIWt04Qdjk6apD1232",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -rn \\\"0\\\\.11\\\\.0\\\" agent.py README.md tests/ .llm/rules.md | head -20\", \"timeout\": 60}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_y8JzUygIWt04Qdjk6apD1232",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\nagent.py:65:VERSION = \"0.11.0\"\nREADME.md:63:| 시작 배너 | 한 줄: `── 대화형 v0.10.0  session=…  root=…  rules=…  sync=…  확인=…` | **구조화된 헤더** — 제목 줄 `✦ llm v0.11.0 · 대화형` 아래에 `세션`·`폴더`·`셸`·`설정`·`이어가기` 행 |\nREADME.md:487:────────────── ✦ llm v0.11.0 · 대화형 ──────────────\nREADME.md:556:────────────── ✦ llm v0.11.0 · 대화형 ──────────────\ntests/test_phase1.py:23:        self.assertEqual(llm.VERSION, \"0.11.0\")\n\n--- stderr ---\ngrep: tests/__pycache__/test_phase1.cpython-312-pytest-7.4.4.pyc: 바이너리 파일 일치함\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_XJqWFyuEpheh8qBGlmti2623",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && sed -n '20,30p' tests/test_phase1.py && sed -n '480,495p;550,560p' README.md\", \"timeout\": 60}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_XJqWFyuEpheh8qBGlmti2623",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n\nclass Phase1Defaults(unittest.TestCase):\n    def test_version(self) -> None:\n        self.assertEqual(llm.VERSION, \"0.11.0\")\n\n    def test_version_matches_readme(self) -> None:\n        \"\"\"README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신).\"\"\"\n        readme = (Path(__file__).resolve().parents[1] / \"README.md\").read_text(\n            encoding=\"utf-8\"\n        )\n        self.assertIn(f\"**버전:** v{llm.VERSION} \", readme)\n셸 실행 범위 우선순위: `--confirm-all` > `--trust` > `--safe` >\n`LLM_SHELL_TRUST`/`LLM_ALLOW_ALL` > `LLM_AUTO_WORKSPACE` > **기본(safe)**. **직접 준 CLI 옵션이\n환경변수를 이깁니다.** 시작 헤더의 `셸` 행에 `확인=safe|trust|…`가, `설정` 행에\n`rules`·`sync`가, `이어가기` 행에 로컬 턴·미커밋·원격 상태가 표시됩니다.\n\n```text\n\n────────────── ✦ llm v0.11.0 · 대화형 ──────────────\n  세션      llm\n  폴더      ~/codespace/userscript/llm\n  셸        확인=safe(폴더 안)\n  설정      rules on · sync off\n  이어가기  로컬 12턴 · 원격과 같음\n  완화      --safe / --trust / --yes (셸 확인 완화) · sudo 등 권한 상승은 목적 설명 후 매번 확인\n  로그      ~/.local/share/llm/shell_log_llm.jsonl (기록 켬 · 조회 /log)\n  도움말    /help 명령 · 빈 줄·/exit 종료 · @파일 첨부 · 줄 끝 \\ 이어쓰기 · 1턴만 llm ask \"질문\"\n| `/sync` · `/chat` · `/agent` · `/exit` | 기록 올리기 · 채팅 모드 · 에이전트 모드 · 종료 |\n\n진입 화면(시작 헤더)은 제목 줄과 행으로 나뉘어 있습니다:\n\n```text\n\n────────────── ✦ llm v0.11.0 · 대화형 ──────────────\n  세션      llm\n  폴더      ~/codespace/userscript/llm\n  셸        확인=읽기 전용 자동 (repl 기본)\n  설정      rules on · sync off\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_KTVcGVWiEfjbgealZjle2706",
-        "type": "function",
-        "function": {
-          "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"        self.assertEqual(llm.VERSION, \\\"0.11.1\\\")\", \"old_string\": \"        self.assertEqual(llm.VERSION, \\\"0.11.0\\\")\"}], \"path\": \"tests/test_phase1.py\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_KTVcGVWiEfjbgealZjle2706",
-    "name": "edit",
-    "content": "ERROR: 먼저 read 로 파일을 읽은 뒤 편집하세요(읽지 않은 기존 파일은 고칠 수 없습니다)."
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_1sunW35JIohPC0PussjN5455",
-        "type": "function",
-        "function": {
-          "name": "read",
-          "arguments": "{\"limit\": 20, \"offset\": 20, \"path\": \"tests/test_phase1.py\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_1sunW35JIohPC0PussjN5455",
-    "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/tests/test_phase1.py (167 lines)\n    20|\n    21|class Phase1Defaults(unittest.TestCase):\n    22|    def test_version(self) -> None:\n    23|        self.assertEqual(llm.VERSION, \"0.11.0\")\n    24|\n    25|    def test_version_matches_readme(self) -> None:\n    26|        \"\"\"README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신).\"\"\"\n    27|        readme = (Path(__file__).resolve().parents[1] / \"README.md\").read_text(\n    28|            encoding=\"utf-8\"\n    29|        )\n    30|        self.assertIn(f\"**버전:** v{llm.VERSION} \", readme)\n    31|        self.assertIn(f\"## v{llm.VERSION.rsplit('.', 1)[0]} 변경 사항\", readme)\n    32|\n    33|    def test_header_rows_align_and_show_state(self) -> None:\n    34|        \"\"\"시작 헤더는 라벨 정렬 행으로 세션·폴더·셸·설정을 보여 준다.\"\"\"\n    35|        lines: list[str] = []\n    36|        with mock.patch(\"builtins.print\", lambda *a, **k: lines.append(\" \".join(map(str, a)))):\n    37|            with mock.patch.object(llm, \"load_session_rules\", lambda root: \"x\"):\n    38|                llm.print_banner(\"sess\", Path(\"/tmp/proj\"), False, ask_mode=\"readonly\", repl=True)\n    39|        text = \"\\n\".join(lines)\n... [128 more lines; use offset/limit]"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_m5xgG0LbaPqofivl0pST0117",
-        "type": "function",
-        "function": {
-          "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"        self.assertEqual(llm.VERSION, \\\"0.11.1\\\")\", \"old_string\": \"        self.assertEqual(llm.VERSION, \\\"0.11.0\\\")\"}], \"path\": \"tests/test_phase1.py\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_m5xgG0LbaPqofivl0pST0117",
+    "tool_call_id": "call_00_ET_Er3DstPI9j6P0Fk2rApj6980",
     "name": "edit",
     "content": "updated tests/test_phase1.py (+1 -1, 167 lines) · 1 replacement"
   },
   {
+    "role": "tool",
+    "tool_call_id": "call_01_ET_nQr9jDzRS4AMlb9RXh4y3371",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1696 lines)\n    30||---|---|\n    31|| 대화형(여러 턴, **기본**) | `llm` · `llm -i` · `llm repl` · `llm agent` |\n    32|| 1턴만 (도구 사용) | `llm ask \"질문\"` · `llm --once \"질문\"` |\n    33|| 순수 채팅 | `llm chat \"질문\"` · `llm --chat` |\n    34|| 셸을 더 관대하게 | `llm --trust \"질문\"` |\n    35|| 셸 전부 확인 | `llm --confirm-all \"질문\"` |\n    36|| 계획만 세우기(읽기 전용) | `llm plan \"질문\"` · `llm --plan` · REPL `/plan` |\n    37|| 편집마다 diff 확인 | `llm --confirm-edits \"질문\"` |\n    38|| 직전 편집 되돌리기 | `llm undo` · REPL `/undo` |\n    39|| 파일 첨부 | `llm \"@src/app.py 의 버그 고쳐\"` |\n    40|| 대화 기록만 원격에 | `llm sync` |\n    41|| 세션 목록/연결 | `llm session ls` · `llm session adopt` |\n    42|\n    43|기본값: **실행=대화형(터미널)** · **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.\n    44|\n    45|- **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수\n    46|- **채팅 모드**: 도구 없이 순수 대화\n    47|- **세션**: 폴더별로 대화 기록을 자동 연결·보존\n    48|- **세션 규칙**: 프로젝트별 지침을 `.llm/rules.md`에 남겨 매 요청에 반영\n    49|- **진행 표시**: 시작 헤더(제목 줄 + `세션`/`폴더`/`셸`/`설정`/`이어가기`/`완화`/`로그`/`도움말` 행) · 단계 `▸`\n    50|- **읽기 전용 셸 자동 실행**: `ls`, `cat`, `git status` 등 안전한 명령은 확인 없이 실행\n    51|- **비밀값 보호**: 셸에 API 키·토큰을 넘기지 않고, `.env`를 드러내는 명령은 항상 확인, 도구 결과의 키는 `[REDACTED]`\n    52|- **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`\n    53|- **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도\n    54|\n    55|## v0.11 변경 사항\n    56|\n    57|대화형(`llm`) 진입 화면을 다듬었습니다. 한 줄에 몰아 찍던 시작 배너를\n    58|**제목 줄 + 라벨 정렬 행** 구조로 바꾸고, 설정·셸 확인·로그·도움말을 행으로\n    59|나눠 보여 줍니다.\n    60|\n    61|| 영역 | v0.10 | v0.11 |\n    62||---|---|---|\n    63|| 시작 배너 | 한 줄: `── 대화형 v0.10.0  session=…  root=…  rules=…  sync=…  확인=…` | **구조화된 헤더** — 제목 줄 `✦ llm v0.11.0 · 대화형` 아래에 `세션`·`폴더`·`셸`·`설정`·`이어가기` 행 |\n    64|| REPL 안내 | `ℹ️ 대화형 모드` + 여러 `ℹ️` 줄(도움말·1턴·셸·로그) | 헤더에 `완화`·`로그`·`도움말` 행으로 통합 |\n    65|| 이어가기 | `ℹ️ 이어가기 · 로컬 12턴 …` 한 줄 | 헤더의 `이어가기` 행(로컬 턴·미커밋·원격 ahead/behind) |\n    66|| 저장소 위치 | — | 헤더는 `print_banner`(제목·행) + `header_line` + `print_continue_status`, 라벨 폭 `HEADER_LABEL_WIDTH` |\n    67|| `llm` 래퍼 이식성 (v0.11.1) | `readlink -f` 로 자기 위치 해석 → macOS/BSD 처럼 `-f` 가 없는 환경에서 `~/bin/llm` 심볼릭 링크가 깨짐(`agent.py` 못 찾음) | **`readlink -f` 없이** 심볼릭 링크를 직접 따라가 해석(체인·상대 링크 지원, 최대 40 hop). `LLM_PYTHON` 으로 실행기 지정. `agent.py` 가 없으면 안내 후 종료 |\n    68|| 테스트 | 105개 | **111개**(헤더 행·정렬 검사 + 래퍼 이식성 5개) |\n    69|\n    70|## v0.10 변경 사항\n    71|\n    72|CLI 표면을 **주제별 서브커맨드**로 통합하고, **인자 없는 `llm`을 대화형(REPL)**\n    73|으로 바꿨습니다. 1턴 실행은 `llm ask`로 명시합니다.\n    74|\n    75|| 영역 | v0.9 | v0.10 |\n    76||---|---|---|\n    77|| 인자 없는 `llm` | 상태·세션 목록만 출력 | 터미널이면 **대화형 시작**(첫 턴 질문은 `llm \"질문\"`). 파이프·리다이렉션은 1턴. 상태·세션 목록은 `llm session ls` |\n    78|| 1턴 실행 | `llm \"질문\"` | `llm ask \"질문\"`(**권장**) · `llm --once \"질문\"`. `llm \"질문\"`은 대화형 첫 턴 |\n    79|| 실행 모드 별칭 | `llm -i` · `llm repl` | `llm` · `llm -i` · `llm repl` · `llm agent`가 모두 같은 **대화형**(`llm agent \"질문\"`은 대화형 첫 턴) |\n... [1617 more lines; use offset/limit]"
+  },
+  {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_ET_u9dwUm3ZOlLNvfY0t9Vy8935",
+        "id": "call_00_6O3BzuTeqqmY7qyRQ4sM6060",
+        "type": "function",
+        "function": {
+          "name": "find",
+          "arguments": "{\"context\": 3, \"max_results\": 20, \"mode\": \"grep\", \"path\": \"README.md\", \"pattern\": \"/cost\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_6O3BzuTeqqmY7qyRQ4sM6060",
+    "name": "find",
+    "content": "README.md-118-| API 오류 | 429/5xx/네트워크 오류 즉시 실패 | 지수 백오프로 최대 4회 재시도(`Retry-After` 준수, `LLM_RETRIES`) |\nREADME.md-119-| 편집 | 읽지 않은 파일도 덮어씀, diff 없음, 되돌리기 없음 | **read 한 파일만 편집**, 읽은 뒤 바깥 변경 감지, 색 diff 표시, `--confirm-edits`, 턴 단위 `llm undo`/`/undo`, CRLF 보존, `edits` 배열로 원자적 다중 치환 |\nREADME.md-120-| 모드 | 에이전트/채팅 | + **plan 모드**(읽기 전용 조사 → 계획만) |\nREADME.md:121:| REPL | `input()` 한 줄, `/exit /sync /chat /agent` | readline(방향키·히스토리·Tab 완성), 여러 줄(`\\` 이어쓰기, `\"\"\"` 블록), `/help /clear /compact /model /cost /undo /plan /rules /bg` |\nREADME.md-122-| 맥락 | `.llm/rules.md`만, 문자 수 기준 압축 | `@파일` 첨부, `CLAUDE.md`/`AGENTS.md`(상위 폴더·`~/.claude`) 반영, **실제 토큰 수** 기준 압축, 오래된 긴 도구 결과 일괄 비우기 |\nREADME.md-123-| 도구 | 5개, 순차 실행, 셸 최대 180초 | + `web_fetch`, `task`(읽기 전용 서브에이전트), 백그라운드 셸, grep `context`/`output`, 읽기 전용 호출 **병렬 실행**, 셸 최대 600초 |\nREADME.md-124-| 구조 | `agent.py` 단일 파일, 테스트 9개 | `llmlib/` 9개 모듈로 분리(셸 정책·보안·재시도·맥락·웹·백그라운드 셸), 테스트 61개(셸 정책 표 테스트 포함) |\n--\nREADME.md-541-| `/clear` | 대화 비우기 (이전 대화는 `summaries/<세션>/cleared-*.json`에 백업) |\nREADME.md-542-| `/compact` | 지금 대화 요약(압축) |\nREADME.md-543-| `/model [이름]` | 모델 보기/바꾸기 |\nREADME.md:544:| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 |\nREADME.md-545-| `/undo` | 직전 턴의 파일 편집 되돌리기 |\nREADME.md-546-| `/plan` | plan 모드 켜기/끄기 (프롬프트가 `llm:plan>`로 바뀜) |\nREADME.md-547-| `/rules` | 세션 규칙·프로젝트 지침(CLAUDE.md 등) 보기 |"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_PrG5wglW6CvZ9WVWQQv78023",
         "type": "function",
         "function": {
           "name": "read",
-          "arguments": "{\"limit\": 8, \"offset\": 62, \"path\": \"agent.py\"}"
+          "arguments": "{\"limit\": 30, \"offset\": 528, \"path\": \"README.md\"}"
         }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_u9dwUm3ZOlLNvfY0t9Vy8935",
-    "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/agent.py (6194 lines)\n    62|)\n    63|\n    64|# 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.\n    65|VERSION = \"0.11.0\"\n    66|\n    67|# 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.\n    68|# (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)\n    69|LOCAL_ENV_FILE = Path(__file__).resolve().parent / \".env\"\n... [6125 more lines; use offset/limit]"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
+      },
       {
-        "id": "call_00_ET_7acjyU4q4eUaJ5GvDXM91475",
-        "type": "function",
-        "function": {
-          "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"# 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.\\nVERSION = \\\"0.11.1\\\"\", \"old_string\": \"# 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.\\nVERSION = \\\"0.11.0\\\"\"}], \"path\": \"agent.py\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_7acjyU4q4eUaJ5GvDXM91475",
-    "name": "edit",
-    "content": "updated agent.py (+1 -1, 6194 lines) · 1 replacement"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_9hfc5j8Tizv0c461ihDy7906",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -rn \\\"v0\\\\.11\\\" tests/*.py | head && echo \\\"=== rules grep\\\" && grep -n \\\"래퍼\\\\|심볼릭\\\\|LLM_PYTHON\\\\|readlink\\\" .llm/rules.md README.md | head -20\", \"timeout\": 60}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_9hfc5j8Tizv0c461ihDy7906",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n=== rules grep\nREADME.md:67:| `llm` 래퍼 이식성 (v0.11.1) | `readlink -f` 로 자기 위치 해석 → macOS/BSD 처럼 `-f` 가 없는 환경에서 `~/bin/llm` 심볼릭 링크가 깨짐(`agent.py` 못 찾음) | **`readlink -f` 없이** 심볼릭 링크를 직접 따라가 해석(체인·상대 링크 지원, 최대 40 hop). `LLM_PYTHON` 으로 실행기 지정. `agent.py` 가 없으면 안내 후 종료 |\nREADME.md:68:| 테스트 | 105개 | **111개**(헤더 행·정렬 검사 + 래퍼 이식성 5개) |\nREADME.md:168:`agent.py`와 `llm` 래퍼는 시작 시 아래 순서로 `.env`를 자동으로 읽습니다\nREADME.md:200:`llm`(bash 래퍼)과 `agent.py`가 같은 폴더에 있어야 합니다.\nREADME.md:201:`llm` 래퍼는 자기 위치를 기준으로 `agent.py`를 찾습니다.\nREADME.md:202:심볼릭 링크로 걸어 두어도 링크를 따라가 실제 폴더를 찾습니다\nREADME.md:203:(`readlink -f` 없이 동작, macOS/BSD 포함). 실행할 Python 실행기는\nREADME.md:204:`LLM_PYTHON`(기본 `python3`)으로 바꿀 수 있습니다.\nREADME.md:217:`~/bin`은 사용자 전역 명령을 두는 관례적인 경로입니다. 여기에 심볼릭 링크를\nREADME.md:231:readlink ~/bin/llm # → /home/<user>/codespace/userscript/llm/llm\nREADME.md:305:| `~/bin` 심볼릭 링크 | `python3: can't open file '…/agent.py'` | v0.11.1부터 **`readlink -f` 없이** 링크를 해석합니다. 그래도 실패하면 링크가 실제 저장소를 가리키는지 확인: `readlink ~/bin/llm` → 저장소 경로. `ln -sf ~/codespace/llm/llm ~/bin/llm`로 다시 연결 |\nREADME.md:306:| 기본 `python3` 가 3.9 (macOS 구형) | 실행 즉시 `SyntaxError`(타입 문법) 또는 버전 오류 | `LLM_PYTHON=python3.12 llm …` 처럼 3.10+ 실행기 지정 (Homebrew: `brew install python@3.12`). 영구 설정은 `~/.zshrc`에 `export LLM_PYTHON=python3.12` |\nREADME.md:310:`llm` 래퍼는 심볼릭 링크를 **여러 단계 따라가고**(링크→링크→파일), 상대 경로\nREADME.md:311:링크도 해석합니다. `LLM_PYTHON` 을 바꾼 뒤 `llm --help` 가 사용법을 출력하면\nREADME.md:337:| Python 3.10+ | `python3 -V` | 최신 버전 설치 (3.9 이하면 문법 오류). macOS에서 여러 버전이면 `LLM_PYTHON=python3.12 llm …` |\nREADME.md:339:| `readlink` | `readlink ~/bin/llm` | 없어도 `~/bin` 대신 저장소의 `llm` 을 직접 실행하면 동작 (v0.11.1부터 `-f` 불필요) |\nREADME.md:590:  로드·저장 시 **정규화**됩니다(심볼릭 링크 해소, 뒤쪽 구분자 제거,\nREADME.md:591:  macOS/Windows 대소문자 통일). `a`, `a/`, `a/.`, 심볼릭 링크 경로는 모두\nREADME.md:1415:| `LLM_PYTHON` | `python3` | `llm` 래퍼가 실행할 Python 실행기(3.10+). macOS 등에서 기본 `python3`가 3.9일 때 `LLM_PYTHON=python3.12` 처럼 지정 |\nREADME.md:1500:- **진입/CLI**: `main`, `parse_args`, `expand_cli_argv`(`llmlib.cliargs.expand` 얇은 래퍼),\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_IF7JgEVzaLbM44vp9x4Q4698",
-        "type": "function",
-        "function": {
-          "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"────────────── ✦ llm v0.11.1 · 대화형 ──────────────\\n  세션      llm\\n  폴더      ~/codespace/userscript/llm\\n  셸        확인=safe(폴더 안)\", \"old_string\": \"────────────── ✦ llm v0.11.0 · 대화형 ──────────────\\n  세션      llm\\n  폴더      ~/codespace/userscript/llm\\n  셸        확인=safe(폴더 안)\"}, {\"new_string\": \"────────────── ✦ llm v0.11.1 · 대화형 ──────────────\\n  세션      llm\\n  폴더      ~/codespace/userscript/llm\\n  셸        확인=읽기 전용 자동 (repl 기본)\", \"old_string\": \"────────────── ✦ llm v0.11.0 · 대화형 ──────────────\\n  세션      llm\\n  폴더      ~/codespace/userscript/llm\\n  셸        확인=읽기 전용 자동 (repl 기본)\"}], \"path\": \"README.md\"}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_IF7JgEVzaLbM44vp9x4Q4698",
-    "name": "edit",
-    "content": "updated README.md (+2 -2, 1696 lines) · 2 replacements"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_eSP7ZVdl5VC3rfA3iw0R0102",
+        "id": "call_01_ET_JbKyRHhw0i7UdYLtrmxO5983",
         "type": "function",
         "function": {
           "name": "read",
-          "arguments": "{\"path\": \".llm/rules.md\", \"limit\": 40, \"offset\": 10}"
+          "arguments": "{\"limit\": 12, \"offset\": 1, \"path\": \"README.md\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_eSP7ZVdl5VC3rfA3iw0R0102",
+    "tool_call_id": "call_00_ET_PrG5wglW6CvZ9WVWQQv78023",
     "name": "read",
-    "content": "/home/jang/codespace/userscript/llm/.llm/rules.md (236 lines)\n    10|  `shell_policy` 셸 안전 분류, `guard` 비밀 보호, `netretry` API 재시도,\n    11|  `filestate` 편집 추적·undo, `conversation` 중단·결과 정리, `context` @멘션·\n    12|  CLAUDE.md, `web` web_fetch, `bgshell` 백그라운드 셸,\n    13|  `mdrender` 터미널용 Markdown 렌더러, `shelllog` 셸 허용/실행 로그,\n    14|  `cliargs` 서브커맨드→옵션 펼치기·기본 실행 형태). 새 기능은\n    15|  가능하면 `llmlib/`에 순수 함수로 두고 `agent.py`는 연결만 한다.\n    16|- **표준 라이브러리만 사용**. 외부 의존성 추가 금지.\n    17|- Python 3.10+ 문법 사용.\n    18|\n    19|## CLI 표면 (필수)\n    20|\n    21|- **인자 없는 `llm`(TTY)과 `llm -i`·`llm repl`·`llm agent`는 모두 대화형(REPL)** 이다\n    22|  (계산은 `wants_repl(once, stdin_tty, stdout_tty)`; 파이프·리다이렉션은 1턴).\n    23|  `llm \"질문\"`은 대화형 **첫 턴**, 1턴 실행은 `llm ask \"질문\"`(= `--once`).\n    24|  `cmd_agent`는 에이전트 루프 하나를 돌리고 `cmd_repl`이 그걸 반복한다 — 두 이름을\n    25|  마로게 두지 않는다.\n    26|- **주제별 서브커맨드**는 **첫 번째 인자**일 때만 펴진다: `ask|once`·`chat`·\n    27|  `plan`·`repl|agent|i`·`sync`·`undo`·`balance`·`rules show|init`·\n    28|  `shell log [N|clear]`·`shell allow [clear]`·\n    29|  `session ls|adopt|view|clear|delete|compact|run|ref [이름]`.\n    30|  변환은 순수 함수 `llmlib/cliargs.expand(argv)→(argv, err)` 하나만 쓰고\n    31|  (`agent.py`의 `expand_cli_argv`가 얇은 중계), `agent.py`의 `main`/`argparse`는\n    32|  펴진 플래그만 본다. 잘못된 사용법은 `err`(사용법 한 줄)을 돌려 `--help`로 안내한다.\n    33|- **옛 플래그는 별짐으로 유지하되 `argparse.SUPPRESS`로 `--help`에서 숨긴다**\n    34|  (`--allow-all`, `--auto-workspace`, `--allow-list`/`--allow-clear`,\n    35|  `--shell-log`/`--shell-log-clear`, `--init-rules`/`--rules`/`--summarize`,\n    36|  `--sync-history`, `--view`/`--run`/`--clear`/`--delete`/`--session-adopt`).\n    37|  제거는 별도 단계(2단계)에서 한다.\n    38|- 이 표면(서브커맨드 목록·기본 실행 형태·숨긴 별짐)을 바꿀 때는\n    39|  `llmlib/cliargs.py`, `agent.py`(`expand_cli_argv`·`main`·`parser` epilog),\n    40|  `tests/test_cliargs.py`, `tests/test_phase1.py`(`test_expand_cli_argv`·\n    41|  `test_help_has_subcommands`), README 「사용법 (CLI 옵션)」·「최소 사용법」을 함께 고친다.\n    42|\n    43|## 코딩 규칙\n    44|\n    45|- 변경은 **최소**로, 기존 구조와 스타일을 유지한다.\n    46|- 기존 파일 편집은 **먼저 `read`** 한 뒤 `edit`(action=replace, 여러 곳은 `edits`),\n    47|  새 파일은 `edit`(action=write).\n    48|- 탐색은 `find`(mode=list|glob|grep), 읽기는 `read`.\n    49|- 사용자 대면 메시지는 공통 UI 헬퍼(`print_title`, `print_info`, `print_ok`,\n... [187 more lines; use offset/limit]"
+    "content": "/home/jang/codespace/userscript/llm/README.md (1696 lines)\n   528|\n   529|> 서브커맨드(`ask`/`chat`/`plan`/`sync`/`undo`/`balance`/`rules`/`shell`/`session`/`repl`)는\n   530|> **첫 번째 인자**일 때만 인식됩니다. 예: `llm undo -s mysession` (O),\n   531|> `llm -s mysession undo` (X, 질문으로 처리)\n   532|\n   533|### 대화형 모드(REPL) 명령\n   534|\n   535|`llm`(인자 없음) 또는 `llm -i` · `llm repl` · `llm agent`에서 쓰는 명령입니다.\n   536|`/`까지 치고 Tab 을 누르면 완성됩니다.\n   537|\n   538|| 명령 | 설명 |\n   539||---|---|\n   540|| `/help` | 명령 목록 |\n   541|| `/clear` | 대화 비우기 (이전 대화는 `summaries/<세션>/cleared-*.json`에 백업) |\n   542|| `/compact` | 지금 대화 요약(압축) |\n   543|| `/model [이름]` | 모델 보기/바꾸기 |\n   544|| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 |\n   545|| `/undo` | 직전 턴의 파일 편집 되돌리기 |\n   546|| `/plan` | plan 모드 켜기/끄기 (프롬프트가 `llm:plan>`로 바뀜) |\n   547|| `/rules` | 세션 규칙·프로젝트 지침(CLAUDE.md 등) 보기 |\n   548|| `/bg` | 백그라운드 셸 작업 목록 |\n   549|| `/log [N]` | 셸 허용/실행 로그 보기 (`/log clear` 로 비우기, `llm shell log` 와 동일) |\n   550|| `/sync` · `/chat` · `/agent` · `/exit` | 기록 올리기 · 채팅 모드 · 에이전트 모드 · 종료 |\n   551|\n   552|진입 화면(시작 헤더)은 제목 줄과 행으로 나뉘어 있습니다:\n   553|\n   554|```text\n   555|\n   556|────────────── ✦ llm v0.11.1 · 대화형 ──────────────\n   557|  세션      llm\n... [1139 more lines; use offset/limit]"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_ET_JbKyRHhw0i7UdYLtrmxO5983",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1696 lines)\n     1|# llm — DeepSeek CLI 에이전트\n     2|\n     3|터미널에서 DeepSeek API를 사용해 파일 읽기/편집, 검색, 셸 실행을 수행하는\n     4|경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의\n     5|패키지 설치가 필요 없습니다.\n     6|\n     7|**버전:** v0.11.1 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)\n     8|\n     9|## 최소 사용법\n    10|\n    11|```bash\n    12|# API 키(저장소 폴더 .env)\n... [1684 more lines; use offset/limit]"
   },
   {
     "role": "assistant",
-    "content": "",
+    "content": "Now update README head + add v0.12 section.",
     "tool_calls": [
       {
-        "id": "call_00_tGncnVbsnHlOXm0ir6Tu7041",
+        "id": "call_00_ET_PozFg9vcrwKZ7amwAU4F3768",
         "type": "function",
         "function": {
           "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"  `test_help_has_subcommands`), README 「사용법 (CLI 옵션)」·「최소 사용법」을 함께 고친다.\\n\\n## 진입 래퍼(`llm`) 이식성 (필수)\\n\\n- **`llm`(bash 래퍼)은 `readlink -f` 에 의존하지 않는다.** macOS/BSD 의 readlink 에는\\n  `-f` 가 없어서 그것에 기대면 `~/bin/llm` 심볼릭 링크가 깨진다(`python3: can't open\\n  file '~/bin/agent.py'`). `BASH_SOURCE` + `readlink` 루프로 링크를 직접 따라간다\\n  (상대 링크·다단계 링크 지원, 최대 40 hop).\\n- **실행할 Python 은 `LLM_PYTHON`(기본 `python3`)으로 바�꾼다.** 못 찾으면 실행기를\\n  알려 주는 안내 후 exit 127, 래퍼와 `agent.py` 가 같은 폴더에 없으면 안내 후 exit 1.\\n- 이 동작을 바꿀 때는 `llm`(래퍼), `tests/test_launcher.py`, README 「설치 · 실행 파일\\n  배치」·「다른 PC에서 시작하기(macOS·다른 환경에서 쓸 때)」·「설정과 환경변수」\\n  (`LLM_PYTHON`)·「준비물 체크」를 함께 갱신한다.\", \"old_string\": \"  `test_help_has_subcommands`), README 「사용법 (CLI 옵션)」·「최소 사용법」을 함께 고친다.\"}], \"path\": \".llm/rules.md\"}"
+          "arguments": "{\"edits\": [{\"new_string\": \"**버전:** v0.12.0 — 변경 요약은 [v0.12 변경 사항](#v012-변경-사항)\", \"old_string\": \"**버전:** v0.11.1 — 변경 요약은 [v0.11 변경 사항](#v011-변경-사항)\"}, {\"new_string\": \"## v0.12 변경 사항\\n\\n`/cost`가 **세션 누적 소요 금액**까지 보여 줍니다(토큰 단가표가 없으므로\\n잔액 차이 방식 — 세션 시작 잔액 − 현재 잔액, 원화 환산). 금액을 낼 수 없으면\\n이유를 한 줄로 안내합니다.\\n\\n| 영역 | v0.11 | v0.12 |\\n|---|---|---|\\n| `/cost` | 누적 토큰 사용량만(`토큰 사용: …`) | **토큰 + 세션 소요 금액** — `세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)` |\\n| 금액 계산 | 표시 없음 | 세션 시작 잔액(첫 성공 조회, `SESSION_BALANCE_BASE`) − 현재 잔액 |\\n| 계산 불가 | — | 이유를 안내(잔액 표시 꺼짐·API 키 없음·기준 잔액 없음·조회 실패). 금액을 지어내지 않음 |\\n| 반복 호출 | — | 현재 잔액은 `COST_BALANCE_TTL`(5초) 동안 캐시해 연속 `/cost` 로 API를 두드리지 않음 |\\n| 채팅 모드 | 시작 잔액을 조회하지 않음 | 조용히 기준 잔액만 캐시(푸터는 그대로 표시하지 않음) → `/cost` 금액은 동작 |\\n| 테스트 | 111개 | **124개**(잔액 차이 계산·불가 안내·캐시 13개) |\\n\\n## v0.11 변경 사항\", \"old_string\": \"## v0.11 변경 사항\"}, {\"new_string\": \"| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 + **소요 금액**(세션 시작 잔액 − 현재 잔액, 원화 환산) |\", \"old_string\": \"| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 |\"}], \"path\": \"README.md\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_tGncnVbsnHlOXm0ir6Tu7041",
+    "tool_call_id": "call_00_ET_PozFg9vcrwKZ7amwAU4F3768",
     "name": "edit",
-    "content": "updated .llm/rules.md (+12 -0, 248 lines) · 1 replacement"
+    "content": "updated README.md (+17 -2, 1711 lines) · 3 replacements"
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_ZdF3sTpBn1PVCbcF8Cxj8863",
+        "id": "call_00_opyWuh48YnqGz08ynVfr1663",
         "type": "function",
         "function": {
           "name": "edit",
-          "arguments": "{\"edits\": [{\"new_string\": \"- **실행할 Python 은 `LLM_PYTHON`(기본 `python3`)으로 바꾼다.** 못 찾으면 실행기를\", \"old_string\": \"- **실행할 Python 은 `LLM_PYTHON`(기본 `python3`)으로 바�꾼다.** 못 찾으면 실행기를\"}], \"path\": \".llm/rules.md\"}"
+          "arguments": "{\"edits\": [{\"new_string\": \"- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\\n  한 번을 아낌). `--chat` 모드에서는 푸터를 표시하지 않습니다(대신 기준 잔액만\\n  조용히 캐시해 `/cost`의 금액은 쓸 수 있습니다).\\n\\n### 대화형 `/cost` — 세션 누적 소요 금액\\n\\n토큰 단가표가 없으므로 **잔액 차이**로만 금액을 냅니다: **세션 시작 잔액(첫\\n성공 조회, `SESSION_BALANCE_BASE`) − 현재 잔액**, 원화로 환산.\\n\\n```text\\nℹ️ 토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회\\n  세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)\\n```\\n\\n- REPL 턴 푸터는 첫 턴에만 나오므로, **이어가는 턴의 금액은 `/cost`로 확인**합니다.\\n- 현재 잔액은 `COST_BALANCE_TTL`(5초) 동안 캐시해 연속 `/cost`가 API를 두드리지\\n  않습니다(`COST_BALANCE_CACHE`).\\n- 금액이 화폐 최소 단위(0.01)에 못 미치면 `0.01 미만`과 “정확한 금액은 알 수\\n  없습니다” 안내를 붙이고, 잔액이 늘었으면 `세션 잔액 증가`로 표기합니다.\\n- 금액을 낼 수 없으면 **이유를 한 줄로 안내**하고 지어내지 않습니다:\\n  `--no-balance`로 꺼져 있음 · API 키 없음 · 기준 잔액 없음(조회 실패) ·\\n  현재 잔액 조회 실패 · 잔액 형식 오류.\\n- 채팅 모드(`/chat`)도 시작 시 조용히 잔액을 한 번 조회하므로(푸터는 없음)\\n  `/cost`의 금액 줄은 동일하게 동작합니다.\", \"old_string\": \"- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\\n  한 번을 아낌). `--chat` 모드에서는 표시하지 않습니다.\"}, {\"new_string\": \"2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시\\n   (화면에는 출력하지 않음). 채팅 모드는 조용히(경고 없이) 캐시만 하고,\\n   성공한 첫 조회는 `/cost` 기준 잔액(`SESSION_BALANCE_BASE`)으로도 남긴다\", \"old_string\": \"2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시\\n   (화면에는 출력하지 않음)\"}, {\"new_string\": \"| [`/cost`](#대화형-cost--세션-누적-소요-금액) | 이번 REPL 세션의 토큰 사용량 + 세션 소요 금액(잔액 차이, 불가 시 이유 안내) |\", \"old_string\": \"| `/cost` | 이번 REPL 세션의 토큰 사용량 |\"}], \"path\": \"README.md\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ZdF3sTpBn1PVCbcF8Cxj8863",
+    "tool_call_id": "call_00_opyWuh48YnqGz08ynVfr1663",
     "name": "edit",
-    "content": "updated .llm/rules.md (+1 -1, 248 lines) · 1 replacement"
+    "content": "ERROR: edits[3] old_string을 찾지 못했습니다. 파일 내용을 다시 읽으세요."
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_ET_L8OYydoLvz6k4jRYo57T1696",
+        "id": "call_00_7LYKvJVrMBFJrrwuxcgQ0780",
         "type": "function",
         "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && sed -n '40,58p' .llm/rules.md && python3 -m py_compile agent.py llmlib/*.py && echo \\\"compile ok\\\" && python3 -m pytest -q tests 2>&1 | tail -5\", \"timeout\": 300}"
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\\n  한 번을 아낌). `--chat` 모드에서는 푸터를 표시하지 않습니다(대신 기준 잔액만\\n  조용히 캐시해 `/cost`의 금액은 쓸 수 있습니다).\\n\\n### 대화형 `/cost` — 세션 누적 소요 금액\\n\\n토큰 단가표가 없으므로 **잔액 차이**로만 금액을 냅니다: **세션 시작 잔액(첫\\n성공 조회, `SESSION_BALANCE_BASE`) − 현재 잔액**, 원화로 환산.\\n\\n```text\\nℹ️ 토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회\\n  세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)\\n```\\n\\n- REPL 턴 푸터는 첫 턴에만 나오므로, **이어가는 턴의 금액은 `/cost`로 확인**합니다.\\n- 현재 잔액은 `COST_BALANCE_TTL`(5초) 동안 캐시해 연속 `/cost`가 API를 두드리지\\n  않습니다(`COST_BALANCE_CACHE`).\\n- 금액이 화폐 최소 단위(0.01)에 못 미치면 `0.01 미만`과 “정확한 금액은 알 수\\n  없습니다” 안내를 붙이고, 잔액이 늘었으면 `세션 잔액 증가`로 표기합니다.\\n- 금액을 낼 수 없으면 **이유를 한 줄로 안내**하고 지어내지 않습니다:\\n  `--no-balance`로 꺼져 있음 · API 키 없음 · 기준 잔액 없음(조회 실패) ·\\n  현재 잔액 조회 실패 · 잔액 형식 오류.\\n- 채팅 모드(`/chat`)도 시작 시 조용히 잔액을 한 번 조회하므로(푸터는 없음)\\n  `/cost`의 금액 줄은 동일하게 동작합니다.\", \"old_string\": \"- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\\n  한 번을 아낌). `--chat` 모드에서는 표시하지 않습니다.\"}, {\"new_string\": \"2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시\\n   (화면에는 출력하지 않음). 채팅 모드는 조용히(경고 없이) 캐시만 하고,\\n   성공한 첫 조회는 `/cost` 기준 잔액(`SESSION_BALANCE_BASE`)으로도 남긴다\", \"old_string\": \"2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시\\n   (화면에는 출력하지 않음)\"}, {\"new_string\": \"| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 + **소요 금액**(세션 시작 잔액 − 현재 잔액, 원화 환산) |\", \"old_string\": \"| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 + **소요 금액**(세션 시작 잔액 − 현재 잔액, 원화 환산) |\"}], \"path\": \"README.md\"}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ET_L8OYydoLvz6k4jRYo57T1696",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n  `tests/test_cliargs.py`, `tests/test_phase1.py`(`test_expand_cli_argv`·\n  `test_help_has_subcommands`), README 「사용법 (CLI 옵션)」·「최소 사용법」을 함께 고친다.\n\n## 진입 래퍼(`llm`) 이식성 (필수)\n\n- **`llm`(bash 래퍼)은 `readlink -f` 에 의존하지 않는다.** macOS/BSD 의 readlink 에는\n  `-f` 가 없어서 그것에 기대면 `~/bin/llm` 심볼릭 링크가 깨진다(`python3: can't open\n  file '~/bin/agent.py'`). `BASH_SOURCE` + `readlink` 루프로 링크를 직접 따라간다\n  (상대 링크·다단계 링크 지원, 최대 40 hop).\n- **실행할 Python 은 `LLM_PYTHON`(기본 `python3`)으로 바꾼다.** 못 찾으면 실행기를\n  알려 주는 안내 후 exit 127, 래퍼와 `agent.py` 가 같은 폴더에 없으면 안내 후 exit 1.\n- 이 동작을 바꿀 때는 `llm`(래퍼), `tests/test_launcher.py`, README 「설치 · 실행 파일\n  배치」·「다른 PC에서 시작하기(macOS·다른 환경에서 쓸 때)」·「설정과 환경변수」\n  (`LLM_PYTHON`)·「준비물 체크」를 함께 갱신한다.\n\n## 코딩 규칙\n\n- 변경은 **최소**로, 기존 구조와 스타일을 유지한다.\n- 기존 파일 편집은 **먼저 `read`** 한 뒤 `edit`(action=replace, 여러 곳은 `edits`),\ncompile ok\n........................................................................ [ 64%]\n.......................................                                  [100%]\n111 passed in 1.23s\n"
+    "tool_call_id": "call_00_7LYKvJVrMBFJrrwuxcgQ0780",
+    "name": "edit",
+    "content": "ERROR: edits[3] old_string 과 new_string 이 같습니다."
   },
   {
     "role": "assistant",
     "content": "",
     "tool_calls": [
       {
-        "id": "call_00_GjgISEL3ZvQFCD0VHFCx5354",
+        "id": "call_00_ET_C3yEecCCG4xruWjtgaRI9360",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\\n  한 번을 아낌). `--chat` 모드에서는 푸터를 표시하지 않습니다(대신 기준 잔액만\\n  조용히 캐시해 `/cost`의 금액은 쓸 수 있습니다).\\n\\n### 대화형 `/cost` — 세션 누적 소요 금액\\n\\n토큰 단가표가 없으므로 **잔액 차이**로만 금액을 냅니다: **세션 시작 잔액(첫\\n성공 조회, `SESSION_BALANCE_BASE`) − 현재 잔액**, 원화로 환산.\\n\\n```text\\nℹ️ 토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회\\n  세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)\\n```\\n\\n- REPL 턴 푸터는 첫 턴에만 나오므로, **이어가는 턴의 금액은 `/cost`로 확인**합니다.\\n- 현재 잔액은 `COST_BALANCE_TTL`(5초) 동안 캐시해 연속 `/cost`가 API를 두드리지\\n  않습니다(`COST_BALANCE_CACHE`).\\n- 금액이 화폐 최소 단위(0.01)에 못 미치면 `0.01 미만`과 “정확한 금액은 알 수\\n  없습니다” 안내를 붙이고, 잔액이 늘었으면 `세션 잔액 증가`로 표기합니다.\\n- 금액을 낼 수 없으면 **이유를 한 줄로 안내**하고 지어내지 않습니다:\\n  `--no-balance`로 꺼져 있음 · API 키 없음 · 기준 잔액 없음(조회 실패) ·\\n  현재 잔액 조회 실패 · 잔액 형식 오류.\\n- 채팅 모드(`/chat`)도 시작 시 조용히 잔액을 한 번 조회하므로(푸터는 없음)\\n  `/cost`의 금액 줄은 동일하게 동작합니다.\", \"old_string\": \"- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\\n  한 번을 아낌). `--chat` 모드에서는 표시하지 않습니다.\"}, {\"new_string\": \"2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시\\n   (화면에는 출력하지 않음). 채팅 모드는 조용히(경고 없이) 캐시만 하고,\\n   성공한 첫 조회는 `/cost` 기준 잔액(`SESSION_BALANCE_BASE`)으로도 남긴다\", \"old_string\": \"2. (잔액 표시가 켜져 있으면) 실시간 환율을 준비하고 시작 잔액을 조회해 캐시\\n   (화면에는 출력하지 않음)\"}], \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_C3yEecCCG4xruWjtgaRI9360",
+    "name": "edit",
+    "content": "updated README.md (+25 -2, 1734 lines) · 2 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "Now update the function-list entry and version examples in README.",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_vs4ixA2bc1lc3KOjKV8o1977",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `prefetch_balance(quiet=)`/\\n  `SESSION_BALANCE_BASE`(첫 성공 조회 = `/cost` 기준 잔액)/`balance_cost`(`balance_cost_from`)/\\n  `current_balance_amounts`/`COST_BALANCE_CACHE`/`COST_BALANCE_TTL`(5초 캐시)/\\n  `cost_summary_lines`/`session_cost_lines`(세션 누적 금액 줄·불가 이유 안내)/`cost_krw`/\", \"old_string\": \"- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `prefetch_balance`/`balance_cost`(화폐별 소모액)/`cost_krw`/\"}, {\"new_string\": \"llm session ls          # 상태 + 버전(v0.12.0) 표시 (API 호출 없음)\", \"old_string\": \"llm session ls          # 상태 + 버전(v0.11.1) 표시 (API 호출 없음)\"}, {\"new_string\": \"────────────── ✦ llm v0.12.0 · 대화형 ──────────────\", \"old_string\": \"────────────── ✦ llm v0.11.1 · 대화형 ──────────────\", \"replace_all\": true}], \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_vs4ixA2bc1lc3KOjKV8o1977",
+    "name": "edit",
+    "content": "updated README.md (+7 -4, 1737 lines) · 4 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_I0wyITvhI2UbCWkgNfW18595",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"0\\\\.11\\\\.1\\\" README.md | head -20\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_I0wyITvhI2UbCWkgNfW18595",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n82:| `llm` 래퍼 이식성 (v0.11.1) | `readlink -f` 로 자기 위치 해석 → macOS/BSD 처럼 `-f` 가 없는 환경에서 `~/bin/llm` 심볼릭 링크가 깨짐(`agent.py` 못 찾음) | **`readlink -f` 없이** 심볼릭 링크를 직접 따라가 해석(체인·상대 링크 지원, 최대 40 hop). `LLM_PYTHON` 으로 실행기 지정. `agent.py` 가 없으면 안내 후 종료 |\n320:| `~/bin` 심볼릭 링크 | `python3: can't open file '…/agent.py'` | v0.11.1부터 **`readlink -f` 없이** 링크를 해석합니다. 그래도 실패하면 링크가 실제 저장소를 가리키는지 확인: `readlink ~/bin/llm` → 저장소 경로. `ln -sf ~/codespace/llm/llm ~/bin/llm`로 다시 연결 |\n354:| `readlink` | `readlink ~/bin/llm` | 없어도 `~/bin` 대신 저장소의 `llm` 을 직접 실행하면 동작 (v0.11.1부터 `-f` 불필요) |\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_SsVxsTfF5aMOXfq1hAuf8303",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 -m py_compile agent.py llmlib/*.py && python3 -m pytest -q tests 2>&1 | tail -15\", \"timeout\": 600}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_SsVxsTfF5aMOXfq1hAuf8303",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n........................................................................ [ 58%]\n....................................................                     [100%]\n124 passed in 1.22s\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_9r5LCoWEzueQUtSbuEbl2361",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"^def print\\\\|^print =\\\" agent.py | head\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_9r5LCoWEzueQUtSbuEbl2361",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n509:def print_title(label: str) -> None:\n516:def print_section(label: str) -> None:\n524:def print_info(message: str) -> None:\n530:def print_ok(message: str) -> None:\n536:def print_warn(message: str, stream: bool = False) -> None:\n543:def print_error(message: str, stream: bool = True) -> None:\n1005:def print_move_candidates(candidates: list[tuple[str, str]], root: Path) -> None:\n3954:def print_banner(\n3996:def print_phase(label: str) -> None:\n4001:def print_continue_status(root: Path, session: str, history_file: Path) -> None:\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_W37oRMKhxmXNGFW2Vehn2002",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 - <<'PY'\\nimport agent as llm\\nprint(llm.cost_summary_lines({\\\"CNY\\\":\\\"3.00\\\"},{\\\"CNY\\\":\\\"2.95\\\"}))\\nprint(llm.cost_summary_lines({\\\"CNY\\\":\\\"3.00\\\"},{\\\"CNY\\\":\\\"3.00\\\"}))\\nprint(llm.cost_summary_lines({\\\"CNY\\\":\\\"1.00\\\",\\\"USD\\\":\\\"1.00\\\"},{\\\"CNY\\\":\\\"0.95\\\",\\\"USD\\\":\\\"0.99\\\"}))\\nprint(llm.cost_summary_lines({\\\"CNY\\\":\\\"1.00\\\"},{\\\"CNY\\\":\\\"3.00\\\"}))\\nPY\", \"timeout\": 120}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_W37oRMKhxmXNGFW2Vehn2002",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n['세션 소요 금액: 0.05 CNY (11.00 원)   (시작 3.00 CNY → 현재 2.95 CNY)']\n['세션 소요 금액: 0.01 미만   (시작 3.00 CNY → 현재 3.00 CNY)', '잔액이 화폐 최소 단위(0.01)로 반올림되어 정확한 금액은 알 수 없습니다.']\n['세션 소요 금액: 24.50 원 (0.05 CNY · 0.01 USD)   (시작 1.00 CNY · 1.00 USD → 현재 0.95 CNY · 0.99 USD)']\n['세션 잔액 증가: 2.00 CNY (440.00 원)   (시작 1.00 CNY → 현재 3.00 CNY)']\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_20VdVV2m4WgCVqIqmWda4739",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"누적 토큰\\\\|토큰 사용량\\\" README.md | head -20\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_20VdVV2m4WgCVqIqmWda4739",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n63:| `/cost` | 누적 토큰 사용량만(`토큰 사용: …`) | **토큰 + 세션 소요 금액** — `세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)` |\n469:| `--no-balance` | 시작 잔액 조회 및 종료 시 잔액·소요 비용·토큰 사용량 표시 생략 |\n559:| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 + **소요 금액**(세션 시작 잔액 − 현재 잔액, 원화 환산) |\n964:- **토큰 사용량**은 API 응답의 `usage`를 누적한 값입니다(입력/출력/합계,\n1626:   잔액·소요 비용·토큰 사용량 푸터). 작업 계획 블록은 지우지 않고 화면에 남긴다\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_8shbIFYX17GNVgFwQBkp9510",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"| `--no-balance` | 시작 잔액 조회 및 종료 시 잔액·소요 비용·토큰 사용량 표시 생략 (`/cost` 금액도 이유 안내로 대체) |\", \"old_string\": \"| `--no-balance` | 시작 잔액 조회 및 종료 시 잔액·소요 비용·토큰 사용량 표시 생략 |\"}], \"path\": \"README.md\"}"
+        }
+      },
+      {
+        "id": "call_01_ET_LvLiIDOWQyQCxijqUIWO7638",
         "type": "function",
         "function": {
           "name": "todo",
-          "arguments": "{\"items\": [{\"content\": \"llm 래퍼: 휴대용 심볼릭 링크 해석 + LLM_PYTHON 지원\", \"status\": \"done\"}, {\"content\": \"테스트 추가(BSD식 readlink 에서도 동작)\", \"status\": \"done\"}, {\"content\": \"README: 다른 PC 절 macOS/SSH 별칭·LLM_PYTHON, 환경변수 표, v0.11.1 버전/표\", \"status\": \"done\"}, {\"content\": \".llm/rules.md·VERSION 0.11.1 갱신\", \"status\": \"done\"}, {\"content\": \"py_compile·pytest 검증 후 커밋/push\", \"status\": \"in_progress\"}]}"
+          "arguments": "{\"items\": [{\"content\": \"agent.py: SESSION_BALANCE_BASE·잔액 캐시·balance_cost_from·cost_summary_lines·session_cost_lines 구현, /cost 핸들러 연결\", \"status\": \"done\"}, {\"content\": \"VERSION 0.12.0 · README(/cost 표·잔액 절·v0.12 표·함수 목록·배너 예)\", \"status\": \"done\"}, {\"content\": \"테스트 추가(금액 줄 순수 계산·불가 안내)\", \"status\": \"done\"}, {\"content\": \"py_compile·pytest 검증 후 커밋/push\", \"status\": \"in_progress\"}]}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_GjgISEL3ZvQFCD0VHFCx5354",
+    "tool_call_id": "call_00_ET_8shbIFYX17GNVgFwQBkp9510",
+    "name": "edit",
+    "content": "updated README.md (+1 -1, 1737 lines) · 1 replacement"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_ET_LvLiIDOWQyQCxijqUIWO7638",
     "name": "todo",
-    "content": "📋 작업 계획 갱신: 총 5개, 완료 4개 · 진행 중: py_compile·pytest 검증 후 커밋/push · 목표 유지: llm 래퍼가 readlink -f 없는 환경(macOS 등)에서도 심볼릭 링크를 해석하도록 고치고, README 다른 PC 절에 macOS/SSH 별칭 주의와 LLM_PYTHON 안내를 추가한 뒤 v0.11.1로 올려 검증·커밋한다."
+    "content": "📋 작업 계획 갱신: 총 4개, 완료 3개 · 진행 중: py_compile·pytest 검증 후 커밋/push · 목표 유지: `/cost`가 세션 누적 소요 금액(세션 시작 잔액 − 현재 잔액, 원화 환산)까지 보여주도록 개선하고, 불가할 때 이유를 안내한다(권장: 잔액 차이 방식 + 안내 줄)."
   },
   {
     "role": "assistant",
-    "content": "",
+    "content": "Now the checkpoint rule: pull --rebase first, then verify, then commit/push.",
     "tool_calls": [
       {
-        "id": "call_00_ET_3AUiTDjE62YrOaFki7Od4207",
+        "id": "call_00_ET_dOTdMEYs1i9FoCpVrNHv6769",
         "type": "function",
         "function": {
           "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git pull --rebase --autostash 2>&1 | tail -3 && git status --short\", \"timeout\": 180}"
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git pull --rebase --autostash 2>&1 | tail -5 && git status --short | head -20\", \"timeout\": 180}"
         }
       }
     ]
   },
   {
     "role": "tool",
-    "tool_call_id": "call_00_ET_3AUiTDjE62YrOaFki7Od4207",
+    "tool_call_id": "call_00_ET_dOTdMEYs1i9FoCpVrNHv6769",
     "name": "shell",
-    "content": "exit 0\n--- stdout ---\n이미 업데이트 상태입니다.\n M .llm/history_llm.json\n M .llm/rules.md\n M .llm/summaries/llm/index.json\n M README.md\n M agent.py\n M llm\n M tests/test_phase1.py\n?? .llm/summaries/llm/2026-10-07T00-54-30.json\n?? .llm/summaries/llm/2026-10-07T00-54-30.md\n?? .llm/summaries/llm/2026-10-07T00-59-46.json\n?? .llm/summaries/llm/2026-10-07T00-59-46.md\n?? .llm/summaries/llm/2026-10-07T01-08-12.json\n?? .llm/summaries/llm/2026-10-07T01-08-12.md\n?? tests/test_launcher.py\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_EhwRChwEnFhwfxeX6qVo8736",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git add agent.py llm README.md tests/test_phase1.py tests/test_launcher.py .llm/rules.md && git commit -q -m \\\"fix(launcher): llm 래퍼가 readlink -f 없이 심볼릭 링크를 해석하도록 고쳐 macOS 이식성 개선 + LLM_PYTHON 지원 (v0.11.1)\\\" && git push 2>&1 | tail -3 && echo \\\"---\\\" && git log --oneline -1 && git show --stat --oneline HEAD | tail -8\", \"timeout\": 300}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_EhwRChwEnFhwfxeX6qVo8736",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\nTo github-hanurijang:hanurijang/llm.git\n   717f7de..522ac5b  main -> main\n---\n522ac5b fix(launcher): llm 래퍼가 readlink -f 없이 심볼릭 링크를 해석하도록 고쳐 macOS 이식성 개선 + LLM_PYTHON 지원 (v0.11.1)\n522ac5b fix(launcher): llm 래퍼가 readlink -f 없이 심볼릭 링크를 해석하도록 고쳐 macOS 이식성 개선 + LLM_PYTHON 지원 (v0.11.1)\n .llm/rules.md          |  12 ++++++\n README.md              |  39 +++++++++++++++---\n agent.py               |   2 +-\n llm                    |  32 ++++++++++++++-\n tests/test_launcher.py | 106 +++++++++++++++++++++++++++++++++++++++++++++++++\n tests/test_phase1.py   |   2 +-\n 6 files changed, 183 insertions(+), 10 deletions(-)\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_1uaCbQTV5ogNLQc1P3iU3874",
-        "type": "function",
-        "function": {
-          "name": "shell",
-          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git status --short && echo \\\"--- ahead:\\\" && git rev-list --count origin/main..HEAD && echo \\\"--- wrapper final:\\\" && sed -n '1,25p' llm && rm -rf /tmp/lnktest /tmp/ltest\", \"timeout\": 120}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_1uaCbQTV5ogNLQc1P3iU3874",
-    "name": "shell",
-    "content": "exit 0\n--- stdout ---\n M .llm/history_llm.json\n M .llm/summaries/llm/index.json\n?? .llm/summaries/llm/2026-10-07T00-54-30.json\n?? .llm/summaries/llm/2026-10-07T00-54-30.md\n?? .llm/summaries/llm/2026-10-07T00-59-46.json\n?? .llm/summaries/llm/2026-10-07T00-59-46.md\n?? .llm/summaries/llm/2026-10-07T01-08-12.json\n?? .llm/summaries/llm/2026-10-07T01-08-12.md\n--- ahead:\n0\n--- wrapper final:\n#!/bin/bash\n# DeepSeek CLI agent 진입점. 실제 로직은 agent.py.\n\n# 실제 스크립트 위치 찾기: 심볼릭 링크를 직접 따라간다.\n# (macOS/BSD readlink 에는 -f 가 없으므로 readlink -f 에 기대지 않는다.)\nSOURCE=\"${BASH_SOURCE[0]}\"\nif command -v readlink >/dev/null 2>&1; then\n    hops=0\n    while [ -L \"$SOURCE\" ] && [ \"$hops\" -lt 40 ]; do\n        LINK=\"$(readlink \"$SOURCE\")\" || break\n        [ -n \"$LINK\" ] || break\n        case \"$LINK\" in\n            /*) SOURCE=\"$LINK\" ;;\n            *)  SOURCE=\"$(cd \"$(dirname \"$SOURCE\")\" && pwd)/$LINK\" ;;\n        esac\n        hops=$((hops + 1))\n    done\nfi\nDIR=\"$(cd \"$(dirname \"$SOURCE\")\" && pwd)\"\n\n# 래퍼와 agent.py 는 같은 폴더에 있어야 한다(잘못된 심볼릭 링크·복사 실패 안내).\nif [ ! -f \"$DIR/agent.py\" ]; then\n    echo \"llm: $DIR/agent.py 를 찾을 수 없습니다.\" >&2\n    echo \"     'llm' 래퍼와 agent.py 를 같은 폴더에 두세요.\" >&2\n    echo \"     (심볼릭 링크가 깨진 경우: ln -sf <저장소>/llm ~/bin/llm)\" >&2\n"
-  },
-  {
-    "role": "assistant",
-    "content": "",
-    "tool_calls": [
-      {
-        "id": "call_00_ET_jwq3rPMWDrQ4rhkmZ1dP7602",
-        "type": "function",
-        "function": {
-          "name": "todo",
-          "arguments": "{\"items\": [{\"content\": \"llm 래퍼: 휴대용 심볼릭 링크 해석 + LLM_PYTHON 지원\", \"status\": \"done\"}, {\"content\": \"테스트 추가(BSD식 readlink 에서도 동작)\", \"status\": \"done\"}, {\"content\": \"README: 다른 PC 절 macOS/SSH 별칭·LLM_PYTHON, 환경변수 표, v0.11.1 버전/표\", \"status\": \"done\"}, {\"content\": \".llm/rules.md·VERSION 0.11.1 갱신\", \"status\": \"done\"}, {\"content\": \"py_compile·pytest 검증 후 커밋/push\", \"status\": \"done\"}]}"
-        }
-      }
-    ]
-  },
-  {
-    "role": "tool",
-    "tool_call_id": "call_00_ET_jwq3rPMWDrQ4rhkmZ1dP7602",
-    "name": "todo",
-    "content": "📋 작업 계획 갱신: 총 5개, 완료 5개 · 목표 유지: llm 래퍼가 readlink -f 없는 환경(macOS 등)에서도 심볼릭 링크를 해석하도록 고치고, README 다른 PC 절에 macOS/SSH 별칭 주의와 LLM_PYTHON 안내를 추가한 뒤 v0.11.1로 올려 검증·커밋한다."
-  },
-  {
-    "role": "assistant",
-    "content": "**v0.11.1 로 반영하고 push까지 끝냈습니다.** 래퍼가 `readlink -f` 없이도 심볼릭 링크를 따라가고, README에 macOS/SSH 별칭 주의와 `LLM_PYTHON` 안내를 넣었습니다.\n\n**코드**\n- `llm` 래퍼: `readlink -f` 제거 → `readlink` 루프로 링크 직접 해석(상대 링크·다단계 체인, 최대 40 hop). `LLM_PYTHON`(기본 `python3`)으로 실행기 지정, 없으면 안내 후 `exit 127`; 래퍼 옆에 `agent.py`가 없으면 안내 후 `exit 1`.\n- `agent.py`: `VERSION = \"0.11.1\"`.\n- 수동 검증: 링크→링크→파일 체인 OK, `readlink -f`를 거부하는 fake readlink 환경에서 `usage: llm` 정상 출력(수정 전엔 `can't open file '…/agent.py'`).\n\n**테스트**\n- `tests/test_launcher.py` 신설 5개 — 체인 링크 해석 / BSD식 readlink 환경 / agent.py 없는 폴더 안내 / `LLM_PYTHON` 미존재(127) / `LLM_PYTHON` 지정. `tests/test_phase1.py` 버전 0.11.1 → **111 passed**, `py_compile` OK.\n\n**문서·규칙**\n- README: 「설치·실행 파일 배치」에 링크 해석·`LLM_PYTHON`, 「① 코드 가져오기」에 **SSH 별칭(`github-hanurijang`)은 PC 로컬 설정** 주의, 새 절 「macOS·다른 환경에서 쓸 때」(증상→해결 4행), 「준비물 체크」에 `readlink`·3.9 대응, 「설정과 환경변수」에 `LLM_PYTHON` 행, v0.11 표에 이식성 행·테스트 111개, 배너 예시 v0.11.1.\n- `.llm/rules.md`: 「진입 래퍼(`llm`) 이식성 (필수)」 절 추가.\n\n🔁 동기화: 코드 push 완료 · `522ac5b \"fix(launcher): llm 래퍼가 readlink -f 없이 …\"` (717f7de→522ac5b) · `llm` 32±, `agent.py` 2±, `README.md` 39±, `tests/test_launcher.py` +106, `tests/test_phase1.py` 2±, `.llm/rules.md` +12 · 대화 기록은 로컬(`llm sync` 로 올림)"
+    "content": "exit 0\n--- stdout ---\n이미 업데이트 상태입니다.\n M .llm/history_llm.json\n M .llm/summaries/llm/index.json\n M README.md\n M agent.py\n M tests/test_phase1.py\n?? .llm/summaries/llm/2026-10-07T01-16-04.json\n?? .llm/summaries/llm/2026-10-07T01-16-04.md\n?? tests/test_cost.py\n"
   }
 ]
