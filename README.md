@@ -25,7 +25,7 @@ llm sync                        # 대화 기록만 원격에
 | 하고 싶은 일 | 명령 |
 |---|---|
 | 에이전트(도구) | `llm "질문"` · `llm ask "질문"` |
-| 대화형(여러 턴) | `llm -i` · `llm repl` |
+| 대화형(여러 턴) | `llm -i` · `llm repl` (셸 확인 기본=전부 확인) |
 | 순수 채팅 | `llm chat "질문"` · `llm --chat` |
 | 셸을 더 관대하게 | `llm --trust "질문"` |
 | 셸 전부 확인 | `llm --confirm-all "질문"` |
@@ -59,10 +59,11 @@ Claude Code 같은 클라이언트 동작을 목표로 한 개선입니다.
 | API 오류 | 429/5xx/네트워크 오류 즉시 실패 | 지수 백오프로 최대 4회 재시도(`Retry-After` 준수, `LLM_RETRIES`) |
 | 편집 | 읽지 않은 파일도 덮어씀, diff 없음, 되돌리기 없음 | **read 한 파일만 편집**, 읽은 뒤 바깥 변경 감지, 색 diff 표시, `--confirm-edits`, 턴 단위 `llm undo`/`/undo`, CRLF 보존, `edits` 배열로 원자적 다중 치환 |
 | 모드 | 에이전트/채팅 | + **plan 모드**(읽기 전용 조사 → 계획만) |
-| REPL | `input()` 한 줄, `/exit /sync /chat /agent` | readline(방향키·히스토리·Tab 완성), 여러 줄(`\` 이어쓰기, `"""` 블록), `/help /clear /compact /model /cost /undo /plan /rules /bg` |
+| REPL | `input()` 한 줄, `/exit /sync /chat /agent` | readline(방향키·히스토리·Tab 완성), 여러 줄(`\` 이어쓰기, `"""` 블록), `/help /clear /compact /model /cost /undo /plan /rules /bg /log` · 셸 확인 기본=전부 확인 |
+| 셸 로그 | — | 허용해 실행된/거부한 명령을 세션별 로그(`shell_log_<세션>.jsonl`)에 남기고 `llm shell-log`(REPL `/log`)로 조회 |
 | 맥락 | `.llm/rules.md`만, 문자 수 기준 압축 | `@파일` 첨부, `CLAUDE.md`/`AGENTS.md`(상위 폴더·`~/.claude`) 반영, **실제 토큰 수** 기준 압축, 오래된 긴 도구 결과 일괄 비우기 |
 | 도구 | 5개, 순차 실행, 셸 최대 180초 | + `web_fetch`, `task`(읽기 전용 서브에이전트), 백그라운드 셸, grep `context`/`output`, 읽기 전용 호출 **병렬 실행**, 셸 최대 600초 |
-| 구조 | `agent.py` 6,000줄 단일 파일, 테스트 9개 | `llmlib/` 9개 모듈로 분리(셸 정책·보안·재시도·Markdown 렌더러 등), 테스트 61개(셸 정책 표·Markdown 렌더러 테스트 포함) |
+| 구조 | `agent.py` 단일 파일, 테스트 9개 | `llmlib/` 10개 모듈로 분리(셸 정책·보안·재시도·Markdown 렌더러·셸 로그 등), 테스트 87개(셸 정책 표·Markdown 렌더러·셸 로그 테스트 포함) |
 
 ---
 
@@ -290,6 +291,10 @@ llm --ref design-notes "이 맥락 참고해서 인증 모듈 리팩터링 이�
 # 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기
 llm --allow-list
 llm --allow-clear
+
+# 확인 프롬프트에서 허용해 자동 실행된 셸 명령 기록 보기 / 비우기
+llm shell-log        # 최근 20건 (llm shell-log 50 처럼 개수 지정)
+llm shell-log clear
 ```
 
 세션은 실행한 폴더에 자동으로 연결됩니다. 같은 폴더에서 다시 `llm`을
@@ -332,6 +337,8 @@ llm --allow-clear
 | `--undo` | 직전 턴에 `edit` 도구로 바꾼 파일을 원래대로 (`llm undo`, `-y`로 확인 생략). 셸로 바꾼 파일은 대상 아님 |
 | `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 |
 | `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 |
+| `--shell-log [N]` | 이 세션의 셸 허용/실행 로그 보기 (최근 N건, 기본 20). `llm shell-log` |
+| `--shell-log-clear` | 이 세션의 셸 로그 비우기. `llm shell-log clear` |
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
 | `--rules` | 이 폴더의 세션 규칙 보기 |
 | `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
@@ -384,8 +391,9 @@ llm "좋아, 그 계획대로 진행해"
 llm undo
 ```
 
-> 서브커맨드(`ask`/`chat`/`plan`/`sync`/`undo`/`session`/`repl`)는 **첫 번째 인자**일
-> 때만 인식됩니다. 예: `llm undo -s mysession` (O), `llm -s mysession undo` (X, 질문으로 처리)
+> 서브커맨드(`ask`/`chat`/`plan`/`sync`/`undo`/`session`/`repl`/`shell-log`)는
+> **첫 번째 인자**일 때만 인식됩니다. 예: `llm undo -s mysession` (O),
+> `llm -s mysession undo` (X, 질문으로 처리)
 
 ### 대화형 모드(REPL) 명령
 
@@ -402,6 +410,7 @@ llm undo
 | `/plan` | plan 모드 켜기/끄기 (프롬프트가 `llm:plan>`로 바뀜) |
 | `/rules` | 세션 규칙·프로젝트 지침(CLAUDE.md 등) 보기 |
 | `/bg` | 백그라운드 셸 작업 목록 |
+| `/log [N]` | 셸 허용/실행 로그 보기 (`/log clear` 로 비우기, `llm shell-log` 와 동일) |
 | `/sync` · `/chat` · `/agent` · `/exit` | 기록 올리기 · 채팅 모드 · 에이전트 모드 · 종료 |
 
 - **Ctrl+C**: 모델 응답·도구 실행 중이면 **그 턴만 중단**하고 프롬프트로 돌아옵니다.
@@ -966,7 +975,10 @@ alias로 동작합니다.
    - 환경변수 접두: `FOO=1 npm test`처럼 앞에 지정이 붙어도 프로그램을 보고
      같은 기준으로 판단합니다(`PATH`/`LD_PRELOAD`/`PYTHONPATH` 등 실행 대상을
      바꾸는 이름이 붙으면 확인 대상)
-   - `--confirm-all`로 자동 실행을 끌 수 있습니다.
+   - `--confirm-all`로 자동 실행을 끌 수 있습니다. **REPL(`llm -i`/`llm repl`)은
+    기본이 `all`(전부 확인)** 이며, 시작할 때 현재 설정을 한 줄로 보여 줍니다
+    (`llm --safe/--trust/--yes/--confirm-all`이나 `LLM_*` 환경변수를 직접 주면
+    그쪽을 따릅니다).
 4. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 `[y/N/a]` 확인을 받습니다.
    프롬프트에는 **실제로 실행될 명령**만 보여줍니다(무엇을 하려는지는 위의
    `🔧 shell <의도 요약>` 줄에 이미 표시됩니다).
@@ -1071,6 +1083,48 @@ alias로 동작합니다.
 데이터이므로 기본 모드에서 묻지 않습니다(아래 「heredoc·인라인 스크립트 처리」).
 확인이 자주 뜨는 반복 작업이 많으면 `--auto-workspace`(또는
 `LLM_AUTO_WORKSPACE=1`)를 쓰세요.
+
+### REPL 기본 확인 모드와 셸 로그
+
+`llm -i` / `llm repl`(대화형)은 한 프로세스에서 여러 턴을 이어가며 셸을 자주
+부르므로 **셸 확인 기본을 `--confirm-all`(전부 확인, `all`)로 둡니다.**
+일반(에이전트) 실행은 기존처럼 작업 폴더 안만 자동인 `safe`가 기본입니다.
+`--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_AUTO_WORKSPACE` 같은
+`LLM_*` 환경변수를 **직접 주면 그쪽을 따릅니다**(repl 기본은 그때 쓰지 않음).
+
+시작할 때 현재 설정을 한 줄로 보여 줍니다.
+
+```text
+ℹ️  셸 확인=전부(repl 기본) — 완화 --safe/--trust/--yes · 자동 허용 기록 ~/.local/share/llm/shell_log_llm.jsonl (기록 켬 · 조회 /log)
+```
+
+확인 프롬프트에서 허용한 명령과, 허용 목록(`a`) 덕분에 프롬프트 없이 실행된
+명령은 **세션별 로그**에 한 줄씩 남습니다(`shell_log_<세션>.jsonl`).
+
+| 종류 | 표시 | 언제 |
+|------|------|------|
+| `auto` | 자동 허용 실행 | 자동 허용 목록에 있어 **묻지 않고** 실행됨 |
+| `a` | 자동 허용 추가 | 이번 프롬프트에서 `a`(그 명령/계열 자동 허용) |
+| `all` | 이번 실행 생략 | 이번 실행 동안 생략(`all`) |
+| `y` | 이번만 허용 | 이번만 실행(`y`) |
+| `n` | 거부 | 거부(`n`) |
+
+```text
+$ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-log 50)
+─────────────────── 셸 허용 로그  [llm]  최근 3/3건 ───────────────────
+ℹ️  자동 허용 실행 1 · 이번만 허용 1 · 거부 1
+   02-05 11:22  자동 허용 실행 npm test
+   02-05 11:20  이번만 허용   git pull --ff-only
+   02-05 11:18  거부       rm -rf /srv/app (취소)
+ℹ️  파일: ~/.local/share/llm/shell_log_llm.jsonl
+ℹ️  비우기: llm shell-log clear
+```
+
+- 기록은 **부가 기능**이라 쓰기에 실패해도 셸 실행을 막지 않습니다.
+- 최근 500건까지만 남기고, 명령은 500자까지만 저장합니다.
+- `LLM_SHELL_LOG=0`이면 새 기록을 남기지 않습니다(기존 파일은 조회 가능).
+- 비우기: `llm shell-log clear` (REPL 은 `/log clear`).
+- 기록 파일은 기기 로컬 정보라 대화 기록 위치(`LLM_HISTORY`)와 무관하게 홈에 둡니다.
 
 ### heredoc·인라인 스크립트 처리
 
@@ -1184,6 +1238,7 @@ alias로 동작합니다.
 | `LLM_COMPACT_TOKENS` | `90000` | 실제 입력 토큰이 이 값을 넘으면 대화 압축 |
 | `LLM_PROJECT_DOCS` | (켜짐) | `0`이면 `CLAUDE.md`/`AGENTS.md` 프로젝트 지침을 읽지 않음 |
 | `LLM_SHELL_KEEP_ENV` | (없음) | 셸에 그대로 넘길 비밀 변수 이름(쉼표 구분). 기본은 모두 제거 |
+| `LLM_SHELL_LOG` | `1`(켜짐) | `0`이면 셸 허용/실행 로그를 남기지 않음 (`llm shell-log` 조회는 유지) |
 
 `.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는
 덮어쓰지 않음).
@@ -1212,6 +1267,7 @@ alias로 동작합니다.
 | `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (기기 로컬, 경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |
 | `~/.local/share/llm/summaries/<세션>/` | 요약 백업 (`LLM_HISTORY=home`일 때만) |
 | `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답, 기기 로컬) |
+| `~/.local/share/llm/shell_log_<세션>.jsonl` | 허용·자동 실행·거부한 셸 명령 로그 (최근 500건, `llm shell-log`, 기기 로컬) |
 | `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효, 기기 로컬) |
 | `~/.local/share/llm/autopull.json` | 폴더별 마지막 원격 확인 시각 (질의 전 자동 수신 간격 판단, 기기 로컬) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
@@ -1220,7 +1276,7 @@ alias로 동작합니다.
 | `~/.local/share/llm/repl_history` | REPL 입력 히스토리 (↑/↓) |
 | `$TMPDIR/llm-bg-*/bg_N.log` | 백그라운드 셸 출력 (실행 중에만) |
 
-> **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`rates.json`·
+> **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`shell_log_*.jsonl`·`rates.json`·
 > `autopull.json`·`undo/`·`repl_history`)는 대화 기록 위치와 무관하게 항상 홈에 저장됩니다(경로·환율·
 > 마지막 확인 시각 같은 이 PC 전용 정보).
 
@@ -1250,6 +1306,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 | `web.py` | `web_fetch` 본문 가져오기·HTML → 텍스트 |
 | `mdrender.py` | 외부 도구 없이 터미널용 Markdown 렌더링(헤딩·목록·코드·인용·표·인라인 강조, 한글 폭 정렬) |
 | `bgshell.py` | 백그라운드 셸 작업 관리(`BgManager`) |
+| `shelllog.py` | 셸 허용/실행 로그(`ShellLog`, `log_path`, `rows`/`tally`) |
 
 `agent.py`의 주요 구성:
 
@@ -1270,7 +1327,9 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   (기본 허용 모드에서 `sudo`·설치·폴더 밖 삭제만 확인), `scan_text`/`heredoc_shell_exec`
   (heredoc 본문은 데이터로, 셸에 넘길 때만 코드로 판정), `intent_summary`(명령 의도 요약),
   `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`, 중단 시 롤백),
-  `resolve_ask_mode`/`SHELL_ASK_LABELS`/`SHELL_ASK_SOURCES`(확인 모드 결정·배너 표시),
+  `resolve_ask_mode`/`repl_ask_mode`/`SHELL_ASK_LABELS`/`SHELL_ASK_SOURCES`(확인 모드 결정·배너
+  표시, 대화형은 기본 `all`), `shell_log_file`/`shell_log_enabled`/`shell_log`/
+  `short_home`/`cmd_shell_log`(허용·자동 실행 로그, `--shell-log`/`llm shell-log`/REPL `/log`),
   `scope_targets`/`scope_dir`/`scope_usable`/`scope_label`(폴더 단위 자동 허용 범위),
   `command_prefix` / `strip_env_assignments`(자동 허용 접두, 환경변수 지정 인식),
   `ShellApproval`(세션별 자동 허용 목록: 정확·계열·폴더 범위, `--allow-list`/`--allow-clear`)
@@ -1381,6 +1440,9 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   환경변수」). `llm --allow-all`로 이번 실행만 기본 모드로 돌릴 수 있습니다.
 - 같은 폴더에서 반복 작업이 많으면 확인 프롬프트에서 `a`를 골라 그 폴더를
   기억시키거나, `llm --allow-list`로 지금까지 허용된 범위를 확인하세요.
+  `llm shell-log`는 확인 없이(또는 `a`/`all` 덕분에) 실행된 명령까지 시간순으로
+  보여 줍니다. 대화형(`llm repl`)은 셸 확인이 **기본 전부 확인**이라, 묻기 싫은
+  명령은 `a`(기억)나 `all`(이번만)로 넘기면 됩니다.
 
 ### 다른 PC에서 대화가 안 보임
 

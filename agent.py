@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from llmlib import guard, mdrender, web
+from llmlib import guard, mdrender, shelllog, web
 from llmlib.bgshell import BgManager
 from llmlib.context import expand_mentions, load_project_docs
 from llmlib.conversation import clear_old_tool_results, finalize_interrupted
@@ -72,7 +72,8 @@ HISTORY_DIR = Path.home() / ".local/share/llm"
 # 대화 기록(history·summaries)을 어디에 둘지 정하는 환경변수와 기본 위치.
 # 기본은 "세션 폴더 안"(`<작업폴더>/.llm/`)이라 프로젝트 저장소와 함께 push/pull 되어
 # 다른 PC에서도 같은 대화를 이어갈 수 있다. `LLM_HISTORY=home`이면 예전처럼 홈에만 둔다.
-# (기기 로컬 정보인 bindings.json·rates.json·shell_allow_*.json은 항상 홈에 남는다.)
+# (기기 로컬 정보인 bindings.json·rates.json·shell_allow_*.json·shell_log_*.jsonl은
+#  항상 홈에 남는다.)
 HISTORY_SCOPE_ENV = "LLM_HISTORY"
 REPO_HISTORY_DIR_NAME = ".llm"
 HISTORY_SCOPE_HOME = "home"
@@ -2066,6 +2067,7 @@ class RunState:
     model: str = DEFAULT_MODEL
     thinking: bool = True
     session: str = ""
+    ask_mode: str = "outside"  # 셸 확인 범위(safe/risky/all/none). 로그 비고에 쓴다.
 
 
 RUN = RunState()
@@ -2862,6 +2864,40 @@ def allow_file(session: str) -> Path:
     return HISTORY_DIR / f"shell_allow_{sanitize_session_name(session)}.json"
 
 
+def shell_log_file(session: str) -> Path:
+    """셸 허용/실행 로그 파일(홈·세션별). 기기 로컬 정보라 기록 위치와 무관."""
+    return shelllog.log_path(HISTORY_DIR, session)
+
+
+def shell_log_enabled() -> bool:
+    """로그 기록 여부(`LLM_SHELL_LOG=0` 이면 끔)."""
+    return os.environ.get("LLM_SHELL_LOG", "").strip().lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
+
+
+_SHELL_LOG: shelllog.ShellLog | None = None
+
+
+def shell_log() -> shelllog.ShellLog:
+    """이 세션의 셸 허용/실행 로그(처음 쓸 때 만들어 캐시)."""
+    global _SHELL_LOG
+    path = shell_log_file(RUN.session)
+    if _SHELL_LOG is None or _SHELL_LOG.path != path:
+        _SHELL_LOG = shelllog.ShellLog(path, enabled=shell_log_enabled())
+    return _SHELL_LOG
+
+
+def short_home(path: Path) -> str:
+    """홈 아래 경로는 `~` 로 줄여 보여준다."""
+    text = str(path)
+    home = str(Path.home())
+    return "~" + text[len(home) :] if text.startswith(home + os.sep) else text
+
+
 def command_key(command: str) -> str:
     """공백만 정리한 비교용 명령 문자열."""
     return re.sub(r"\s+", " ", (command or "").strip())
@@ -3206,10 +3242,14 @@ def confirm_shell(
     if yes:
         return True
     if approval is not None and approval.is_allowed(command):
+        shell_log().record("auto", command, mode=RUN.ask_mode, note="허용 목록")
         return True
     if not sys.stdin.isatty():
         print_error("셸 실행은 TTY가 아니면 --yes 가 필요합니다.", stream=True)
         return False
+
+    def log_kind(kind: str, segment: str, note: str = "") -> None:
+        shell_log().record(kind, segment, mode=RUN.ask_mode, note=note)
 
     def risky(segment: str) -> bool:
         return not only_risky or needs_confirm_always(segment, root)
@@ -3221,6 +3261,7 @@ def confirm_shell(
         if risky(s) and (approval is None or not approval.segment_allowed(s, root))
     ]
     if not pending:
+        log_kind("auto", command, "허용 목록(조각)")
         return True
 
     compound = len(segments) > 1
@@ -3242,20 +3283,25 @@ def confirm_shell(
         if approval is not None and approval.segment_allowed(segment, root):
             if compound and not approval.auto_all:
                 print(f"   {C.dim}{idx}) {segment} (이미 자동 허용){C.reset}")
+            log_kind("auto", segment, "허용 목록(조각)")
             continue
         label = f"   {C.dim}{idx}) {C.reset}" if compound else "   "
         answer = ask_shell_segment(label, segment, approval, root=root)
         if answer == "y":
+            log_kind("y", segment, "이번만")
             continue
         if answer in {"a", "all"}:
             if approval is not None:
                 if answer == "a":
                     added.append(approval.remember(segment, root))
+                    log_kind("a", segment, "자동 허용에 추가")
                 else:
                     # all 은 저장하지 않는다: 이번 실행 동안만 확인을 생략한다.
                     approval.auto_all = True
+                    log_kind("all", segment, "이번 실행 동안 생략")
                     print_ok("이번 실행 동안 셸 확인을 묻지 않습니다. (llm 재시작 시 해제)")
             continue
+        log_kind("n", segment, "취소")
         print_warn("셸 실행을 취소했습니다.", stream=True)
         if approval is not None and snap is not None:
             approval.restore(snap)  # 중단했으니 이번에 추가한 허용은 취소
@@ -3970,6 +4016,27 @@ def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
     return True, False, "outside", ""
 
 
+# repl 기본 확인 범위(명시 옵션·환경변수가 없을 때). 값은 “전부 확인”.
+REPL_DEFAULT_ASK_MODE = "all"
+
+
+def repl_ask_mode(args: Any) -> tuple[bool, bool, str, str, bool]:
+    """repl(대화형)의 셸 확인 범위.
+
+    반환: (auto_workspace, allow_all, 모드, 출처, repl기본적용여부)
+
+    대화형은 한 프로세스에서 여러 턴을 이어가며 셸을 자주 부르므로, 명시
+    옵션·환경변수가 없으면 기본을 **전부 확인**(`all`)으로 둔다. 허용한
+    명령은 프롬프트의 `a`/`all`로 다시 묻지 않게 하고 그 내역을 로그로 남긴다.
+    `--safe`/`--trust`/`--yes`(또는 `LLM_*` 환경변수)를 주면 그대로 따른다.
+    """
+    auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
+    # 기본값(=safe, 출처 없음)일 때만 바꾼다. 사용자가 준 옵션·환경변수는 존중.
+    if ask_mode == "outside" and not ask_source:
+        return False, False, REPL_DEFAULT_ASK_MODE, "", True
+    return auto_workspace, allow_all, ask_mode, ask_source, False
+
+
 # 이번 실행에서 누적한 API 토큰 사용량(usage). 종료 요약에 쓴다.
 USAGE_TOTAL: dict[str, int] = {}
 # usage 응답에서 누적할 키(모델/버전에 따라 없는 키는 무시한다).
@@ -4435,6 +4502,59 @@ def cmd_allow(session: str, clear: bool, root: Path | None = None) -> int:
             print(f"   {C.cyan}정확{C.reset}  {command}")
     print_info(f"파일: {approval.path}")
     print_info("해제: llm --allow-clear")
+    return 0
+
+
+# `llm shell-log` 색상(종류별로 구분).
+SHELL_LOG_COLORS = {
+    "auto": C.green,
+    "a": C.green,
+    "all": C.yellow,
+    "y": C.cyan,
+    "n": C.red,
+}
+
+
+def cmd_shell_log(
+    session: str,
+    limit: int = shelllog.DEFAULT_VIEW_LINES,
+    clear: bool = False,
+) -> int:
+    """이 세션의 셸 허용/실행 로그를 최근 순으로 보거나 비운다.
+
+    확인 프롬프트에서 허용(`a`/`all`/`y`)한 명령과, 허용 목록 덕분에 프롬프트
+    없이 실행된 명령(`auto`), 거부(`n`)가 한 줄씩 남는다.
+    """
+    log = shelllog.ShellLog(shell_log_file(session), enabled=shell_log_enabled())
+    if clear:
+        if log.path.is_file() and log.clear():
+            print_ok(f"[{session}] 셸 로그를 비웠습니다.")
+        else:
+            print_info(f"[{session}] 셸 로그 파일이 없습니다.")
+        return 0
+
+    entries = log.entries()
+    shown = min(max(1, limit), len(entries))
+    print_title(f"셸 허용 로그  [{session}]  최근 {shown}/{len(entries)}건")
+    if not entries:
+        print_info("기록이 없습니다. 확인 프롬프트에서 허용하면 여기에 쌓입니다.")
+    else:
+        counts = shelllog.tally(entries)
+        if counts:
+            print_info(counts)
+        for stamp, kind, command, note in shelllog.rows(entries, limit):
+            color = SHELL_LOG_COLORS.get(kind, C.dim)
+            line = (
+                f"   {C.dim}{pad(stamp, 12)}{C.reset}"
+                f" {color}{pad(shelllog.kind_label(kind), 8)}{C.reset} {command}"
+            )
+            if note:
+                line += f" {C.dim}({note}){C.reset}"
+            print(line)
+    print_info(f"파일: {log.path}")
+    if not shell_log_enabled():
+        print_warn("LLM_SHELL_LOG=0 이라 새 기록은 남지 않습니다.")
+    print_info("비우기: llm shell-log clear")
     return 0
 
 
@@ -5315,6 +5435,10 @@ def expand_cli_argv(argv: list[str]) -> list[str]:
         return ["--undo", *rest]
     if head == "plan":
         return ["--plan", *rest]
+    if head in {"shell-log", "shelllog"}:
+        if rest and rest[0] in {"clear", "reset"}:
+            return ["--shell-log-clear", *rest[1:]]
+        return ["--shell-log", *rest]
     if head == "session":
         if not rest or rest[0] in {"ls", "list", "status"}:
             return []  # 세션 목록(인자 없는 llm 과 동일)
@@ -5414,6 +5538,7 @@ REPL_COMMANDS = {
     "/plan": "plan 모드 켜기/끄기 (읽기 전용 조사 + 계획만)",
     "/rules": "세션 규칙·프로젝트 지침 보기",
     "/bg": "백그라운드 셸 작업 목록",
+    "/log": "셸 허용/실행 로그 (llm shell-log [N|clear])",
     "/sync": "대화 기록 올리기",
     "/chat": "채팅 모드(도구 없음)",
     "/agent": "에이전트 모드",
@@ -5480,11 +5605,20 @@ def cmd_repl(
     args: Any,
 ) -> int:
     """같은 프로세스에서 여러 턴 이어가기. 종료 시 1회 sync(켜져 있을 때)."""
-    auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
+    auto_workspace, allow_all, ask_mode, ask_source, repl_default = repl_ask_mode(args)
+    RUN.ask_mode = ask_mode
     print_banner(session, root, args.chat, ask_mode=ask_mode, ask_source=ask_source)
     print_continue_status(root, session, history_file)
     print_phase("대화형 모드")
     print_info("/help 명령 목록 · 빈 줄·/exit 종료 · Ctrl+C 는 진행 중인 턴만 중단 · @파일 첨부 · 줄 끝 \\ 여러 줄")
+    if repl_default:
+        print_info(
+            f"셸 {C.bold}{SHELL_ASK_LABELS['all']}{C.reset}(repl 기본) "
+            f"{C.dim}— 완화 --safe/--trust/--yes{C.reset} · "
+            f"자동 허용 기록 {C.bold}{short_home(shell_log_file(session))}{C.reset} "
+            f"{C.dim}({shell_log_enabled() and '기록 켬' or 'LLM_SHELL_LOG=0 으로 끔'}"
+            f" · 조회 /log){C.reset}"
+        )
     if not args.no_pull:
         maybe_auto_pull(root, enabled=True)
     setup_readline()
@@ -5558,6 +5692,12 @@ def cmd_repl(
                 cmd_show_rules(root)
             elif cmd == "/bg":
                 print(bg_manager().summary())
+            elif cmd in {"/log", "/shell-log", "/allow-log"}:
+                if rest == "clear":
+                    cmd_shell_log(session, clear=True)
+                else:
+                    limit = int(rest) if rest.isdigit() else shelllog.DEFAULT_VIEW_LINES
+                    cmd_shell_log(session, limit=limit)
             else:
                 print_warn("알 수 없는 명령입니다. /help 로 목록을 보세요.")
             continue
@@ -5576,7 +5716,7 @@ def cmd_repl(
             stream=not args.no_stream,
             thinking=not args.no_thinking,
             show_thinking=args.show_thinking,
-            auto_safe=not args.confirm_all,
+            auto_safe=not args.confirm_all and not repl_default,
             auto_workspace=auto_workspace,
             allow_all=allow_all,
             ask_mode=ask_mode,
@@ -5681,6 +5821,18 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     )
     parser.add_argument("--allow-list", action="store_true", help="이 세션의 셸 자동 허용 목록 보기")
     parser.add_argument("--allow-clear", action="store_true", help="이 세션의 셸 자동 허용 목록 비우기")
+    parser.add_argument(
+        "--shell-log",
+        nargs="?",
+        const=shelllog.DEFAULT_VIEW_LINES,
+        type=int,
+        metavar="N",
+        help=(
+            "이 세션의 셸 허용/실행 로그 보기 (최근 N건, "
+            f"기본 {shelllog.DEFAULT_VIEW_LINES}) — 허용해 자동 실행된 명령 기록"
+        ),
+    )
+    parser.add_argument("--shell-log-clear", action="store_true", help="이 세션의 셸 로그 비우기")
     parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
     parser.add_argument("--rules", action="store_true", help="이 폴더의 세션 규칙 보기")
     parser.add_argument("--summarize", action="store_true", help="현재 대화를 지금 요약·백업 (강제)")
@@ -5749,9 +5901,10 @@ def main(argv: list[str] | None = None) -> int:
     inspect_only = (
         args.view or args.run or args.clear or args.delete or args.summarize
         or args.allow_list or args.allow_clear or args.undo
+        or args.shell_log is not None or args.shell_log_clear
     )
     # 남의 세션에도 허용되는 "보기만" 하는 명령.
-    read_only = bool(args.view or args.allow_list)
+    read_only = bool(args.view or args.allow_list or args.shell_log is not None)
 
     owned = folders.get(folder_key)  # 이 폴더에 묶인 세션
     session: str | None = None
@@ -5849,6 +6002,13 @@ def main(argv: list[str] | None = None) -> int:
         return rc
     if args.allow_list or args.allow_clear:
         return cmd_allow(session, clear=args.allow_clear, root=root)
+    if args.shell_log is not None or args.shell_log_clear:
+        limit = (
+            args.shell_log
+            if isinstance(args.shell_log, int) and args.shell_log > 0
+            else shelllog.DEFAULT_VIEW_LINES
+        )
+        return cmd_shell_log(session, limit=limit, clear=args.shell_log_clear)
     if args.delete:
         existed = history_file.is_file()
         if existed:
@@ -5886,6 +6046,7 @@ def main(argv: list[str] | None = None) -> int:
 
     # 셸 확인 범위: 명시 옵션이 환경변수보다 우선한다.
     auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
+    RUN.ask_mode = ask_mode
 
     rc = cmd_agent(
         prompt=prompt,

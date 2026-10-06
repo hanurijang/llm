@@ -10,8 +10,8 @@
   `shell_policy` 셸 안전 분류, `guard` 비밀 보호, `netretry` API 재시도,
   `filestate` 편집 추적·undo, `conversation` 중단·결과 정리, `context` @멘션·
   CLAUDE.md, `web` web_fetch, `bgshell` 백그라운드 셸,
-  `mdrender` 터미널용 Markdown 렌더러). 새 기능은 가능하면
-  `llmlib/`에 순수 함수로 두고 `agent.py`는 연결만 한다.
+  `mdrender` 터미널용 Markdown 렌더러, `shelllog` 셸 허용/실행 로그). 새 기능은
+  가능하면 `llmlib/`에 순수 함수로 두고 `agent.py`는 연결만 한다.
 - **표준 라이브러리만 사용**. 외부 의존성 추가 금지.
 - Python 3.10+ 문법 사용.
 
@@ -62,8 +62,9 @@
 - 대화 기록은 **작업 폴더 안 `<작업폴더>/.llm/history_<세션>.json`**(기본)에
   저장한다. `LLM_HISTORY=home`이면 예전처럼 `~/.local/share/llm/`에 저장한다
   (이 폴백은 유지한다).
-- **기기 로컬 정보(`bindings.json`, `shell_allow_*.json`, `rates.json`,
-  `autopull.json`)는 항상 홈**에 둔다. 대화 기록 위치 변경과 무관하다.
+- **기기 로컬 정보(`bindings.json`, `shell_allow_*.json`,
+  `shell_log_*.jsonl`, `rates.json`, `autopull.json`)는 항상 홈**에 둔다.
+  대화 기록 위치 변경과 무관하다.
 - 홈에만 있던 기록은 그 폴더에서 처음 실행할 때 `.llm/`으로 **한 번** 옮기고,
   양쪽에 있으면 더 긴 쪽을 채택하며 홈 원본은 `*.migrated`로 남긴다.
 - **대화 기록 자동 커밋·push는 기본 꺼짐.** `LLM_AUTO_SYNC=1`일 때만 실행
@@ -85,6 +86,25 @@
   `auto_sync_history`/`AUTO_SYNC_ENV`/`auto_pull_enabled`/`auto_pull_interval`/
   `maybe_auto_pull`/`AUTO_PULL_*`와 README 「대화 기록 동기화」·
   「파일/데이터 위치」·「설정과 환경변수」 표를 함께 갱신한다.
+
+## 셸 확인 기본값과 로그 (필수)
+
+- **대화형(`llm repl`/`llm -i`)의 셸 확인 기본은 `all`(전부 확인)** 이다
+  (`REPL_DEFAULT_ASK_MODE`, `repl_ask_mode`). 일반(에이전트) 실행은 기존대로
+  `safe`(작업 폴더 안 자동)이며, `--safe`/`--trust`/`--yes`/`--confirm-all`이나
+  `LLM_*` 환경변수를 주면 그쪽을 우선한다(repl 기본을 덮지 않는다).
+- repl 시작 시 **설정 상태를 한 줄로** 표시한다(확인 모드 · 완화 옵션 · 로그 파일
+  경로/기록 여부 · 조회법).
+- 확인 프롬프트에서 허용해 **묻지 않고 실행된 셸 명령은 세션별 로그에 남긴다**
+  (`shelllog.ShellLog` → `~/.local/share/llm/shell_log_<세션>.jsonl`, 종류
+  `auto/a/all/y/n`, 최근 500건). 로그 쓰기 실패는 셸 실행을 막지 않는다.
+- 조회: `llm shell-log [N]`(`--shell-log`), REPL `/log [N]`;
+  비우기: `llm shell-log clear`(`--shell-log-clear`)/`/log clear`.
+  `LLM_SHELL_LOG=0`이면 새로 남기지 않는다.
+- 이 동작을 바꿀 때는 `agent.py`의 `shell_log_file`/`shell_log_enabled`/
+  `shell_log`/`cmd_shell_log`/`REPL_DEFAULT_ASK_MODE`/`repl_ask_mode`,
+  `llmlib/shelllog.py`와 README 「셸 실행과 안전장치」(「REPL 기본 확인 모드와
+  셸 로그」)·「설정과 환경변수」·「파일/데이터 위치」를 함께 갱신한다.
 
 ## README 갱신 (필수)
 
@@ -146,7 +166,7 @@
 - `llm` 자체를 시험하면서 만든 세션 흔적은 **확인 없이 삭제해도 된다**
   (사용자 상시 허용). 대상은 `~/.local/share/llm/` 안에서 세션 이름이
   `*selftest*`, `ztest*`, `zshort*`, `zautotest*`, `zptyselftest*` 패턴인 것:
-  - `history_<세션>.json`, `shell_allow_<세션>.json`
+  - `history_<세션>.json`, `shell_allow_<세션>.json`, `shell_log_<세션>.jsonl`
   - `summaries/<세션>/`
   - `bindings.json`의 해당 폴더 ↔ 세션 매핑(폴더가 사라진 항목 포함)
 - 단, **현재 실행 중인 세션**(`current_session` 값)의 파일은 아직 지우지 않는다
