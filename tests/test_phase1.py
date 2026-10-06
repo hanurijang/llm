@@ -20,7 +20,7 @@ import agent as llm  # noqa: E402
 
 class Phase1Defaults(unittest.TestCase):
     def test_version(self) -> None:
-        self.assertEqual(llm.VERSION, "0.9.0")
+        self.assertEqual(llm.VERSION, "0.10.0")
 
     def test_version_matches_readme(self) -> None:
         """README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신)."""
@@ -117,12 +117,13 @@ class Phase1Defaults(unittest.TestCase):
 class Phase2Cli(unittest.TestCase):
     def test_expand_cli_argv(self) -> None:
         self.assertEqual(llm.expand_cli_argv(["sync"]), ["--sync-history"])
-        self.assertEqual(llm.expand_cli_argv(["ask", "hi"]), ["hi"])
+        self.assertEqual(llm.expand_cli_argv(["ask", "hi"]), ["--once", "hi"])
         self.assertEqual(llm.expand_cli_argv(["chat", "x"]), ["--chat", "x"])
         self.assertEqual(llm.expand_cli_argv(["repl"]), ["--interactive"])
         self.assertEqual(llm.expand_cli_argv(["i"]), ["--interactive"])
+        self.assertEqual(llm.expand_cli_argv(["agent"]), ["--interactive"])
         self.assertEqual(llm.expand_cli_argv(["session", "adopt"]), ["--session-adopt"])
-        self.assertEqual(llm.expand_cli_argv(["session"]), [])
+        self.assertEqual(llm.expand_cli_argv(["session"]), ["--list-sessions"])
         self.assertEqual(llm.expand_cli_argv(["-s", "a"]), ["-s", "a"])
 
     def test_parse_interactive(self) -> None:
@@ -130,6 +131,23 @@ class Phase2Cli(unittest.TestCase):
         self.assertTrue(args.interactive)
         args = llm.parse_args(llm.expand_cli_argv(["sync"]))
         self.assertTrue(args.sync_history)
+        args = llm.parse_args(llm.expand_cli_argv(["ask", "hi"]))
+        self.assertTrue(args.once)
+        self.assertFalse(getattr(args, "interactive"))
+
+    def test_help_has_subcommands(self) -> None:
+        """`llm --help` 는 새 서브커맨드 안내를 보여야 한다."""
+        import contextlib
+        import io
+
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            with self.assertRaises(SystemExit):
+                llm.parse_args(["--help"])
+        out = buf.getvalue()
+        self.assertIn("session ls|adopt|view", out)
+        self.assertIn("shell log", out)
+        self.assertNotIn("--shell-log ", out)  # 옛 플래그는 help 에서 숨긴다
 
 
 if __name__ == "__main__":

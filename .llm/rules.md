@@ -10,10 +10,35 @@
   `shell_policy` 셸 안전 분류, `guard` 비밀 보호, `netretry` API 재시도,
   `filestate` 편집 추적·undo, `conversation` 중단·결과 정리, `context` @멘션·
   CLAUDE.md, `web` web_fetch, `bgshell` 백그라운드 셸,
-  `mdrender` 터미널용 Markdown 렌더러, `shelllog` 셸 허용/실행 로그). 새 기능은
+  `mdrender` 터미널용 Markdown 렌더러, `shelllog` 셸 허용/실행 로그,
+  `cliargs` 서브커맨드→옵션 펼치기·기본 실행 형태). 새 기능은
   가능하면 `llmlib/`에 순수 함수로 두고 `agent.py`는 연결만 한다.
 - **표준 라이브러리만 사용**. 외부 의존성 추가 금지.
 - Python 3.10+ 문법 사용.
+
+## CLI 표면 (필수)
+
+- **인자 없는 `llm`(TTY)과 `llm -i`·`llm repl`·`llm agent`는 모두 대화형(REPL)** 이다
+  (계산은 `wants_repl(once, stdin_tty, stdout_tty)`; 파이프·리다이렉션은 1턴).
+  `llm "질문"`은 대화형 **첫 턴**, 1턴 실행은 `llm ask "질문"`(= `--once`).
+  `cmd_agent`는 에이전트 루프 하나를 돌리고 `cmd_repl`이 그걸 반복한다 — 두 이름을
+  마로게 두지 않는다.
+- **주제별 서브커맨드**는 **첫 번째 인자**일 때만 펴진다: `ask|once`·`chat`·
+  `plan`·`repl|agent|i`·`sync`·`undo`·`balance`·`rules show|init`·
+  `shell log [N|clear]`·`shell allow [clear]`·
+  `session ls|adopt|view|clear|delete|compact|run|ref [이름]`.
+  변환은 순수 함수 `llmlib/cliargs.expand(argv)→(argv, err)` 하나만 쓰고
+  (`agent.py`의 `expand_cli_argv`가 얇은 중계), `agent.py`의 `main`/`argparse`는
+  펴진 플래그만 본다. 잘못된 사용법은 `err`(사용법 한 줄)을 돌려 `--help`로 안내한다.
+- **옛 플래그는 별짐으로 유지하되 `argparse.SUPPRESS`로 `--help`에서 숨긴다**
+  (`--allow-all`, `--auto-workspace`, `--allow-list`/`--allow-clear`,
+  `--shell-log`/`--shell-log-clear`, `--init-rules`/`--rules`/`--summarize`,
+  `--sync-history`, `--view`/`--run`/`--clear`/`--delete`/`--session-adopt`).
+  제거는 별도 단계(2단계)에서 한다.
+- 이 표면(서브커맨드 목록·기본 실행 형태·숨긴 별짐)을 바꿀 때는
+  `llmlib/cliargs.py`, `agent.py`(`expand_cli_argv`·`main`·`parser` epilog),
+  `tests/test_cliargs.py`, `tests/test_phase1.py`(`test_expand_cli_argv`·
+  `test_help_has_subcommands`), README 「사용법 (CLI 옵션)」·「최소 사용법」을 함께 고친다.
 
 ## 코딩 규칙
 
@@ -77,7 +102,7 @@
   끄는 방법은 `LLM_AUTO_PULL=0` 또는 `--no-pull`.
 - clone 직후 `.llm/history_*`가 하나이거나 폴더명과 같으면 **세션 자동 바인딩**.
   여러 개면 `llm session adopt`.
-- 대화형: `llm -i` / `llm repl` (같은 프로세스 다턴, 종료 시 sync 1회).
+- 대화형: `llm`(인자 없음) / `llm -i` / `llm repl` / `llm agent` (같은 프로세스 다턴, 종료 시 sync 1회).
 - `.llm/`이 `.gitignore`에 있으면 에러로 안내하고 중단한다.
 - `LLM_HISTORY=home`으로 되돌리면 홈의 `*.migrated` 기록을 다시 꺼내 온다.
 - 이 동작을 바꿀 때는 `agent.py`의 `HISTORY_*`/`REPO_HISTORY_DIR_NAME`/
@@ -89,9 +114,9 @@
 
 ## 셸 확인 기본값과 로그 (필수)
 
-- **대화형(`llm repl`/`llm -i`)의 셸 확인 기본은 `readonly`(읽기 전용 자동)** 이다
+- **대화형(`llm`/`llm -i`/`llm repl`/`llm agent`)의 셸 확인 기본은 `readonly`(읽기 전용 자동)** 이다
   (`REPL_DEFAULT_ASK_MODE`, `repl_ask_mode`). 읽기 전용 명령은 조용히 실행하고
-  그 밖은 확인한다. 일반(에이전트) 실행은 기존대로 `safe`(작업 폴더 안 자동)이며,
+  그 밖은 확인한다. 1턴 실행(`llm ask`)은 기존대로 `safe`(작업 폴더 안 자동)이며,
   `--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_*` 환경변수를 주면 그쪽을
   우선한다(repl 기본을 덮지 않는다).
 - **권한 상승(`sudo`/`su`/`doas`/`pkexec`) 조각은 모드·허용 목록·`a`/`all`·
@@ -103,8 +128,8 @@
 - 확인 프롬프트에서 허용해 **묻지 않고 실행된 셸 명령은 세션별 로그에 남긴다**
   (`shelllog.ShellLog` → `~/.local/share/llm/shell_log_<세션>.jsonl`, 종류
   `auto/a/all/y/n`, 최근 500건). 로그 쓰기 실패는 셸 실행을 막지 않는다.
-- 조회: `llm shell-log [N]`(`--shell-log`), REPL `/log [N]`;
-  비우기: `llm shell-log clear`(`--shell-log-clear`)/`/log clear`.
+- 조회: `llm shell log [N]`(`--shell-log`), REPL `/log [N]`;
+  비우기: `llm shell log clear`(`--shell-log-clear`)/`/log clear`.
   `LLM_SHELL_LOG=0`이면 새로 남기지 않는다.
 - 이 동작을 바꿀 때는 `agent.py`의 `shell_log_file`/`shell_log_enabled`/
   `shell_log`/`cmd_shell_log`/`REPL_DEFAULT_ASK_MODE`/`repl_ask_mode`/

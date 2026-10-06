@@ -25,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from llmlib import guard, mdrender, shelllog, web
+from llmlib import cliargs, guard, mdrender, shelllog, web
 from llmlib.bgshell import BgManager
 from llmlib.context import expand_mentions, load_project_docs
 from llmlib.conversation import clear_old_tool_results, finalize_interrupted
@@ -62,7 +62,7 @@ from llmlib.shell_policy import (
 )
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.9.0"
+VERSION = "0.10.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -3357,7 +3357,7 @@ def confirm_shell(
         print_ok(
             "자동 허용에 추가했습니다: "
             + ", ".join(added)
-            + " (해제: llm --allow-clear)"
+            + " (해제: llm shell allow clear)"
         )
     return True
 
@@ -4553,7 +4553,7 @@ def cmd_allow(session: str, clear: bool, root: Path | None = None) -> int:
         if command_prefix(command) not in approval.prefixes:
             print(f"   {C.cyan}정확{C.reset}  {command}")
     print_info(f"파일: {approval.path}")
-    print_info("해제: llm --allow-clear")
+    print_info("해제: llm shell allow clear")
     return 0
 
 
@@ -5088,18 +5088,19 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
 
     print_section("사용법")
     usage = [
-        ('llm "질문"', "이 폴더 세션으로 에이전트 실행"),
-        ("llm -i · llm repl", "대화형 REPL (여러 턴)"),
-        ('llm ask "질문"', "에이전트 (서브커맨드)"),
+        ("llm", "이 폴더 세션으로 대화형 시작(여러 턴)"),
+        ('llm "질문"', "대화형 시작 + 첫 턴 실행"),
+        ('llm ask "질문"', "1턴만 실행하고 종료"),
+        ("llm -i · llm repl · llm agent", "대화형 REPL (위와 같음)"),
         ('llm chat "질문"', "도구 없이 순수 채팅"),
         ("llm sync", "기록만 커밋·ff pull·push"),
-        ("llm session adopt", ".llm 기록을 이 폴더에 연결"),
+        ("llm session ls · adopt", "세션 목록 · .llm 기록을 이 폴더에 연결"),
         ('llm --trust "질문"', "셸 관대(위험만 확인)"),
         ('llm --confirm-all "질문"', "셸 전부 확인"),
         ('llm --yes "질문"', "셸 확인 생략"),
         ("llm -s <이름>", "이 폴더를 해당 세션에 매핑"),
-        ("llm --view", "대화 내용 보기"),
-        ("llm --balance", "API 잔액 조회"),
+        ("llm session view", "대화 내용 보기"),
+        ("llm balance", "API 잔액 조회"),
     ]
     width = max(display_width(cmd) for cmd, _ in usage)
     for cmd, desc in usage:
@@ -5471,34 +5472,15 @@ def cmd_agent(
 
 
 def expand_cli_argv(argv: list[str]) -> list[str]:
-    """서브커맨드를 기존 플래그로 펼친다. 예: sync → --sync-history, -i → --interactive."""
-    if not argv:
-        return argv
-    head, rest = argv[0], argv[1:]
-    if head in {"sync"}:
-        return ["--sync-history", *rest]
-    if head == "ask":
-        return list(rest)
-    if head == "chat":
-        return ["--chat", *rest]
-    if head in {"repl", "i"}:
-        return ["--interactive", *rest]
-    if head == "undo":
-        return ["--undo", *rest]
-    if head == "plan":
-        return ["--plan", *rest]
-    if head in {"shell-log", "shelllog"}:
-        if rest and rest[0] in {"clear", "reset"}:
-            return ["--shell-log-clear", *rest[1:]]
-        return ["--shell-log", *rest]
-    if head == "session":
-        if not rest or rest[0] in {"ls", "list", "status"}:
-            return []  # 세션 목록(인자 없는 llm 과 동일)
-        if rest[0] == "adopt":
-            return ["--session-adopt", *rest[1:]]
-        print_error("사용법: llm session [ls|adopt]")
+    """서브커맨드를 기존 플래그로 펼친다. 예: `llm shell log` → `--shell-log`.
+
+    실제 규칙은 `llmlib/cliargs.py`(순수 함수)에 있고, 여기서는 사용법 출력만 맡는다.
+    """
+    expanded, err = cliargs.expand(argv)
+    if err:
+        print_error(err)
         return ["--help"]
-    return argv
+    return expanded
 
 
 def cmd_session_adopt(root: Path, folders: dict[str, str]) -> tuple[dict[str, str], str | None]:
@@ -5655,14 +5637,20 @@ def cmd_repl(
     history_file: Path,
     root: Path,
     args: Any,
+    first_prompt: str | None = None,
 ) -> int:
-    """같은 프로세스에서 여러 턴 이어가기. 종료 시 1회 sync(켜져 있을 때)."""
+    """같은 프로세스에서 여러 턴 이어가기. 종료 시 1회 sync(켜져 있을 때).
+
+    `first_prompt` 를 주면(`llm "질문"` · `llm repl "질문"`) 그 턴을 먼저 실행하고
+    이어서 대화를 받는다.
+    """
     auto_workspace, allow_all, ask_mode, ask_source, repl_default = repl_ask_mode(args)
     RUN.ask_mode = ask_mode
     print_banner(session, root, args.chat, ask_mode=ask_mode, ask_source=ask_source)
     print_continue_status(root, session, history_file)
     print_phase("대화형 모드")
     print_info("/help 명령 목록 · 빈 줄·/exit 종료 · Ctrl+C 는 진행 중인 턴만 중단 · @파일 첨부 · 줄 끝 \\ 여러 줄")
+    print_info("1턴만 하고 끝내려면  llm ask \"질문\"")
     if repl_default:
         print_info(
             f"셸 {C.bold}{SHELL_ASK_LABELS[REPL_DEFAULT_ASK_MODE]}{C.reset}(repl 기본) "
@@ -5681,23 +5669,30 @@ def cmd_repl(
     model = args.model
     turn = 0
     interrupted = False
+    # 첫 요청을 함께 받았으면(예: `llm "질문"`) 그것부터 한 턴 실행하고 이어간다.
+    pending: list[str] = [first_prompt.strip()] if first_prompt and first_prompt.strip() else []
     while True:
-        try:
-            mode_tag = "chat" if chat_only else ("plan" if RUN.plan_mode else "agent")
-            line = read_repl_input(f"{C.cyan}llm:{mode_tag}>{C.reset} ").strip()
+        if pending:
+            line = pending.pop(0)
             interrupted = False
-        except KeyboardInterrupt:
-            eprint()
-            if interrupted:
+            print_phase(f"첫 요청: {line}")
+        else:
+            try:
+                mode_tag = "chat" if chat_only else ("plan" if RUN.plan_mode else "agent")
+                line = read_repl_input(f"{C.cyan}llm:{mode_tag}>{C.reset} ").strip()
+                interrupted = False
+            except KeyboardInterrupt:
+                eprint()
+                if interrupted:
+                    print_info("대화형 모드를 끝냅니다.")
+                    break
+                interrupted = True
+                print_info("입력을 취소했습니다. 끝내려면 Ctrl+C 를 한 번 더 누르거나 /exit")
+                continue
+            except EOFError:
+                eprint()
                 print_info("대화형 모드를 끝냅니다.")
                 break
-            interrupted = True
-            print_info("입력을 취소했습니다. 끝내려면 Ctrl+C 를 한 번 더 누르거나 /exit")
-            continue
-        except EOFError:
-            eprint()
-            print_info("대화형 모드를 끝냅니다.")
-            break
         if not line or line in {"/exit", "/quit", ":q"}:
             print_info("대화형 모드를 끝냅니다.")
             break
@@ -5792,7 +5787,23 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         prog="llm",
         add_help=True,
         description="DeepSeek CLI 에이전트",
-        epilog="서브커맨드: ask | chat | plan | sync | undo | session [ls|adopt] | repl(-i)",
+        epilog=(
+            "서브커맨드:\n"
+            '  ask|once "질문"           1턴만 실행(대화형으로 가지 않음)\n'
+            '  chat "질문" / plan "질문"  1턴(도구 없이 / 계획만)\n'
+            "  repl|agent|-i             대화형(여러 턴)\n"
+            "  undo                      직전 편집 되돌리기\n"
+            "  sync                      대화 기록 동기화\n"
+            "  balance                   API 잔액 보기\n"
+            "  rules [show|init]         세션 규칙 보기·생성\n"
+            "  shell log [N|clear]       셸 허용/실행 로그\n"
+            "  shell allow [clear]       셸 자동 허용 목록\n"
+            "  session ls|adopt|view|clear|delete|compact|run|ref [이름]\n"
+            "\n"
+            "인자 없이 실행하면 터미널에서는 대화형(REPL)으로 시작합니다"
+            '(llm "질문" 은 대화형 첫 턴). 파이프·리다이렉션에서는 1턴으로 끝납니다.\n'
+        ),
+        formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑, 기존 매핑은 갈아탐)")
     parser.add_argument(
@@ -5806,12 +5817,22 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
         "-i",
         "--interactive",
         action="store_true",
-        help="대화형 REPL (같은 세션에서 여러 턴)",
+        help="대화형 REPL (같은 세션에서 여러 턴). llm repl · llm agent 와 동일",
+    )
+    parser.add_argument(
+        "--once",
+        action="store_true",
+        help="1턴만 실행하고 끝냄(터미널에서도 대화형으로 가지 않음). llm ask\"질문\" 과 동일",
+    )
+    parser.add_argument(
+        "--list-sessions",
+        action="store_true",
+        help="이 폴더의 세션 목록 보기 (llm session ls)",
     )
     parser.add_argument(
         "--session-adopt",
         action="store_true",
-        help=".llm 기록을 이 폴더 세션으로 연결 (llm session adopt)",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument("-y", "--yes", action="store_true", help="셸 명령 확인 생략")
     parser.add_argument("--model", default=DEFAULT_MODEL, help=f"모델 (기본: {DEFAULT_MODEL})")
@@ -5852,7 +5873,7 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--undo",
         action="store_true",
-        help="직전 턴에 edit 도구로 바꾼 파일 되돌리기 (llm undo, -y 로 확인 생략)",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--safe",
@@ -5867,45 +5888,42 @@ def parse_args(argv: list[str]) -> argparse.Namespace:
     parser.add_argument(
         "--allow-all",
         action="store_true",
-        help="(--trust 와 동일, 구 옵션)",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--auto-workspace",
         action="store_true",
-        help="(--safe 와 동일, 구 옵션)",
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument("--allow-list", action="store_true", help="이 세션의 셸 자동 허용 목록 보기")
-    parser.add_argument("--allow-clear", action="store_true", help="이 세션의 셸 자동 허용 목록 비우기")
+    parser.add_argument("--allow-list", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--allow-clear", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--shell-log",
         nargs="?",
         const=shelllog.DEFAULT_VIEW_LINES,
         type=int,
         metavar="N",
-        help=(
-            "이 세션의 셸 허용/실행 로그 보기 (최근 N건, "
-            f"기본 {shelllog.DEFAULT_VIEW_LINES}) — 허용해 자동 실행된 명령 기록"
-        ),
+        help=argparse.SUPPRESS,
     )
-    parser.add_argument("--shell-log-clear", action="store_true", help="이 세션의 셸 로그 비우기")
-    parser.add_argument("--init-rules", action="store_true", help="이 폴더에 .llm/rules.md 생성")
-    parser.add_argument("--rules", action="store_true", help="이 폴더의 세션 규칙 보기")
-    parser.add_argument("--summarize", action="store_true", help="현재 대화를 지금 요약·백업 (강제)")
+    parser.add_argument("--shell-log-clear", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--init-rules", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--rules", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--summarize", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument(
         "--sync-history",
         action="store_true",
-        help="대화 기록만 커밋·ff-only pull·push (llm sync)",
+        help=argparse.SUPPRESS,
     )
     parser.add_argument(
         "--no-pull",
         action="store_true",
         help="이번 실행은 원격의 최신 대화 기록을 자동으로 받아오지 않음 (LLM_AUTO_PULL=0과 동일)",
     )
-    parser.add_argument("--balance", action="store_true")
-    parser.add_argument("--view", action="store_true")
-    parser.add_argument("--run", action="store_true")
-    parser.add_argument("--clear", action="store_true")
-    parser.add_argument("--delete", action="store_true")
+    parser.add_argument("--balance", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--view", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--run", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--clear", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--delete", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("prompt", nargs=argparse.REMAINDER, help="질문")
     return parser.parse_args(argv)
 
@@ -5940,6 +5958,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.sync_history:
         return cmd_sync_history(root, folders.get(folder_key) or root.name)
 
+    if args.list_sessions:
+        list_sessions(None, folders, root)
+        return 0
+
     if args.init_rules:
         rc = cmd_init_rules(root)
         if args.rules:
@@ -5960,6 +5982,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     # 남의 세션에도 허용되는 "보기만" 하는 명령.
     read_only = bool(args.view or args.allow_list or args.shell_log is not None)
+    # 인자 없이(또는 질문만 주고) 실행했을 때의 기본 형태: 터미널이면 대화형(REPL).
+    # 파이프·리다이렉션은 1턴, --once(`llm ask`)나 `llm chat`/`llm plan` 은 1턴이다.
+    interactive_default = (
+        not inspect_only
+        and not args.interactive
+        and not (args.chat or args.plan)
+        and cliargs.wants_repl(args.once, sys.stdin.isatty(), sys.stdout.isatty())
+    )
 
     owned = folders.get(folder_key)  # 이 폴더에 묶인 세션
     session: str | None = None
@@ -5999,7 +6029,7 @@ def main(argv: list[str] | None = None) -> int:
                 session = bound
                 print_ok(f"이 폴더 대화 기록에 연결했습니다 · session={session}")
         if session is None:
-            if prompt or args.interactive:
+            if prompt or args.interactive or interactive_default:
                 session = auto_session_name(root, folders)
                 # 폴더를 옮겨 온 흔적(고아 바인딩)이 있으면, 새 세션을 만들기 전에
                 # 이전 세션을 이어받을지 확인한다(사용자 확인 후 적용).
@@ -6044,8 +6074,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.undo:
         return cmd_undo(session, history_file, assume_yes=args.yes)
 
-    if args.interactive:
-        return cmd_repl(session, history_file, root, args)
+    if args.interactive or interactive_default:
+        return cmd_repl(session, history_file, root, args, first_prompt=prompt or None)
 
     if args.view:
         return cmd_view(session, history_file)

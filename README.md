@@ -4,7 +4,7 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
-**버전:** v0.9.0 — 변경 요약은 [v0.9 변경 사항](#v09-변경-사항)
+**버전:** v0.10.0 — 변경 요약은 [v0.10 변경 사항](#v010-변경-사항)
 
 ## 최소 사용법
 
@@ -17,15 +17,19 @@ ln -sf "$(pwd)/llm" ~/bin/llm   # 또는 이 레포의 llm 경로
 export PATH="$HOME/bin:$PATH"
 
 # 작업할 프로젝트 폴더에서
-llm "이 프로젝트 구조 요약해줘"
-llm -i                          # 같은 세션에서 여러 턴
+llm                             # 인자 없으면 대화형(여러 턴)으로 시작
+llm "이 프로젝트 구조 요약해줘"   # 대화형 시작 + 첫 턴 실행
+llm ask "이 함수 설명해줘"        # 1턴만 하고 종료
 llm sync                        # 대화 기록만 원격에
 ```
 
+> 파이프·리다이렉션(`llm "질문" | tee log`)처럼 터미널이 아니면 대화형으로
+> 들어가지 않고 **1턴만** 실행합니다. 스크립트에서는 `llm ask`를 쓰면 분명합니다.
+
 | 하고 싶은 일 | 명령 |
 |---|---|
-| 에이전트(도구) | `llm "질문"` · `llm ask "질문"` |
-| 대화형(여러 턴) | `llm -i` · `llm repl` (셸 확인 기본=읽기 전용 자동) |
+| 대화형(여러 턴, **기본**) | `llm` · `llm -i` · `llm repl` · `llm agent` |
+| 1턴만 (도구 사용) | `llm ask "질문"` · `llm --once "질문"` |
 | 순수 채팅 | `llm chat "질문"` · `llm --chat` |
 | 셸을 더 관대하게 | `llm --trust "질문"` |
 | 셸 전부 확인 | `llm --confirm-all "질문"` |
@@ -34,9 +38,9 @@ llm sync                        # 대화 기록만 원격에
 | 직전 편집 되돌리기 | `llm undo` · REPL `/undo` |
 | 파일 첨부 | `llm "@src/app.py 의 버그 고쳐"` |
 | 대화 기록만 원격에 | `llm sync` |
-| 기록 세션 연결 | `llm session adopt` |
+| 세션 목록/연결 | `llm session ls` · `llm session adopt` |
 
-기본값: **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.
+기본값: **실행=대화형(터미널)** · **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.
 
 - **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수
 - **채팅 모드**: 도구 없이 순수 대화
@@ -47,6 +51,22 @@ llm sync                        # 대화 기록만 원격에
 - **비밀값 보호**: 셸에 API 키·토큰을 넘기지 않고, `.env`를 드러내는 명령은 항상 확인, 도구 결과의 키는 `[REDACTED]`
 - **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`
 - **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도
+
+## v0.10 변경 사항
+
+CLI 표면을 **주제별 서브커맨드**로 통합하고, **인자 없는 `llm`을 대화형(REPL)**
+으로 바꿨습니다. 1턴 실행은 `llm ask`로 명시합니다.
+
+| 영역 | v0.9 | v0.10 |
+|---|---|---|
+| 인자 없는 `llm` | 상태·세션 목록만 출력 | 터미널이면 **대화형 시작**(첫 턴 질문은 `llm "질문"`). 파이프·리다이렉션은 1턴. 상태·세션 목록은 `llm session ls` |
+| 1턴 실행 | `llm "질문"` | `llm ask "질문"`(**권장**) · `llm --once "질문"`. `llm "질문"`은 대화형 첫 턴 |
+| 실행 모드 별칭 | `llm -i` · `llm repl` | `llm` · `llm -i` · `llm repl` · `llm agent`가 모두 같은 **대화형**(`llm agent "질문"`은 대화형 첫 턴) |
+| 세션 명령 | `llm --view` · `--clear` · `--delete` · `--summarize` · `--run` · `--ref 비` · `--session-adopt` | `llm session ls\|adopt\|view\|clear\|delete\|compact\|run\|ref [이름]` (예: `llm session view other`) |
+| 셸 명령 | `llm --allow-list` · `--allow-clear` · `shell-log` | `llm shell log [N\|clear]` · `llm shell allow [clear]` |
+| 규칙·기타 | `llm --init-rules` · `--rules` | `llm rules init` · `llm rules show` · `llm balance` 승격 |
+| 구 플래그 | — | 전부 별칭으로 **유지하되 `--help`에서 숨김**(`argparse.SUPPRESS`) |
+| 구조 | `llmlib/` 10개 모듈, 테스트 97개 | `llmlib/` 11개 모듈(`cliargs` 추가), 테스트 **105개** |
 
 ## v0.9 변경 사항
 
@@ -67,8 +87,8 @@ llm sync                        # 대화 기록만 원격에
 | 영역 | v0.7 | v0.8 |
 |---|---|---|
 | Markdown 표시 | 외부 `glow` 의존(없으면 원문 출력) | **내장 렌더러**(`llmlib/mdrender.py`) — 제목·목록·표·코드블록·인용 강조, `LLM_RAW`·파이프·비TTY는 원문 유지 |
-| REPL 셸 확인 | 기본 `readonly`(읽기 전용 자동) — 조회·검사만 조용히, 그 밖은 확인 | 대화형은 **기본 `readonly`** — `--safe/--trust/--yes/--confirm-all`·`LLM_*`를 주면 그쪽 우선, `sudo`는 모드와 무관하게 목적 설명 후 확인, 시작 시 설정 상태 한 줄 표시 |
-| 셸 로그 | 없음 | 프롬프트에서 허용했거나 자동 허용으로 **묻지 않고 실행된** 명령을 세션별 로그(`shell_log_<세션>.jsonl`)에 기록, `llm shell-log [N]`/`--shell-log`·REPL `/log`로 조회, `LLM_SHELL_LOG=0`으로 끔 |
+| REPL 셸 확인 | 기본 `safe`(작업 폴더 안 자동) — 밖·설치 등은 확인 | 대화형은 **기본 `all`(전부 확인)** — `--safe/--trust/--yes/--confirm-all`·`LLM_*`를 주면 그쪽 우선, 시작 시 설정 상태 한 줄 표시 |
+| 셸 로그 | 없음 | 프롬프트에서 허용했거나 자동 허용으로 **묻지 않고 실행된** 명령을 세션별 로그(`shell_log_<세션>.jsonl`)에 기록, `llm shell log [N]`/`--shell-log`·REPL `/log`로 조회, `LLM_SHELL_LOG=0`으로 끔 |
 | 최대 단계 | 50 | **100**(`--max-steps`) |
 | 구조 | `llmlib/` 9개 모듈, 테스트 61개 | `llmlib/` 10개 모듈(`mdrender`·`shelllog` 추가), 테스트 88개 |
 
@@ -191,7 +211,7 @@ source ~/.bashrc
 ```bash
 which llm          # → /home/<user>/bin/llm
 readlink ~/bin/llm # → /home/<user>/codespace/userscript/llm/llm
-llm                # 인자 없이 실행하면 상태/세션 목록 표시
+llm                # 인자 없이 실행하면 대화형(REPL) 시작 (비TTY는 1턴)
 ```
 
 > `~/bin`이 PATH에 없으면 새 셸에서 `llm`을 찾지 못합니다. 위 `export PATH`
@@ -245,11 +265,11 @@ source ~/.bashrc
 ### ④ 확인 (위에서부터 차례로)
 
 ```bash
-which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.9.0) 표시 (API 호출 없음)
-llm --balance       # 키·네트워크 확인
-llm --chat "안녕"   # 모델 응답 확인
-llm "이 폴더 요약해줘"   # 도구까지 확인
+which llm               # → /home/<user>/bin/llm
+llm session ls          # 상태 + 버전(v0.10.0) 표시 (API 호출 없음)
+llm balance             # 키·네트워크 확인
+llm ask "안녕"          # 1턴으로 모델 응답 확인
+llm "이 폴더 요약해줘"   # 대화형 시작 + 도구까지 확인
 ```
 
 ### 새 PC에서 달라지는 점
@@ -261,11 +281,11 @@ llm "이 폴더 요약해줘"   # 도구까지 확인
   다른 PC에서 작업했다면 **첫 질의 때 원격 최신 기록을 자동으로 받아온 뒤**
   이어가고(`LLM_AUTO_PULL=0`/`--no-pull`이면 끔). 대화 기록 **자동
   커밋·push는 기본 꺼짐**입니다. 켤 때만 `LLM_AUTO_SYNC=1`, 수동은
-  `llm --sync-history`. clone 직후 `.llm/history_*` 가 하나이거나 폴더명과
+  `llm sync`. clone 직후 `.llm/history_*` 가 하나이거나 폴더명과
   같으면 **세션을 자동으로 연결**합니다.
 - **저장소 폴더 이름을 같게 유지**하세요(README의 설치 경로 그대로면 자동).
   세션 이름이 폴더 이름에서 만들어지므로, 이름이 다르면 `llm -s <이름>`으로
-  지정하거나 `llm --view`가 알려주는 `-s` 안내를 따르면 됩니다.
+  지정하거나 `llm session view`가 알려주는 `-s` 안내를 따르면 됩니다.
 - **`bindings.json`은 복사하지 마세요.** 예전 PC의 절대 경로가 들어 있어
   "다른 폴더에 바인딩됨" 경고가 납니다. `mv`로 폴더를 옮긴 경우에는 실행 시
   이어받을 후보를 물어봅니다.
@@ -290,8 +310,11 @@ llm "이 프로젝트 구조를 요약해줘"
 # 파일 내용을 읽고 고치도록 요청
 llm "agent.py의 확인 프롬프트 문구를 더 친절하게 다듬어줘"
 
+# 한 번만 묻고 바로 끝내기(대화형으로 들어가지 않음)
+llm ask "tests 폴더 파일 개수만 세줘"
+
 # 도구 없이 순수 채팅
-llm --chat "파이썬에서 리스트와 튜플의 차이는?"
+llm chat "파이썬에서 리스트와 튜플의 차이는?"
 
 # 셸 명령 확인 생략 (자동화/신뢰 환경)
 llm --yes "테스트 돌리고 실패하면 원인 요약해줘"
@@ -312,16 +335,16 @@ llm --confirm-all "이 폴더 상태를 점검해줘"
 llm --ref design-notes "이 맥락 참고해서 인증 모듈 리팩터링 이어줘"
 
 # 이 세션에서 자동 허용한 셸 명령 목록 보기 / 비우기
-llm --allow-list
-llm --allow-clear
+llm shell allow
+llm shell allow clear
 
 # 확인 프롬프트에서 허용해 자동 실행된 셸 명령 기록 보기 / 비우기
-llm shell-log        # 최근 20건 (llm shell-log 50 처럼 개수 지정)
-llm shell-log clear
+llm shell log        # 최근 20건 (llm shell log 50 처럼 개수 지정)
+llm shell log clear
 ```
 
 세션은 실행한 폴더에 자동으로 연결됩니다. 같은 폴더에서 다시 `llm`을
-호출하면 이전 대화 맥락이 이어집니다.
+호출하면(인자 없이 실행하면 대화형) 이전 대화 맥락이 이어집니다.
 
 ---
 
@@ -331,22 +354,60 @@ llm shell-log clear
 
 | 명령 | 설명 |
 |------|------|
-| `llm "질문"` | 현재 폴더 세션으로 에이전트 실행 |
-| `llm --chat "질문"` | 도구 없이 순수 채팅 |
-| `llm` | 상태/세션 목록/사용법 표시 |
+| `llm` | **대화형(REPL) 시작**(터미널일 때). 파이프·리다이렉션은 1턴 |
+| `llm "질문"` | 터미널이면 대화형으로 시작해 **첫 턴** 실행, 아니면 1턴 |
+| `llm ask "질문"` | **1턴만** 실행하고 종료(대화형으로 가지 않음) |
+| `llm chat "질문"` | 도구 없이 순수 채팅 (터미널에서도 1턴) |
+| `llm plan "질문"` | 읽기 전용 계획만 (터미널에서도 1턴) |
+| `llm session ls` | 상태·세션 목록 보기 (API 호출 없음) |
+
+> `llm chat`/`llm plan`은 터미널에서도 대화형으로 들어가지 않고 1턴만 실행합니다.
+> 여러 턴을 이어가려면 대화형에서 `/plan`, `/chat`을 쓰세요.
+
+### 서브커맨드
+
+첫 번째 인자가 아래 이름이면 해당 동작으로 펼쳐집니다(`llm_ask`/`llm chat` 처럼
+붙여 쓰지 말고 **띄어** 씁니다). 그림 뒤의 옵션을 직접 줘도 같은 동작입니다.
+
+| 명령 | 동작 | 같은 옵션 |
+|------|------|----------|
+| `llm ask "질문"` | 1턴 실행 | `--once` |
+| `llm chat "질문"` | 도구 없이 채팅 | `--chat` |
+| `llm plan "질문"` | 읽기 전용 계획만 | `--plan` |
+| `llm repl` · `agent` · `i` | 대화형 시작 | `-i` / `--interactive` |
+| `llm sync` | 기록 커밋 → ff-only pull → push | `--sync-history` |
+| `llm undo` | 직전 턴 편집 되돌리기 | `--undo` |
+| `llm balance` | 잔액 조회 | `--balance` |
+| `llm rules [show\|init]` | 규칙 보기·생성 | `--rules` / `--init-rules` |
+| `llm shell log [N\|clear]` | 셸 허용/실행 로그 | `--shell-log` / `--shell-log-clear` |
+| `llm shell allow [clear]` | 셸 자동 허용 목록 | `--allow-list` / `--allow-clear` |
+| `llm session ls` | 세션 목록 | `--list-sessions` |
+| `llm session adopt` | 이 폴더에 기록 세션 연결 | `--session-adopt` |
+| `llm session view [이름]` | 대화 내용 보기(읽기 전용) | `--view` |
+| `llm session clear` | 현재 세션 내용 비우기 | `--clear` |
+| `llm session delete [이름]` | 세션 파일 삭제·매핑 해제 | `--delete` |
+| `llm session compact [이름]` | 지금 요약·백업 | `--summarize` |
+| `llm session run [이름]` | 직전 응답의 스크립트 실행 | `--run` |
+| `session ref <이름>` | 다른 세션 맥락 주입 | `--ref` |
+
+> 서브커맨드는 **첫 번째 인자**일 때만 인식됩니다. 예: `llm undo -s mysession` (O),
+> `llm -s mysession undo` (X, 질문으로 처리).
+> 예전 플래그(`--allow-list`·`--shell-log`·`--view` …)는 계속 동작하지만
+> `--help` 에서는 숨겨져 있습니다(2단계에서 제거 예정).
 
 ### 옵션
 
 | 옵션 | 설명 |
 |------|------|
 | `-s, --session <이름>` | 이 폴더를 지정한 세션에 매핑 (이 폴더의 기존 매핑은 갈아탐, 남의 세션은 거부) |
+| `--once` | 1턴만 실행하고 종료 (`llm ask "질문"`) |
+| `-i, --interactive` | 대화형(REPL) 시작 — 인자 없이 실행하는 것과 같음 (`llm repl` · `llm agent`) |
 | `--ref <이름>` | 다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용) |
+| `--list-sessions` | 세션 목록 보기 (`llm session ls`, API 호출 없음) |
 | `--chat` | 도구 없이 순수 채팅 모드 |
 | `-y, --yes` | 셸·편집·웹 요청 확인 생략 (위험 패턴만 차단, 비밀 노출 명령 확인도 생략되므로 주의) |
-| `--safe` | 작업 폴더 안 명령 자동(**기본과 동일**). 구 `--auto-workspace` |
-| `--trust` | sudo·설치·폴더 밖 삭제만 확인(관대). 구 `--allow-all` |
-| `--allow-all` | `--trust` 와 동일(구 옵션) |
-| `--auto-workspace` | `--safe` 와 동일(구 옵션) |
+| `--safe` | 작업 폴더 안 명령 자동(**기본과 동일**) |
+| `--trust` | sudo·설치·폴더 밖 삭제만 확인(관대) |
 | `--model <이름>` | 모델 지정 (기본: `deepseek-flash`) |
 | `--max-steps <N>` | 에이전트 루프 최대 반복 (기본: 100). 한도에 도달하면 종료하지 않고 **이어서 N회 더 진행할지 `[y/N]`으로 확인** |
 | `--no-stream` | 스트리밍 비활성화 |
@@ -358,28 +419,31 @@ llm shell-log clear
 | `--confirm-edits` | 파일 편집마다 diff 를 보여주고 `[y/N/a]` 확인 (`LLM_CONFIRM_EDITS=1`과 동일, `a`=이번 실행 동안 생략) |
 | `--plan` | plan 모드: 편집·쓰기 셸을 막고 읽기 전용 조사 후 구현 계획만 제시 (`llm plan "질문"`) |
 | `--undo` | 직전 턴에 `edit` 도구로 바꾼 파일을 원래대로 (`llm undo`, `-y`로 확인 생략). 셸로 바꾼 파일은 대상 아님 |
-| `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 |
-| `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 |
-| `--shell-log [N]` | 이 세션의 셸 허용/실행 로그 보기 (최근 N건, 기본 20). `llm shell-log` |
-| `--shell-log-clear` | 이 세션의 셸 로그 비우기. `llm shell-log clear` |
-| `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 |
-| `--rules` | 이 폴더의 세션 규칙 보기 |
-| `--summarize` | 현재 대화를 지금 요약·백업 (강제 실행) |
+| `--allow-list` | 이 세션의 셸 자동 허용 목록 보기 (`llm shell allow`) |
+| `--allow-clear` | 이 세션의 셸 자동 허용 목록 비우기 (`llm shell allow clear`) |
+| `--shell-log [N]` | 이 세션의 셸 허용/실행 로그 보기 (최근 N건, 기본 20). `llm shell log` |
+| `--shell-log-clear` | 이 세션의 셸 로그 비우기. `llm shell log clear` |
+| `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 (`llm rules init`) |
+| `--rules` | 이 폴더의 세션 규칙 보기 (`llm rules show`) |
+| `--summarize` | 현재 대화를 지금 요약·백업(강제 실행). `llm session compact` |
 | `--sync-history` | 기록만 커밋 → **ff-only** pull → push (`llm sync`). 자동 sync 기본 끔 |
 | `--no-pull` | 이번 실행은 원격의 최신 대화 기록을 자동으로 받아오지 않음 (`LLM_AUTO_PULL=0`과 동일) |
-| `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 |
-| `--view` | 세션 대화 내용 보기 (Markdown) |
-| `--clear` | 현재 세션 내용만 비우기 |
-| `--delete` | 현재 세션 파일 삭제 및 폴더 매핑 해제 |
-| `--balance` | DeepSeek API 잔액 조회 (화폐별 잔액 + 원화 환산) |
+| `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 (`llm session run`) |
+| `--view` | 세션 대화 내용 보기 (Markdown). `llm session view [이름]` |
+| `--clear` | 현재 세션 내용만 비우기 (`llm session clear`) |
+| `--delete` | 현재 세션 파일 삭제 및 폴더 매핑 해제 (`llm session delete [이름]`) |
+| `--balance` | DeepSeek API 잔액 조회 (화폐별 잔액 + 원화 환산). `llm balance` |
 
-셸 실행 범위 우선순위: `--confirm-all` > `--trust`/`--allow-all` > `--safe`/`--auto-workspace` >
+> 여기서 `--allow-all`/`--auto-workspace`/`--session-adopt` 같은 옛 플래그와
+> 위 괄호 안의 옛 표기도 **별칭으로 계속 동작**합니다(도움말에서는 숨김).
+
+셸 실행 범위 우선순위: `--confirm-all` > `--trust` > `--safe` >
 `LLM_SHELL_TRUST`/`LLM_ALLOW_ALL` > `LLM_AUTO_WORKSPACE` > **기본(safe)**. **직접 준 CLI 옵션이
 환경변수를 이깁니다.** 시작 배너에 `확인=safe|trust|…` · `sync=on|off` · 이어가기 상태 한 줄이
 표시됩니다.
 
 ```text
-── 에이전트 v0.9.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
+── 에이전트 v0.10.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
 ℹ️  이어가기 · 로컬 12턴 · 원격과 같음
 ▸ 원격 대화 기록 확인
 ```
@@ -391,17 +455,17 @@ llm shell-log clear
 llm -s mysession "이 대화는 mysession으로 저장해줘"
 
 # 다른 폴더 세션의 대화 내용 보기 (읽기 전용)
-llm -s other --view
+llm session view other        # 예전: llm -s other --view
 
 # 다른 세션(예: 설계 노트)의 맥락을 주입해 이어서 작업
 llm --ref design-notes "이 맥락 참고해서 이어줘"
 
 # 최근 답변의 스크립트를 추출해 실행
-llm --run
+llm session run
 
 # 세션 초기화 / 삭제
-llm --clear
-llm --delete
+llm session clear
+llm session delete
 
 # 파일을 첨부해 질문 (@경로: 파일 내용, 폴더면 목록)
 llm "@agent.py 의 cmd_agent 흐름 설명해줘"
@@ -414,13 +478,14 @@ llm "좋아, 그 계획대로 진행해"
 llm undo
 ```
 
-> 서브커맨드(`ask`/`chat`/`plan`/`sync`/`undo`/`session`/`repl`/`shell-log`)는
+> 서브커맨드(`ask`/`chat`/`plan`/`sync`/`undo`/`balance`/`rules`/`shell`/`session`/`repl`)는
 > **첫 번째 인자**일 때만 인식됩니다. 예: `llm undo -s mysession` (O),
 > `llm -s mysession undo` (X, 질문으로 처리)
 
 ### 대화형 모드(REPL) 명령
 
-`llm -i`(또는 `llm repl`)에서 쓰는 명령입니다. `/`까지 치고 Tab 을 누르면 완성됩니다.
+`llm`(인자 없음) 또는 `llm -i` · `llm repl` · `llm agent`에서 쓰는 명령입니다.
+`/`까지 치고 Tab 을 누르면 완성됩니다.
 
 | 명령 | 설명 |
 |---|---|
@@ -433,7 +498,7 @@ llm undo
 | `/plan` | plan 모드 켜기/끄기 (프롬프트가 `llm:plan>`로 바뀜) |
 | `/rules` | 세션 규칙·프로젝트 지침(CLAUDE.md 등) 보기 |
 | `/bg` | 백그라운드 셸 작업 목록 |
-| `/log [N]` | 셸 허용/실행 로그 보기 (`/log clear` 로 비우기, `llm shell-log` 와 동일) |
+| `/log [N]` | 셸 허용/실행 로그 보기 (`/log clear` 로 비우기, `llm shell log` 와 동일) |
 | `/sync` · `/chat` · `/agent` · `/exit` | 기록 올리기 · 채팅 모드 · 에이전트 모드 · 종료 |
 
 - **Ctrl+C**: 모델 응답·도구 실행 중이면 **그 턴만 중단**하고 프롬프트로 돌아옵니다.
@@ -472,8 +537,9 @@ llm undo
 읽어 맥락을 이어갑니다(수동 `git pull` 없이도 됩니다).
 
 ```bash
-llm "이어서 작업 해줘"     # 시작 때 원격 최신 기록 자동 수신(가능하면) · sync는 기본 안 함
-llm -i                     # 같은 프로세스에서 여러 턴 · 끝낼 때 sync(켜져 있으면)
+llm "이어서 작업 해줘"     # 대화형 시작 + 첫 턴 · 시작 때 원격 최신 기록 자동 수신 · sync는 기본 안 함
+llm ask "질문"            # 1턴만 하고 종료
+llm -i                     # 여러 턴을 이어가기(인자 없는 llm 과 같음) · 끝낼 때 sync(켜져 있으면)
 llm --no-pull "질문"       # 이번 실행은 자동 수신을 건너뜀
 llm sync                   # 기록을 지금 올리고 싶을 때 (커밋 → ff-only pull → push)
 LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
@@ -494,7 +560,7 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
 - `LLM_HISTORY=home`(홈 저장)이거나 git 저장소가 아니거나 기록에 변경이 없으면
   아무 것도 하지 않습니다. upstream(`@{u}`)이 없으면 커밋만 하고 push는
   건너뜁니다.
-- `--sync-history`는 **이 세션의 기록 파일**(`.llm/history_<세션>.json`)과
+- `llm sync`(=`--sync-history`)는 **이 세션의 기록 파일**(`.llm/history_<세션>.json`)과
   **요약 백업**(`.llm/summaries/<세션>/`)만 스테이징합니다. 소스 코드·규칙 파일
   등 나머지 변경은 건드리지 않으므로 평소처럼 직접 커밋하세요.
 - 커밋 메시지는 `llm: 대화 기록 동기화 (session=<세션>)` 형식입니다.
@@ -504,14 +570,14 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
 - `.llm/`이 `.gitignore`에 있으면 push가 되지 않으므로, 그 줄을 지우라는
   안내와 함께 중단합니다.
 - 기본값이 세션 폴더 저장이므로, 예전처럼 홈(`~/.local/share/llm/`)에 두고
-  싶다면 `LLM_HISTORY=home`으로 실행하세요(그때는 `--sync-history` 대신 예전처럼
+  싶다면 `LLM_HISTORY=home`으로 실행하세요(그때는 `llm sync`대신 예전처럼
   `history_*.json`을 직접 복사).
 - 홈에만 있던 기존 기록은 **그 폴더에서 처음 실행할 때 `.llm/`으로 한 번
   옮겨집니다**(양쪽에 있으면 더 긴 쪽 채택, 홈 원본은 `*.migrated`로 개명).
   `LLM_HISTORY=home`으로 되돌리면 그 `*.migrated`를 다시 꺼내 옵니다
   (백업은 그대로 남음).
 - 새 PC에서 clone한 폴더에 아직 매핑이 없어도, `.llm/`에 기록이 있으면
-  `llm --view` 등이 `llm -s <이름>`으로 이어가라고 알려줍니다. 폴더 이름을
+  `llm session view` 등이 `llm -s <이름>`으로 이어가라고 알려줍니다. 폴더 이름을
   README의 설치 경로(`~/.local/share/llm`)와 같게 두면 세션 이름이 폴더
   이름으로 자동 생성되어 별도 지정 없이 이어집니다.
 - 요약 백업(`.llm/summaries/`)도 함께 동기화됩니다. 기록이 요약으로 압축된
@@ -522,20 +588,20 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
 
 | 동작 | 이 폴더의 세션 | 다른 폴더의 세션 |
 |------|------|------|
-| 대화·이어가기 / `--clear` / `--delete` / `--summarize` / `--run` / `--allow-clear` | 가능 | **거부** |
+| 대화·이어가기 / `session clear` / `session delete` / `session compact` / `session run` / `shell allow clear` | 가능 | **거부** |
 | `-s <이름>` 으로 매핑(설정) | 가능 (기존 매핑은 갈아탐) | **거부** |
-| `--view` / `--allow-list` (보기) | 가능 | **가능 (읽기 전용)** |
+| `session view` / `shell allow` (보기) | 가능 | **가능 (읽기 전용)** |
 | `--ref <이름>` (다른 세션 맥락 주입) | 가능 | **가능 (참조 대상은 읽기 전용)** |
 
 - 다른 폴더가 소유한 세션 이름을 `-s`로 지정하면 거부하고 소유 폴더만
   안내합니다. 매핑 파일은 바뀌지 않습니다.
 - 같은 폴더에서 `-s <다른 이름>`을 다시 지정하면 **이 폴더의 매핑이 그 세션으로
   갈아타고**, 이전 세션은 매핑만 풀립니다(기록은 유지). 별도의 해제 명령은 없습니다.
-- 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `--view`처럼 보기만 하는
+- 대화 내용을 보고 싶은 등 **참조**가 필요할 때는 `llm session view`처럼 보기만 하는
   명령만 허용됩니다. 아직 주인이 없는 이름을 지정하지 않은 이상, 보고만 하는
   명령은 (고아 매핑에서 이어받기를 고른 경우를 빼고) 바인딩을 만들지 않습니다.
 - 남의 세션을 이 폴더로 **끌어오는 명령은 두지 않습니다**(소유권 보호).
-- `--delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.
+- `llm session delete`는 이 폴더 세션의 파일 삭제와 폴더 매핑 해제를 함께 합니다.
 
 ### 폴더를 옮기거나 이름을 바꾼 경우 (`mv`)
 
@@ -550,14 +616,14 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
      1) mysession  ← /old/path/proj  (이름 일치)
   이어받을 번호 [1-1] / Enter=새 세션 'proj2':
   ```
-- **인자 없이 `llm` 만 실행**해도(상태 출력) 매핑이 없으면 이어받을 후보가
+- **인자 없이 `llm` 만 실행**해도(대화형 진입/`llm session ls`) 매핑이 없으면 이어받을 후보가
   있음을 알려줍니다(묻지는 않음):
   ```text
   ℹ️  사라진 폴더에 남은 세션 후보입니다 (폴더를 옮기셨나요?):
      1) mysession  ← /old/path/proj
   ℹ️  이어받으려면  llm -s <이름>  (예: mysession)
   ```
-- **조회/정리 명령**(`--view`/`--clear`/`--summarize`/`--allow-list` 등)도 같은
+- **조회/정리 명령**(`llm session view`·`clear`·`compact`·`shell allow` 등)도 같은
   후보를 보여줍니다. TTY면 번호를 골라 **그 자리에서 이어받아**(Enter=취소)
   해당 명령을 그 세션으로 실행하고, 자동화/파이프(비TTY)면 안내만 하고
   "매핑된 세션이 없습니다"로 끝납니다.
@@ -577,9 +643,9 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
 
 진행 중인 세션(A)을 유지한 채 **다른 세션(B)의 맥락을 참고**하고 싶을 때 씁니다.
 
-- `llm --ref <이름> "질문"` 은 B의 맥락을 **이번 세션(A)에 1회 주입**한 뒤 대화를
+- `llm session ref <이름> "질문"` 은 B의 맥락을 **이번 세션(A)에 1회 주입**한 뒤 대화를
   진행합니다. A는 그대로 유지되고, B는 **읽기 전용**으로만 읽어 소유권·기록이
-  바뀌지 않습니다(`--view`와 같은 권한 규칙).
+  바뀌지 않습니다(`llm session view`와 같은 권한 규칙).
 - 주입 내용은 B의 사용자/에이전트 발화를 뽑아 `[참고: 다른 세션의 맥락]` 표시가
   붙은 **사용자 메시지로 A 기록에 저장**됩니다(이후 턴에서도 A의 맥락으로 남음).
 - 여러 세션을 동시에 참조할 수 있습니다: `llm --ref A --ref B "질문"`.
@@ -615,7 +681,7 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
   새로 시작하지 않고 **같은 작업으로 이어갑니다**. 자세한 내용은
   [작업 계획(todo) 표시](#작업-계획todo-표시) 참고.
 - 수동 실행: `/summary`, `/summarize`, `/요약` 슬래시 명령 또는
-  `llm --summarize`(강제).
+  `llm session compact`(강제).
 - 백업(요약본 `.md` + 원본 스냅샷 `.json`)은
   `<작업폴더>/.llm/summaries/<세션>/`(기본) 또는 `~/.local/share/llm/summaries/<세션>/`
   (`LLM_HISTORY=home`)에 저장됩니다.
@@ -841,17 +907,17 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
 
 ```bash
 # 템플릿 생성
-llm --init-rules
+llm rules init
 
 # 현재 적용되는 규칙 확인
-llm --rules
+llm rules show
 ```
 
 - 두 위치의 규칙을 합쳐 최대 `MAX_RULES_CHARS`(24,000자)까지 적용합니다.
 - **프로젝트 지침 파일**도 함께 읽습니다(Claude Code·Codex 등과 공용):
   `~/.claude/CLAUDE.md`(전역) → 홈부터 작업 폴더까지 각 폴더의 `CLAUDE.md`,
   `AGENTS.md`, `.claude/CLAUDE.md`, `CLAUDE.local.md` 순서로, 합계 24,000자까지.
-  끄려면 `LLM_PROJECT_DOCS=0`. `llm --rules`에 적용 중인 파일이 표시됩니다.
+  끄려면 `LLM_PROJECT_DOCS=0`. `llm rules show`에 적용 중인 파일이 표시됩니다.
 - 규칙이 없으면 모델은 규칙 없이 동작합니다.
 - "규칙을 수정해줘"라고 요청하면 에이전트가 해당 파일을 직접 편집합니다.
 
@@ -998,7 +1064,7 @@ alias로 동작합니다.
    - 환경변수 접두: `FOO=1 npm test`처럼 앞에 지정이 붙어도 프로그램을 보고
      같은 기준으로 판단합니다(`PATH`/`LD_PRELOAD`/`PYTHONPATH` 등 실행 대상을
      바꾸는 이름이 붙으면 확인 대상)
-   - `--confirm-all`로 자동 실행을 끌 수 있습니다. **REPL(`llm -i`/`llm repl`)은
+   - `--confirm-all`로 자동 실행을 끌 수 있습니다. **대화형(`llm`/`llm repl`/`llm agent`)은
     기본이 `readonly`(읽기 전용 자동)** — 조회·검사 명령은 조용히 실행하고 그
     밖은 확인하며, 시작할 때 현재 설정을 한 줄로 보여 줍니다
     (`llm --safe/--trust/--yes/--confirm-all`이나 `LLM_*` 환경변수를 직접 주면
@@ -1036,7 +1102,7 @@ alias로 동작합니다.
      프로그램(`npm run`) 기준으로 접두를 만들고, 같은 이름이 붙은 변형도 함께
      허용합니다. 다만 `PATH`, `LD_PRELOAD`, `PYTHONPATH`, `GIT_SSH_COMMAND`
      처럼 실행 대상·로딩을 바꾸는 이름이 붙으면 계열 허용하지 않습니다
-     (정확 일치만). 같은 기준이 읽기 전용 자동 실행과 `--auto-workspace`
+     (정확 일치만). 같은 기준이 읽기 전용 자동 실행과 `--safe`(작업 폴더 안 자동)
      판정에도 적용됩니다.
    - 허용 제외: `rm`, `sudo`, `curl`, `dd`, `chmod` 등 위험 프로그램은 계열
      허용하지 않습니다(정확 일치만). 조각 안에 리다이렉션(`>`), 백그라운드
@@ -1047,7 +1113,7 @@ alias로 동작합니다.
      `--fix`/`-w`/`--install-types`, `find -exec`/`-delete`, `--in-place`,
      `--output`처럼 부작용을 켜는 인자가 붙으면 매번 확인합니다
      (예: `ruff check .`을 허용해도 `ruff format .`은 확인 대상).
-   - 목록 확인/해제: `llm --allow-list`, `llm --allow-clear`
+   - 목록 확인/해제: `llm shell allow`, `llm shell allow clear`
 6. **권한 상승(`sudo` 등) — 목적 설명 후 항상 확인** — 명령에 `sudo`/`su`/`doas`/
    `pkexec` 조각이 있으면 다른 모드·허용과 상관없이 **전용 프롬프트**가 뜽니다
    (`--yes`만 생략). 무엇을 위해 필요한지 목적을 함께 보여 주므로, 명령만 보고
@@ -1097,10 +1163,10 @@ alias로 동작합니다.
    a = 이 명령 + rm (/srv/app/build/ 이하) 자동 허용
    all = 이번 실행 동안 확인 생략 (저장하지 않음)
    [y/N/all/a]: a
-✅ 자동 허용에 추가했습니다: rm (/srv/app/build/ 이하) (해제: llm --allow-clear)
+✅ 자동 허용에 추가했습니다: rm (/srv/app/build/ 이하) (해제: llm shell allow clear)
 ```
 
-`--auto-workspace`나 `--confirm-all`을 쓰면 아래 예시처럼 위험 조각까지 묻습니다.
+`--confirm-all`을 쓰면 아래 예시처럼 위험 조각까지 묻습니다.
 
 ### 확인 프롬프트 예시 (조합 명령)
 
@@ -1117,7 +1183,7 @@ alias로 동작합니다.
    2) 실행할 명령: docker build -t app .
    a = 이 명령/docker build 계열 자동 허용 (다시 묻지 않음)
    [y/N/all/a]: a
-✅ 자동 허용에 추가했습니다: npm run, docker build (해제: llm --allow-clear)
+✅ 자동 허용에 추가했습니다: npm run, docker build (해제: llm shell allow clear)
 ```
 
 단일 명령이면 이전처럼 한 번만 묻습니다(`[y/N/a]`, `all` 없음). 조각마다 `a`를
@@ -1127,17 +1193,17 @@ alias로 동작합니다.
 명령일 때만, 리다이렉션·명령 치환이 섞인 조각은 정확히 같은 명령일 때만 자동
 통과합니다. 파일을 만드는 heredoc(`cat > f <<'PY'`)은 본문이 실행 코드가 아니라
 데이터이므로 기본 모드에서 묻지 않습니다(아래 「heredoc·인라인 스크립트 처리」).
-확인이 자주 뜨는 반복 작업이 많으면 `--auto-workspace`(또는
-`LLM_AUTO_WORKSPACE=1`)를 쓰세요.
+확인이 자주 뜨는 반복 작업이 많으면 `--trust`(또는
+`LLM_ALLOW_ALL=1`)를 쓰세요.
 
 ### REPL 기본 확인 모드와 셸 로그
 
-`llm -i` / `llm repl`(대화형)은 한 프로세스에서 여러 턴을 이어가며 셸을 자주
-부르므로 **기본을 `readonly`(읽기 전용 자동)로 둡니다** — `ls`·`cat`·
-`git status/diff/log`·테스트처럼 읽기만 하는 명령은 조용히 실행하고, 그 밖의
-명령(설치·삭제·`git commit` 등)은 확인을 받습니다. 권한 상승(`sudo` 등)은
+`llm`(인자 없음) / `llm -i` / `llm repl` / `llm agent`(대화형)는 한 프로세스에서
+여러 턴을 이어가며 셸을 자주 부르므로 **기본을 `readonly`(읽기 전용 자동)로 둡니다**
+— `ls`·`cat`·`git status/diff/log`·테스트처럼 읽기만 하는 명령은 조용히 실행하고,
+그 밖의 명령(설치·삭제·`git commit` 등)은 확인을 받습니다. 권한 상승(`sudo` 등)은
 대상이 읽기 전용이어도 **항상 목적 설명과 함께 확인**을 받습니다.
-일반(에이전트) 실행은 작업 폴더 안까지 자동인 `safe`가 기본입니다.
+1턴 실행(`llm ask "질문"`)은 작업 폴더 안까지 자동인 `safe`가 기본입니다.
 `--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_AUTO_WORKSPACE` 같은
 `LLM_*` 환경변수를 **직접 주면 그쪽을 따릅니다**(repl 기본은 그때 쓰지 않음).
 다시 “전부 확인”으로 돌리려면 `llm repl --confirm-all`을 쓰세요.
@@ -1145,15 +1211,7 @@ alias로 동작합니다.
 시작할 때 현재 설정을 한 줄로 보여 줍니다.
 
 ```text
-ℹ️  셸 확인=읽기 전용 자동(repl 기본) — 읽기 전용은 조용히 실행, 그 밖은 확인 · sudo 등 권한 상승은 목적 설명 후 매번 확인 · 완화 --safe/--trust/--yes · 자동 허용 기록 ~/.local/share/llm/shell_log_llm.jsonl (기록 켐 · 조회 /log)
-```
-`--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_AUTO_WORKSPACE` 같은
-`LLM_*` 환경변수를 **직접 주면 그쪽을 따릅니다**(repl 기본은 그때 쓰지 않음).
-
-시작할 때 현재 설정을 한 줄로 보여 줍니다.
-
-```text
-ℹ️  셸 확인=전부(repl 기본) — 완화 --safe/--trust/--yes · 자동 허용 기록 ~/.local/share/llm/shell_log_llm.jsonl (기록 켬 · 조회 /log)
+ℹ️  셸 확인=읽기 전용 자동(repl 기본) — 읽기 전용은 조용히 실행, 그 밖은 확인 · sudo 등 권한 상승은 목적 설명 후 매번 확인 · 완화 --safe/--trust/--yes · 자동 허용 기록 ~/.local/share/llm/shell_log_llm.jsonl (기록 켬 · 조회 /log)
 ```
 
 확인 프롬프트에서 허용한 명령과, 허용 목록(`a`) 덕분에 프롬프트 없이 실행된
@@ -1168,20 +1226,20 @@ alias로 동작합니다.
 | `n` | 거부 | 거부(`n`) |
 
 ```text
-$ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-log 50)
+$ llm shell log            # 또는 REPL 에서 /log  (최근 20건, llm shell log 50)
 ─────────────────── 셸 허용 로그  [llm]  최근 3/3건 ───────────────────
 ℹ️  자동 허용 실행 1 · 이번만 허용 1 · 거부 1
    02-05 11:22  자동 허용 실행 npm test
    02-05 11:20  이번만 허용   git pull --ff-only
    02-05 11:18  거부       rm -rf /srv/app (취소)
 ℹ️  파일: ~/.local/share/llm/shell_log_llm.jsonl
-ℹ️  비우기: llm shell-log clear
+ℹ️  비우기: llm shell log clear
 ```
 
 - 기록은 **부가 기능**이라 쓰기에 실패해도 셸 실행을 막지 않습니다.
 - 최근 500건까지만 남기고, 명령은 500자까지만 저장합니다.
 - `LLM_SHELL_LOG=0`이면 새 기록을 남기지 않습니다(기존 파일은 조회 가능).
-- 비우기: `llm shell-log clear` (REPL 은 `/log clear`).
+- 비우기: `llm shell log clear` (REPL 은 `/log clear`).
 - 기록 파일은 기기 로컬 정보라 대화 기록 위치(`LLM_HISTORY`)와 무관하게 홈에 둡니다.
 
 ### heredoc·인라인 스크립트 처리
@@ -1195,13 +1253,13 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
 - `python3 -c '...'`, `node -e`, 인터프리터 단독 실행(`python3 -`, 파이프 입력)
 - `./run.sh`, `sh run.sh`처럼 **스크립트 파일 직접 실행**(내용을 검증할 수 없음)
 
-`--auto-workspace`(outside) 모드에서는 경로를 붙인 인터프리터
+`--safe`(작업 폴더 안 자동) 모드에서는 경로를 붙인 인터프리터
 (`./.venv/bin/python - <<'EOF'` 등)를 `python3 - <<'EOF'`와 **같은 기준**으로
 판단합니다(스크립트 실행과 동급). `-c`/`-e`로 코드를 넘기면 확인 대상입니다.
 
-### 작업 폴더 안 자동 실행 (`--auto-workspace`)
+### 작업 폴더 안 자동 실행 (`--safe`)
 
-`--auto-workspace`를 켜면 **명령이 건드리는 경로가 전부 작업 폴더 안에서
+`--safe`(기본)를 켜면 **명령이 건드리는 경로가 전부 작업 폴더 안에서
 끝나고, 되돌릴 수 있는 명령이면** 확인 없이 실행합니다. "폴더 안이면 다
 허용"에 가깝지만 아래 조건으로 범위를 막습니다.
 
@@ -1228,7 +1286,7 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
   - **실행 대상을 바꾸는 환경변수 접두**: `PATH=/evil npm test`,
     `LD_PRELOAD=...`, `PYTHONPATH=...` (일반 지정 `FOO=1 cmd`는 프로그램 기준
     으로 판단)
-- `--confirm-all`과 함께 쓰면 `--auto-workspace`는 무시됩니다(모두 확인).
+- `--confirm-all`과 함께 쓰면 `--safe`는 무시됩니다(모두 확인).
 - 매번 플래그를 치기 번거로우면 저장소 폴더의 `.env`(또는 `/etc/env/.env`)에
   `LLM_AUTO_WORKSPACE=1`을 넣어 기본으로 켜 둘 수 있습니다(`--confirm-all`이
   항상 우선).
@@ -1237,7 +1295,7 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
 
 ### 확인이 필요한 명령 (엄격 모드)
 
-`--auto-workspace`처럼 자동 실행 화이트리스트를 쓰는 모드에서는 아래 명령이
+`--safe`처럼 자동 실행 화이트리스트를 쓰는 모드에서는 아래 명령이
 `[y/N/a]` 확인 대상입니다(필요하면 `a`로 세션 한정 자동 허용). **기본(허용) 모드**
 에서는 여기 있는 명령도 `sudo`·설치·폴더 밖 삭제가 아니면 그냥 실행됩니다.
 
@@ -1256,7 +1314,7 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
 중에서 고릅니다(조합 명령이면 `all`로 남은 조각을 한꺼번에 허용).
 `llm --yes`는 모든 확인을 건너뜁니다.
 
-`--allow-list`는 저장된 범위를 세 종류로 나눠 보여 줍니다.
+`llm shell allow`는 저장된 범위를 세 종류로 나눠 보여 줍니다.
 
 ```text
 셸 자동 허용 목록  [llm]
@@ -1265,10 +1323,10 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
    폴더  rm (build/ 이하)
    정확  git push origin main
 파일: ~/.local/share/llm/shell_allow_llm.json
-해제: llm --allow-clear
+해제: llm shell allow clear
 ```
 
-계열 접두에 포함되는 정확 항목은 목록에서 숨깁니다(`--allow-clear`로 한 번에
+계열 접두에 포함되는 정확 항목은 목록에서 숨깁니다(`llm shell allow clear`로 한 번에
 비웁니다). 폴더 범위는 작업 폴더 기준 상대 경로(`build/`)로, 밖이면 절대
 경로로 표시합니다.
 
@@ -1296,7 +1354,7 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
 | `LLM_COMPACT_TOKENS` | `90000` | 실제 입력 토큰이 이 값을 넘으면 대화 압축 |
 | `LLM_PROJECT_DOCS` | (켜짐) | `0`이면 `CLAUDE.md`/`AGENTS.md` 프로젝트 지침을 읽지 않음 |
 | `LLM_SHELL_KEEP_ENV` | (없음) | 셸에 그대로 넘길 비밀 변수 이름(쉼표 구분). 기본은 모두 제거 |
-| `LLM_SHELL_LOG` | `1`(켜짐) | `0`이면 셸 허용/실행 로그를 남기지 않음 (`llm shell-log` 조회는 유지) |
+| `LLM_SHELL_LOG` | `1`(켜짐) | `0`이면 셸 허용/실행 로그를 남기지 않음 (`llm shell log` 조회는 유지) |
 
 `.env` 파일은 아래 순서로 로드됩니다(**앞이 우선**, 이미 설정된 환경변수는
 덮어쓰지 않음).
@@ -1307,7 +1365,7 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
 
 `LLM_AUTO_WORKSPACE=1`이 남아 있어 확인(`y/N`)이 자주 뜬다면 저장소 폴더의
 `.env`(또는 `/etc/env/.env`)에서 그 줄을 지우거나 `0`으로 바꾸세요. 이번 실행만
-바꾸려면 `llm --allow-all`(기본 허용 모드)이나 `llm --confirm-all`처럼
+바꾸려면 `llm --trust`(관대)나 `llm --confirm-all`처럼
 **CLI 옵션을 직접 주면 환경변수를 이깁니다**. 현재 모드는 시작 배너의
 `확인=...`에서 바로 확인할 수 있습니다.
 
@@ -1320,18 +1378,18 @@ $ llm shell-log            # 또는 REPL 에서 /log  (최근 20건, llm shell-l
 | `<저장소>/.env` | API 키 등 환경변수 (자동 로드, `.gitignore` 제외 대상) |
 | `/etc/env/.env` | API 키 등 환경변수 (자동 로드, 시스템 공용 폴백) |
 | `<작업폴더>/.llm/history_<세션>.json` | 세션별 대화 기록 (**기본**, 저장소에 커밋해 다른 PC와 동기화) |
-| `<작업폴더>/.llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 (기본, `--sync-history` 커밋 대상) |
+| `<작업폴더>/.llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 (기본, `llm sync` 커밋 대상) |
 | `~/.local/share/llm/history_<세션>.json` | 대화 기록 (예전 위치, `LLM_HISTORY=home`일 때만. 옮기면 `*.migrated`로 남음) |
 | `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (기기 로컬, 경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |
 | `~/.local/share/llm/summaries/<세션>/` | 요약 백업 (`LLM_HISTORY=home`일 때만) |
 | `~/.local/share/llm/shell_allow_<세션>.json` | 세션별 셸 자동 허용 목록 (`a` 응답, 기기 로컬) |
-| `~/.local/share/llm/shell_log_<세션>.jsonl` | 허용·자동 실행·거부한 셸 명령 로그 (최근 500건, `llm shell-log`, 기기 로컬) |
+| `~/.local/share/llm/shell_log_<세션>.jsonl` | 허용·자동 실행·거부한 셸 명령 로그 (최근 500건, `llm shell log`, 기기 로컬) |
 | `~/.local/share/llm/rates.json` | 실시간 환율 캐시 (`1 화폐 = 몇 원`, 받은 시각·출처, 12시간 유효, 기기 로컬) |
 | `~/.local/share/llm/autopull.json` | 폴더별 마지막 원격 확인 시각 (질의 전 자동 수신 간격 판단, 기기 로컬) |
 | `<작업폴더>/.llm/rules.md` | 프로젝트 세션 규칙 |
 | `<작업폴더>/CLAUDE.md`, `AGENTS.md`, `~/.claude/CLAUDE.md` | 프로젝트/전역 지침 (읽기만) |
 | `~/.local/share/llm/undo/undo_<세션>.json` | 턴별 편집 전 원본 (`llm undo`, 최근 20턴, 기기 로컬) |
-| `~/.local/share/llm/repl_history` | REPL 입력 히스토리 (↑/↓) |
+| `~/.local/share/llm/repl_history` | 대화형 입력 히스토리 (↑/↓) |
 | `$TMPDIR/llm-bg-*/bg_N.log` | 백그라운드 셸 출력 (실행 중에만) |
 
 > **기기 로컬 정보**(`bindings.json`·`shell_allow_*.json`·`shell_log_*.jsonl`·`rates.json`·
@@ -1365,10 +1423,12 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 | `mdrender.py` | 외부 도구 없이 터미널용 Markdown 렌더링(헤딩·목록·코드·인용·표·인라인 강조, 한글 폭 정렬) |
 | `bgshell.py` | 백그라운드 셸 작업 관리(`BgManager`) |
 | `shelllog.py` | 셸 허용/실행 로그(`ShellLog`, `log_path`, `rows`/`tally`) |
+| `cliargs.py` | 서브커맨드 → 옵션 펼치기(`expand`: `shell log`, `session view 이름` 등), 기본 실행 형태 판단(`wants_repl`) |
 
 `agent.py`의 주요 구성:
 
-- **진입/CLI**: `main`, `parse_args`, `canonical_folder`, `VERSION`(시작 배너·머리말에
+- **진입/CLI**: `main`, `parse_args`, `expand_cli_argv`(`llmlib.cliargs.expand` 얇은 래퍼),
+  `canonical_folder`, `VERSION`(시작 배너·머리말에
   표시하는 버전 문자열), `load_dotenv`(`LLM_ENV_FILE` → 저장소 `.env` →
   `/etc/env/.env` 순서로 로드, 앞이 우선), `print_banner`(모드·버전·세션·폴더·규칙·확인 모드 한 줄)
 - **에이전트 루프**: `cmd_agent` — 모델 호출 → 도구 실행(읽기 전용은 병렬, `PARALLEL_TOOLS`)
@@ -1388,10 +1448,10 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   `resolve_ask_mode`/`repl_ask_mode`/`SHELL_ASK_LABELS`/`SHELL_ASK_SOURCES`(확인 모드 결정·배너
   표시, 대화형은 기본 `readonly`), `privilege_head`/`privilege_target`/`privilege_purpose`/
   `privilege_segments`(권한 상승 판별·목적 요약)·`ask_shell_privilege`(해당 조각은 목적 설명 후 매번 확인), `shell_log_file`/`shell_log_enabled`/`shell_log`/
-  `short_home`/`cmd_shell_log`(허용·자동 실행 로그, `--shell-log`/`llm shell-log`/REPL `/log`),
+  `short_home`/`cmd_shell_log`(허용·자동 실행 로그, `llm shell log`/`--shell-log`/REPL `/log`),
   `scope_targets`/`scope_dir`/`scope_usable`/`scope_label`(폴더 단위 자동 허용 범위),
   `command_prefix` / `strip_env_assignments`(자동 허용 접두, 환경변수 지정 인식),
-  `ShellApproval`(세션별 자동 허용 목록: 정확·계열·폴더 범위, `--allow-list`/`--allow-clear`)
+  `ShellApproval`(세션별 자동 허용 목록: 정확·계열·폴더 범위, `llm shell allow`/`shell allow clear`)
 - **세션/규칙**: `load_history`/`save_history`, `ensure_binding`/`load_bindings`
   (폴더 1:1 바인딩, 소유 폴더 외 거부), `canonical_folder`(경로 정규화),
   `load_session_rules`, `ref_digest`/`build_ref_context`/`inject_ref_context`(다른 세션
@@ -1406,7 +1466,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   이면 홈), `history_file_of_folder`/`find_history_file`,
   `migrate_legacy_session`(홈 → `.llm` 1회 이전, 더 긴 쪽 채택, 홈 원본은
   `*.migrated`), `history_sync_paths`/`git_run`/`cmd_sync_history`
-  (`--sync-history` / `llm sync`: 기록만 커밋 → ff-only pull → push),
+  (`llm sync`: 기록만 커밋 → ff-only pull → push),
   `auto_sync_enabled`/`auto_sync_history`(실행 종료 시 자동 동기화, **기본 꺼짐**·
   `LLM_AUTO_SYNC=1`로 켬), `auto_pull_enabled`/`auto_pull_interval`/
   `maybe_auto_pull`(질의 전 원격 최신 기록 자동 수신, 기본 켜짐·`LLM_AUTO_PULL=0`/
@@ -1497,31 +1557,32 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   생략하려면 `--yes`를 쓰세요(설치·삭제는 `a`로 한 번 허용해도 됩니다).
 - 예상보다 자주 묻는다면 배너의 `확인=` 값을 보세요. `outside`로 떠 있으면
   `.env`의 `LLM_AUTO_WORKSPACE=1`이 원인일 수 있습니다(위 「설정과
-  환경변수」). `llm --allow-all`로 이번 실행만 기본 모드로 돌릴 수 있습니다.
+  환경변수」). `llm --trust`로 이번 실행만 관대 모드로 돌릴 수 있습니다.
 - 같은 폴더에서 반복 작업이 많으면 확인 프롬프트에서 `a`를 골라 그 폴더를
-  기억시키거나, `llm --allow-list`로 지금까지 허용된 범위를 확인하세요.
-  `llm shell-log`는 확인 없이(또는 `a`/`all` 덕분에) 실행된 명령까지 시간순으로
-  보여 줍니다. 대화형(`llm repl`)도 기본이 **읽기 전용 자동**이라 조회·테스트
+  기억시키거나, `llm shell allow`로 지금까지 허용된 범위를 확인하세요.
+  `llm shell log`는 확인 없이(또는 `a`/`all` 덕분에) 실행된 명령까지 시간순으로
+  보여 줍니다. 대화형(`llm`·`llm -i`·`llm repl`)도 기본이 **읽기 전용 자동**이라
+  조회·테스트
   명령은 묻지 않고, 그 밖의 명령은 `a`(기억)나 `all`(이번만)로 넘기면 됩니다.
   `sudo`는 `all`로도 넘기지 못 하고 매번 확인합니다(`--yes`만 예외).
 
 ### 다른 PC에서 대화가 안 보임
 
 - 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있고, **원할 때
-  `llm --sync-history`(또는 `LLM_AUTO_SYNC=1`)로 커밋·push**합니다. 다른 PC에서는 **같은 폴더**에서
+  `llm sync`(또는 `LLM_AUTO_SYNC=1`)로 커밋·push**합니다. 다른 PC에서는 **같은 폴더**에서
   실행만 하면 시작할 때 원격 최신 기록을 자동으로 받아옵니다(끄려면
-  `LLM_AUTO_PULL=0`/`--no-pull`). 지난 대화를 지금 올리려면 `llm --sync-history`.
+  `LLM_AUTO_PULL=0`/`--no-pull`). 지난 대화를 지금 올리려면 `llm sync`.
 - 자동 수신이 안 되면 `git status`로 확인하세요: 로컬 커밋이 갈라졌거나(fast-forward
   불가), 커밋되지 않은 기록 변경이 있거나, 네트워크·인증 문제면 경고만 하고 로컬
-  기록으로 진행합니다. 이때는 `llm --sync-history`(또는
+  기록으로 진행합니다. 이때는 `llm sync`(또는
   `git pull --rebase --autostash`)로 정리한 뒤 다시 실행하세요.
 - `.llm/`이 `.gitignore`에 있으면 push가 안 됩니다. 그 줄을 지우세요
   (`.llm/rules.md`는 저장소에, 기록은 다른 PC로 — 둘 다 `.llm/` 안입니다).
 - `LLM_HISTORY=home`으로 실행하면 기록이 홈에 남아 동기화되지 않습니다.
   변수를 지우고 실행하면 `.llm/`으로 한 번 옮겨집니다.
-- 세션 이름이 다르면 다른 대화가 열립니다. `llm`(인자 없음)의 세션 목록에서
+- 세션 이름이 다르면 다른 대화가 열립니다. `llm session ls`의 세션 목록에서
   이름을 확인하거나 `llm -s <이름>`으로 지정하세요. 폴더에 기록이 있는데 매핑이
-  없으면 `llm --view` 등이 `-s`로 이어가라고 안내합니다.
+  없으면 `llm session view` 등이 `-s`로 이어가라고 안내합니다.
 - `~/.local/share/llm/`(README의 설치 경로)에 **같은 이름**으로 clone하면 첫
   대화 때 세션 이름이 폴더 이름(`llm`)으로 자동 생성되어 기록이 그대로
   이어집니다. 폴더 이름이 다르면 `llm -s llm`을 쓰세요.
@@ -1532,7 +1593,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   이때는 기록을 읽지 못한다는 경고가 뜨고 **빈 대화로 시작하지 않도록** 다시
   확인하세요: `git status`로 충돌 파일을 확인하고, `.llm/summaries/<세션>/`의
   백업 스냅샷을 참고해 한쪽을 고르거나 수동 병합한 뒤
-  `git add`/`git rebase --continue` 하고 `llm --sync-history`로 다시 올리면 됩니다.
+  `git add`/`git rebase --continue` 하고 `llm sync`로 다시 올리면 됩니다.
 
 ---
 
@@ -1551,7 +1612,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 8. **코드 수정 전 `git pull --rebase --autostash`, 검증 통과 후 커밋·`git push`**
    를 수행합니다. 검증 실패·중단 시에는 되돌리고 push하지 않습니다.
    **대화 기록 자동 커밋·push는 기본 꺼짐**입니다(`LLM_AUTO_SYNC=1`이면
-   켜지고, 수동은 `llm --sync-history`). 절차 원본:
+   켜지고, 수동은 `llm sync`). 절차 원본:
    [`.llm/rules.md`](.llm/rules.md).
 
 세션 규칙 원본은 [`.llm/rules.md`](.llm/rules.md)에서 관리됩니다.
