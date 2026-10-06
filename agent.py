@@ -15,7 +15,6 @@ import re
 import shutil
 import subprocess
 import sys
-import tempfile
 import threading
 import time
 import unicodedata
@@ -26,7 +25,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
 
-from llmlib import guard, web
+from llmlib import guard, mdrender, web
 from llmlib.bgshell import BgManager
 from llmlib.context import expand_mentions, load_project_docs
 from llmlib.conversation import clear_old_tool_results, finalize_interrupted
@@ -545,56 +544,21 @@ def print_error(message: str, stream: bool = True) -> None:
 
 
 def render_markdown(text: str, raw: bool = False) -> None:
-    """터미널에서는 glow로 Markdown을 렌더링하고, 불가능하면 원문을 출력한다."""
+    """TTY에서는 내장 렌더러(llmlib.mdrender)로, 아니면 원문 그대로 출력한다.
+
+    외부 도구(glow) 없이 헤딩·목록·코드블록·인용·표·인라인 강조를 정리해
+    보여준다. 파이프/리다이렉트(`LLM_RAW` 포함)면 손대지 않은 원문을 출력해
+    로그·자동화에서 결과가 왜곡되지 않게 한다.
+    """
     if not text:
         return
 
-    use_glow = (
-        not raw
-        and sys.stdout.isatty()
-        and shutil.which("glow")
-        and not os.environ.get("LLM_RAW")
-    )
-
-    if not use_glow:
+    if raw or not sys.stdout.isatty() or os.environ.get("LLM_RAW"):
         print(text)
         return
 
     width = max(40, min(terminal_width(), 120))
-    tmp_path: Path | None = None
-
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            suffix=".md",
-            delete=False,
-        ) as tmp:
-            tmp.write(text)
-            tmp_path = Path(tmp.name)
-
-        proc = subprocess.run(
-            [
-                "glow",
-                "--style",
-                "dark",
-                "-w",
-                str(width),
-                "-n",
-                str(tmp_path),
-            ],
-            check=False,
-        )
-
-        if proc.returncode != 0:
-            print(text)
-
-    except OSError:
-        print(text)
-
-    finally:
-        if tmp_path is not None:
-            tmp_path.unlink(missing_ok=True)
+    print(mdrender.render(text, width=width, color=color_enabled()))
 
 
 def clear_status() -> None:
@@ -608,7 +572,7 @@ def make_stream_progress(show_thinking: bool = False) -> Callable[[str, str], No
     종류(kind)는 `reasoning` | `content` | `end`.
     - `reasoning`: 사고 과정(reasoning) 진행 상황. show_thinking 이면 원문을
       회색으로 실시간 출력하고, 기본값(False)에서는 글자 수만 한 줄로 보여준다.
-    - `content`: 최종 답변은 완료 후 glow 로 한 번만 렌더링하므로 글자 수만 표시.
+    - `content`: 최종 답변은 완료 후 한 번만 렌더링하므로 글자 수만 표시.
     - `end`: 열려 있는 사고 블록/상태 줄을 정리한다.
     """
     width = max(24, terminal_width() - 1)
@@ -5297,7 +5261,7 @@ def cmd_agent(
                     stream=True,
                 )
 
-            # Final answer: save first, then render exactly once with glow.
+            # Final answer: save first, then render exactly once.
             if content:
                 messages.append({"role": "assistant", "content": content})
                 save_history(history_file, messages)

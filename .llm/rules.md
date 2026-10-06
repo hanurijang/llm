@@ -9,7 +9,8 @@
 - 구성: `llm`(bash 진입점) + `agent.py`(CLI·에이전트 루프·UI) + `llmlib/`(분리 모듈:
   `shell_policy` 셸 안전 분류, `guard` 비밀 보호, `netretry` API 재시도,
   `filestate` 편집 추적·undo, `conversation` 중단·결과 정리, `context` @멘션·
-  CLAUDE.md, `web` web_fetch, `bgshell` 백그라운드 셸). 새 기능은 가능하면
+  CLAUDE.md, `web` web_fetch, `bgshell` 백그라운드 셸,
+  `mdrender` 터미널용 Markdown 렌더러). 새 기능은 가능하면
   `llmlib/`에 순수 함수로 두고 `agent.py`는 연결만 한다.
 - **표준 라이브러리만 사용**. 외부 의존성 추가 금지.
 - Python 3.10+ 문법 사용.
@@ -22,6 +23,9 @@
 - 탐색은 `find`(mode=list|glob|grep), 읽기는 `read`.
 - 사용자 대면 메시지는 공통 UI 헬퍼(`print_title`, `print_info`, `print_ok`,
   `print_warn`, `print_error`, `print_phase`, `rule`)를 사용해 일관성을 유지한다.
+- 최종 답변·규칙 문서처럼 Markdown 본문을 보여줄 때는 `render_markdown`
+  (=`llmlib/mdrender.py`)을 쓴다. 외부 도구(glow 등)에 기대지 말고, 파이프·
+  `LLM_RAW`·비TTY에서는 원문을 그대로 출력하는 현재 동작을 유지한다.
 - 터미널 정렬이 필요한 곳은 한글 등 wide 문자를 고려해 `display_width`/`pad`를
   사용한다.
 - 편집 후 `python3 -m py_compile agent.py llmlib/*.py`와

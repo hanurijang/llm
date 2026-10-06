@@ -62,7 +62,7 @@ Claude Code 같은 클라이언트 동작을 목표로 한 개선입니다.
 | REPL | `input()` 한 줄, `/exit /sync /chat /agent` | readline(방향키·히스토리·Tab 완성), 여러 줄(`\` 이어쓰기, `"""` 블록), `/help /clear /compact /model /cost /undo /plan /rules /bg` |
 | 맥락 | `.llm/rules.md`만, 문자 수 기준 압축 | `@파일` 첨부, `CLAUDE.md`/`AGENTS.md`(상위 폴더·`~/.claude`) 반영, **실제 토큰 수** 기준 압축, 오래된 긴 도구 결과 일괄 비우기 |
 | 도구 | 5개, 순차 실행, 셸 최대 180초 | + `web_fetch`, `task`(읽기 전용 서브에이전트), 백그라운드 셸, grep `context`/`output`, 읽기 전용 호출 **병렬 실행**, 셸 최대 600초 |
-| 구조 | `agent.py` 6,000줄 단일 파일, 테스트 9개 | `llmlib/` 8개 모듈로 분리(셸 정책·보안·재시도 등), 테스트 40개(셸 정책 표 테스트 포함) |
+| 구조 | `agent.py` 6,000줄 단일 파일, 테스트 9개 | `llmlib/` 9개 모듈로 분리(셸 정책·보안·재시도·Markdown 렌더러 등), 테스트 61개(셸 정책 표·Markdown 렌더러 테스트 포함) |
 
 ---
 
@@ -95,7 +95,7 @@ Claude Code 같은 클라이언트 동작을 목표로 한 개선입니다.
 | Python | 3.10 이상 (`str \| None` 등 최신 타입 문법 사용) |
 | 셸 | bash (셸 도구는 `/bin/bash`로 실행) |
 | API 키 | `DEEPSEEK_API_KEY` 필요 |
-| glow(선택) | 설치되어 있으면 최종 답변을 Markdown으로 렌더링. 없으면 원문 출력 |
+| 터미널 | 색·Markdown 강조를 위해 TTY 권장. 외부 도구 없이 **내장 렌더러** 사용 |
 
 의존 패키지는 없습니다. `urllib`, `json`, `subprocess` 등 표준 라이브러리만
 사용합니다.
@@ -254,7 +254,6 @@ llm "이 폴더 요약해줘"   # 도구까지 확인
 | Python 3.10+ | `python3 -V` | 최신 버전 설치 (3.9 이하면 문법 오류) |
 | bash | `bash --version` | Linux/macOS/WSL은 기본 포함 |
 | git (선택) | `git --version` | clone·`mv` 이어받기 안내에만 사용 |
-| glow (선택) | `which glow` | 없어도 됨 (Markdown 원문 출력) |
 
 ---
 
@@ -631,9 +630,19 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
   으로 출력하지 않습니다**(영어 사고 과정이 화면을 채우는 것을 막기 위함).
   원문을 보고 싶으면 `--show-thinking`을 쓰면 회색으로 실시간 출력합니다.
   아예 사고를 끄려면 `--no-thinking`.
-- **최종 답변**: 완료 후 `glow`(있으면)로 Markdown 렌더링하고, TTY가
-  아니거나 `LLM_RAW` 설정 시 원문으로 출력합니다. 스트리밍 중에는 글자 수만
-  표시합니다.
+- **최종 답변**: 완료 후 **내장 Markdown 렌더러**(`llmlib/mdrender.py`, 표준
+  라이브러리만)로 정리해 출력합니다. 외부 도구(glow 등) 설치가 필요 없고,
+  TTY가 아니거나 `LLM_RAW` 설정 시 원문으로 출력합니다. 스트리밍 중에는 글자
+  수만 표시합니다.
+  - 지원: ATX/`===` 헤딩, 순서·비순서·체크 목록(긴 항목은 행잉 인덴트로 접음),
+    펜스 코드블록(언어 라벨 + 좌측 세로줄, 긴 줄은 폭에 맞춰 자름), 인용,
+    수평선, 파이프 표(열 정렬), 인라인 코드·굵게·기울임·취소선·링크
+    (`[텍스트](url)` → 텍스트 + 회색 URL).
+  - 한글·전각 문자는 표시 폭을 2로 세어 표·목록 열이 어긋나지 않습니다
+    (`display_width`).
+  - `NO_COLOR`면 색 없이 **구조만** 정리하고 Markdown 기호는 지웁니다
+    (`--no-color`와 같은 판정). 파이프·리다이렉트에서는 원문 그대로 남겨
+    로그가 왜곡되지 않게 합니다.
   - 답변 앞 줄은 `✅ 작업 완료 (N단계 · 소요 시간)`이고, 답변 본문 뒤에는
     회색 구분선을 그어 **답변 블록의 끝**을 표시합니다(다음 프롬프트와 섞이지 않게).
   - 모델에는 **답변 골격**을 지시합니다: 결론을 한두 문장으로 먼저 쓰고, 해당될
@@ -648,13 +657,15 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
 ```text
 ✅ 작업 완료 (7단계 · 1m 05s)
 ──────────────────────────────── 🤖 답변 ────────────────────────────────
-## 요약
+요약
+────────────
 
-- 확인 프롬프트 오탐을 제거했습니다.
+• 확인 프롬프트 오탐을 제거했습니다.
 
-## 검증
+검증
+────────────
 
-- `python3 -m py_compile agent.py` 통과
+• `python3 -m py_compile agent.py` 통과
 ─────────────────────────────────────────────────────────────────────────
 ```
 
@@ -1157,7 +1168,7 @@ alias로 동작합니다.
 |------|--------|------|
 | `DEEPSEEK_API_KEY` | (없음) | **필수**. API 키 |
 | `LLM_MODEL` | `deepseek-flash` | 기본 모델 |
-| `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(glow)을 끄고 원문 출력, 도구 결과 제자리 갱신도 끔(로그로 출력) |
+| `LLM_RAW` | (미설정) | 설정 시 Markdown 렌더링(내장)을 끄고 원문 출력, 도구 결과 제자리 갱신도 끔(로그로 출력) |
 | `LLM_ALLOW_ALL` / `LLM_SHELL_TRUST` | (미설정) | `1`이면 `--trust`(관대). CLI가 우선 |
 | `LLM_AUTO_WORKSPACE` | (미설정) | `1`이면 `--safe`. **미설정 시에도 기본은 safe** |
 | `LLM_RATES` | (미설정) | `0`이면 실시간 환율 끄고 가정 환율 (`--no-rates`) |
@@ -1237,6 +1248,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 | `conversation.py` | `finalize_interrupted`(Ctrl+C 후 기록 정리), `clear_old_tool_results` |
 | `context.py` | `expand_mentions`(@파일), `project_doc_files`/`load_project_docs`(CLAUDE.md·AGENTS.md) |
 | `web.py` | `web_fetch` 본문 가져오기·HTML → 텍스트 |
+| `mdrender.py` | 외부 도구 없이 터미널용 Markdown 렌더링(헤딩·목록·코드·인용·표·인라인 강조, 한글 폭 정렬) |
 | `bgshell.py` | 백그라운드 셸 작업 관리(`BgManager`) |
 
 `agent.py`의 주요 구성:
@@ -1297,7 +1309,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   `load_rates`/`rates_enabled`/`rates_from_usd`/`read_rate_cache`/`write_rate_cache`/
   `krw_rate`(실시간 환율 조회·캐시, 실패 시 가정 환율 `CURRENCY_KRW_RATE` =
   `KRW_PER_CNY`/`KRW_PER_USD` 폴백), `http_get_json`(키 없는 제3자 API 조회),
-  `StepPanel`/`PANEL`(작업 계획 블록·도구 줄 제자리 갱신), `render_markdown`(glow),
+  `StepPanel`/`PANEL`(작업 계획 블록·도구 줄 제자리 갱신), `render_markdown`(내장 렌더러 호출, `llmlib/mdrender.py`),
   `print_title`/`print_info`/`print_ok`/
   `print_warn`/`print_error`(출력 뒤 계획 블록 다시 그리기), `rule`(구분선, 한글 폭 고려)
 
@@ -1319,7 +1331,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
    줄이 **진행 중인 항목의 하위 로그**로 붙고, 없으면 단계 머리말 아래에 그린다
 6. 단계 시작 시 대화가 커졌으면 요약하고, 진행 중인 작업 계획(목표 + 항목)을
    요약문에 함께 실어 다음 단계에서도 같은 계획을 이어감
-7. 최종 텍스트 응답을 저장하고 Markdown으로 출력 (앞에 `작업 완료 (N단계)`,
+7. 최종 텍스트 응답을 저장하고 내장 렌더러로 Markdown 출력 (앞에 `작업 완료 (N단계)`,
    잔액·소요 비용·토큰 사용량 푸터). 작업 계획 블록은 지우지 않고 화면에 남긴다
 
 반복이 `--max-steps`(기본 100)에 도달하면 곧바로 끝내지 않고 **이어서 같은
@@ -1351,10 +1363,13 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 
 ### 답변이 Markdown 원문으로 보임
 
-- `glow`가 없거나, TTY가 아니거나, `LLM_RAW`가 설정된 경우입니다.
+- 파이프·리다이렉트(TTY 아님)거나 `LLM_RAW`가 설정된 경우입니다. 이때는
+  로그·자동화에서 결과가 왜곡되지 않도록 원문을 그대로 출력합니다.
   ```bash
-  which glow
+  echo "$LLM_RAW"; tty
   ```
+- TTY인데도 `**굵게**` 같은 기호가 보이면 `NO_COLOR`가 설정돼 색 없이
+  구조만 정리된 것입니다(기호는 지워집니다). `unset NO_COLOR` 로 색을 켭니다.
 
 ### 셸 실행이 거부됨
 
