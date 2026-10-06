@@ -62,7 +62,7 @@ from llmlib.shell_policy import (
 )
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.10.0"
+VERSION = "0.11.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -785,7 +785,7 @@ def migrate_legacy_session(session: str) -> Path | None:
         )
         print_info(
             "이제 이 폴더를 커밋·push 하면 다른 PC에서도 대화가 이어집니다"
-            " (llm --sync-history)."
+            " (llm sync)."
         )
     elif _history_len(src) > _history_len(dst):
         shutil.copy2(src, dst)
@@ -1763,7 +1763,7 @@ def cmd_show_rules(root: Path, raw: bool = False) -> int:
         return 0
     if not text:
         print_warn("규칙이 없습니다.")
-        print_info("llm --init-rules  로 템플릿을 만들 수 있습니다.")
+        print_info("llm rules init  로 템플릿을 만들 수 있습니다.")
         return 1
     render_markdown(text, raw=raw)
     return 0
@@ -3942,36 +3942,51 @@ def complete(
     return content, tool_calls, choice.get("finish_reason"), reasoning
 
 
+# 시작 헤더 행의 라벨 폭(한글 wide 문자 고려, display_width 기준).
+HEADER_LABEL_WIDTH = 8
+
+
+def header_line(label: str, value: str) -> str:
+    """시작 헤더의 `라벨  값` 한 행(라벨 폭을 맞춰 정렬)."""
+    return f"  {C.dim}{pad(label, HEADER_LABEL_WIDTH)}{C.reset}  {value}"
+
+
 def print_banner(
     session: str,
     root: Path,
     chat_only: bool,
     ask_mode: str = "outside",
     ask_source: str = "",
+    repl: bool = False,
 ) -> None:
-    mode = "채팅" if chat_only else "에이전트"
+    """시작 헤더: 제목 줄 + 라벨 정렬 행(세션·폴더·셸·설정).
+
+    한 줄에 몰아 찍던 정보를 행 단위로 구조화해, 대화형 진입 화면에서
+    세션·폴더·확인 모드·규칙/동기화 상태가 눈에 바로 들어오게 한다.
+    """
+    mode = "대화형" if repl else ("채팅" if chat_only else "에이전트")
     mode_color = C.magenta if chat_only else C.cyan
     has_rules = bool(load_session_rules(root))
     rules = f"{C.green}on{C.reset}" if has_rules else f"{C.dim}off{C.reset}"
     sync_on = auto_sync_enabled() and history_scope_is_repo()
     sync = f"{C.green}on{C.reset}" if sync_on else f"{C.dim}off{C.reset}"
-    confirm = ""
+    print()
+    print(f"{C.bold}{C.cyan}{rule('─', f'✦ llm v{VERSION} · {mode}')}{C.reset}")
+    print(header_line("세션", f"{mode_color}{C.bold}{session}{C.reset}"))
+    print(header_line("폴더", short_home(root)))
     if not chat_only:
         label = SHELL_ASK_LABELS.get(ask_mode, ask_mode)
-        confirm = f"  {C.dim}{label}{C.reset}"
-        if RUN.confirm_edits:
-            confirm += f"  {C.dim}편집=확인{C.reset}"
-        if RUN.plan_mode:
-            confirm += f"  {C.yellow}{C.bold}PLAN{C.reset}"
-    print(
-        f"{C.dim}──{C.reset} {mode_color}{C.bold}{mode}{C.reset}"
-        f" {C.dim}v{VERSION}{C.reset}"
-        f"  {C.dim}session={C.reset}{session}"
-        f"  {C.dim}root={C.reset}{root}"
-        f"  {C.dim}rules={C.reset}{rules}"
-        f"  {C.dim}sync={C.reset}{sync}"
-        f"{confirm}"
-    )
+        if repl and ask_mode == REPL_DEFAULT_ASK_MODE:
+            label += (
+                f" {C.dim}(repl 기본) — 읽기 전용은 조용히 실행, 그 밖은 확인{C.reset}"
+            )
+        print(header_line("셸", label))
+    tail = [f"rules {rules}", f"sync {sync}"]
+    if not chat_only and RUN.confirm_edits:
+        tail.append(f"편집={C.yellow}확인{C.reset}")
+    if not chat_only and RUN.plan_mode:
+        tail.append(f"{C.yellow}{C.bold}PLAN{C.reset}")
+    print(header_line("설정", " · ".join(tail)))
     if ask_source:
         info = SHELL_ASK_SOURCES.get(ask_source)
         if info:
@@ -3992,14 +4007,14 @@ def print_continue_status(root: Path, session: str, history_file: Path) -> None:
             turns = sum(1 for m in msgs if m.get("role") == "user")
         except OSError:
             turns = 0
-    parts = [f"이어가기 · 로컬 {turns}턴"]
+    parts = [f"로컬 {turns}턴"]
     if not history_scope_is_repo():
         parts.append("기록=홈(동기화 안 함)")
-        print_info(" · ".join(parts))
+        print(header_line("이어가기", " · ".join(parts)))
         return
     if not (root / ".git").exists() and git_run(root, "rev-parse", "--git-dir")[0] != 0:
         parts.append("git 없음")
-        print_info(" · ".join(parts))
+        print(header_line("이어가기", " · ".join(parts)))
         return
     dirty = False
     rel = ""
@@ -4017,7 +4032,7 @@ def print_continue_status(root: Path, session: str, history_file: Path) -> None:
         if auto_sync_enabled():
             parts.append("끝나면 자동 sync")
         else:
-            parts.append("필요 시 llm --sync-history")
+            parts.append("필요 시 llm sync")
     ahead = behind = 0
     if git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] == 0:
         code, out = git_run(root, "rev-list", "--count", "HEAD..@{u}")
@@ -4036,7 +4051,7 @@ def print_continue_status(root: Path, session: str, history_file: Path) -> None:
             parts.append("원격과 같음")
     else:
         parts.append("upstream 없음")
-    print_info(" · ".join(parts))
+    print(header_line("이어가기", " · ".join(parts)))
 
 
 def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
@@ -4557,7 +4572,7 @@ def cmd_allow(session: str, clear: bool, root: Path | None = None) -> int:
     return 0
 
 
-# `llm shell-log` 색상(종류별로 구분).
+# `llm shell log` 색상(종류별로 구분).
 SHELL_LOG_COLORS = {
     "auto": C.green,
     "a": C.green,
@@ -4606,7 +4621,7 @@ def cmd_shell_log(
     print_info(f"파일: {log.path}")
     if not shell_log_enabled():
         print_warn("LLM_SHELL_LOG=0 이라 새 기록은 남지 않습니다.")
-    print_info("비우기: llm shell-log clear")
+    print_info("비우기: llm shell log clear")
     return 0
 
 
@@ -4796,7 +4811,7 @@ def print_history_sync_hint(root: Path, history_file: Path) -> None:
         )
         return
     print_info(
-        "대화 기록이 아직 커밋되지 않았습니다 — llm --sync-history 로 올리면"
+        "대화 기록이 아직 커밋되지 않았습니다 — llm sync 로 올리면"
         " 다른 PC에서 이어집니다."
     )
 
@@ -5080,7 +5095,7 @@ def list_sessions(active: str | None, folders: dict[str, str], root: Path) -> No
     mapped_txt = mapped if mapped else f"{C.yellow}(없음 — 다음 대화 때 생성){C.reset}"
     print(f"  {C.dim}🔗 매핑 세션{C.reset}  {mapped_txt}")
     rules_file = rules_path(root)
-    rules_txt = str(rules_file) if rules_file.is_file() else f"{C.yellow}(없음 — llm --init-rules){C.reset}"
+    rules_txt = str(rules_file) if rules_file.is_file() else f"{C.yellow}(없음 — llm rules init){C.reset}"
     print(f"  {C.dim}📜 세션 규칙{C.reset}  {rules_txt}")
     if mapped is None:
         # 폴더를 옮겨 온 흔적이 있으면, 대화를 시작하기 전에 이어받을 후보를 알려준다.
@@ -5572,7 +5587,7 @@ REPL_COMMANDS = {
     "/plan": "plan 모드 켜기/끄기 (읽기 전용 조사 + 계획만)",
     "/rules": "세션 규칙·프로젝트 지침 보기",
     "/bg": "백그라운드 셸 작업 목록",
-    "/log": "셸 허용/실행 로그 (llm shell-log [N|clear])",
+    "/log": "셸 허용/실행 로그 (llm shell log [N|clear])",
     "/sync": "대화 기록 올리기",
     "/chat": "채팅 모드(도구 없음)",
     "/agent": "에이전트 모드",
@@ -5646,21 +5661,34 @@ def cmd_repl(
     """
     auto_workspace, allow_all, ask_mode, ask_source, repl_default = repl_ask_mode(args)
     RUN.ask_mode = ask_mode
-    print_banner(session, root, args.chat, ask_mode=ask_mode, ask_source=ask_source)
+    print_banner(
+        session, root, args.chat, ask_mode=ask_mode, ask_source=ask_source, repl=True
+    )
     print_continue_status(root, session, history_file)
-    print_phase("대화형 모드")
-    print_info("/help 명령 목록 · 빈 줄·/exit 종료 · Ctrl+C 는 진행 중인 턴만 중단 · @파일 첨부 · 줄 끝 \\ 여러 줄")
-    print_info("1턴만 하고 끝내려면  llm ask \"질문\"")
-    if repl_default:
-        print_info(
-            f"셸 {C.bold}{SHELL_ASK_LABELS[REPL_DEFAULT_ASK_MODE]}{C.reset}(repl 기본) "
-            f"{C.dim}— 읽기 전용은 조용히 실행, 그 밖은 확인 · "
-            f"sudo 등 권한 상승은 목적 설명 후 매번 확인{C.reset} · "
-            f"완화 --safe/--trust/--yes · "
-            f"자동 허용 기록 {C.bold}{short_home(shell_log_file(session))}{C.reset} "
-            f"{C.dim}({shell_log_enabled() and '기록 켬' or 'LLM_SHELL_LOG=0 으로 끔'}"
-            f" · 조회 /log){C.reset}"
+    if not args.chat and repl_default:
+        print(
+            header_line(
+                "완화",
+                f"--safe / --trust / --yes {C.dim}(셸 확인 완화){C.reset}"
+                f" · sudo 등 권한 상승은 목적 설명 후 매번 확인",
+            )
         )
+        print(
+            header_line(
+                "로그",
+                f"{C.bold}{short_home(shell_log_file(session))}{C.reset} "
+                f"{C.dim}({shell_log_enabled() and '기록 켬' or 'LLM_SHELL_LOG=0 으로 끔'}"
+                f" · 조회 /log){C.reset}",
+            )
+        )
+    print(
+        header_line(
+            "도움말",
+            r"/help 명령 · 빈 줄·/exit 종료 · @파일 첨부 · 줄 끝 \ 이어쓰기"
+            ' · 1턴만 llm ask "질문"',
+        )
+    )
+    print()
     if not args.no_pull:
         maybe_auto_pull(root, enabled=True)
     setup_readline()

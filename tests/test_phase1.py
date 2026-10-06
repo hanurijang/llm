@@ -20,7 +20,7 @@ import agent as llm  # noqa: E402
 
 class Phase1Defaults(unittest.TestCase):
     def test_version(self) -> None:
-        self.assertEqual(llm.VERSION, "0.10.0")
+        self.assertEqual(llm.VERSION, "0.11.0")
 
     def test_version_matches_readme(self) -> None:
         """README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신)."""
@@ -29,6 +29,19 @@ class Phase1Defaults(unittest.TestCase):
         )
         self.assertIn(f"**버전:** v{llm.VERSION} ", readme)
         self.assertIn(f"## v{llm.VERSION.rsplit('.', 1)[0]} 변경 사항", readme)
+
+    def test_header_rows_align_and_show_state(self) -> None:
+        """시작 헤더는 라벨 정렬 행으로 세션·폴더·셸·설정을 보여 준다."""
+        lines: list[str] = []
+        with mock.patch("builtins.print", lambda *a, **k: lines.append(" ".join(map(str, a)))):
+            with mock.patch.object(llm, "load_session_rules", lambda root: "x"):
+                llm.print_banner("sess", Path("/tmp/proj"), False, ask_mode="readonly", repl=True)
+        text = "\n".join(lines)
+        self.assertIn("· 대화형", text)
+        for label in ("세션", "폴더", "셸", "설정"):
+            self.assertIn(label, text)
+        self.assertEqual(llm.header_line("세션", "v").startswith("  "), True)
+        self.assertIn("rules on", text)
 
     def test_tool_schema_names(self) -> None:
         names = [t["function"]["name"] for t in llm.tool_schemas()]

@@ -97,7 +97,7 @@
   평소에는 `llm sync`(=`--sync-history`)로 직접 올린다. rebase 하지 않는다.
 - **다른 PC에서 이어갈 때는 첫 질의 전에 원격 최신 기록을 먼저 받아온다**
   (`maybe_auto_pull` → `history_receive_remote`: fetch 후 ff-only만).
-  시작 시 **이어가기** 한 줄로 로컬 턴·미커밋·원격 ahead/behind를 보여 준다.
+  시작 헤더의 **이어가기** 행으로 로컬 턴·미커밋·원격 ahead/behind를 보여 준다.
   실패·갈라짐·dirty 면 경고만 하고 **로컬 기록으로 계속**.
   끄는 방법은 `LLM_AUTO_PULL=0` 또는 `--no-pull`.
 - clone 직후 `.llm/history_*`가 하나이거나 폴더명과 같으면 **세션 자동 바인딩**.
@@ -123,8 +123,12 @@
   `--trust`와 무관하게 매번 확인**한다(`ask_shell_privilege`, `[y/N]`). 프롬프트에
   목적(`privilege_purpose`)·실제 실행 명령(`privilege_target`)을 보여 주고,
   거부하면 실행하지 않는다.
-- repl 시작 시 **설정 상태를 한 줄로** 표시한다(확인 모드 · 완화 옵션 · 로그 파일
-  경로/기록 여부 · 조회법).
+- repl 시작 시 **설정 상태를 시작 헤더의 행으로** 표시한다(확인 모드 · 완화 옵션 ·
+  로그 파일 경로/기록 여부 · 조회법). 헤더는 `print_banner`(제목 줄 + `header_line`
+  행: 세션·폴더·셸·설정) + `print_continue_status`(이어가기 행) + `cmd_repl` 의
+  `완화`/`로그`/`도움말` 행으로 구성하고, 라벨 폭은 `HEADER_LABEL_WIDTH` 로
+  맞춘다(`display_width`/`pad` 사용). 행 구성·문구를 바꾸면 README「시작 헤더」
+  예시도 함께 고친다.
 - 확인 프롬프트에서 허용해 **묻지 않고 실행된 셸 명령은 세션별 로그에 남긴다**
   (`shelllog.ShellLog` → `~/.local/share/llm/shell_log_<세션>.jsonl`, 종류
   `auto/a/all/y/n`, 최근 500건). 로그 쓰기 실패는 셸 실행을 막지 않는다.
