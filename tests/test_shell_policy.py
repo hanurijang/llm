@@ -14,6 +14,10 @@ from llmlib.shell_policy import (  # noqa: E402
     is_safe_command,
     is_workspace_command,
     needs_confirm_always,
+    privilege_head,
+    privilege_purpose,
+    privilege_segments,
+    privilege_target,
 )
 
 ROOT = Path("/tmp/llm-policy-root")
@@ -90,6 +94,42 @@ class ShellPolicyTable(unittest.TestCase):
         self.assertFalse(is_workspace_command("touch ~/x", ROOT))
         self.assertFalse(is_workspace_command("rm -rf ../other", ROOT))
         self.assertFalse(is_workspace_command("git push --force", ROOT))
+
+
+# (명령, 권한 상승 명령 이름, 실제 실행 명령, 목적 한 줄)
+PRIVILEGE_TABLE = [
+    ("sudo apt install -y jq", "sudo", "apt install -y jq", "패키지를 설치하거나 관리합니다"),
+    ("sudo -u root systemctl restart nginx", "sudo", "systemctl restart nginx", "서비스를 제어합니다"),
+    ("doas rm -rf /var/tmp/x", "doas", "rm -rf /var/tmp/x", "파일을 삭제합니다"),
+    ("su -c 'apt update'", "su", "apt update", "패키지를 설치하거나 관리합니다"),
+    ("ls -la", "", "", ""),
+    ("apt install jq", "", "", ""),
+]
+
+
+class PrivilegeHelpers(unittest.TestCase):
+    """권한 상승(sudo 등) 조각: 목적 설명·확인 대상 판별."""
+
+    def test_privilege_table(self) -> None:
+        for command, head, target, purpose in PRIVILEGE_TABLE:
+            with self.subTest(command=command):
+                self.assertEqual(privilege_head(command), head)
+                self.assertEqual(privilege_target(command), target)
+                self.assertEqual(privilege_purpose(command), purpose)
+
+    def test_privilege_segments(self) -> None:
+        self.assertEqual(
+            privilege_segments("sudo apt update && git status && sudo apt install jq"),
+            ["sudo apt update", "sudo apt install jq"],
+        )
+        self.assertEqual(privilege_segments("git status"), [])
+
+    def test_privilege_never_safe(self) -> None:
+        # 읽기 전용 분류는 권한 상승을 포함하지 않는다(항상 따로 확인).
+        for command in ("sudo apt install jq", "sudo ls", "doas cat /etc/hosts"):
+            with self.subTest(command=command):
+                self.assertFalse(is_safe_command(command))
+                self.assertTrue(privilege_segments(command))
 
 
 class GuardHelpers(unittest.TestCase):

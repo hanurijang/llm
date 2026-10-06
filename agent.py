@@ -52,6 +52,9 @@ from llmlib.shell_policy import (
     is_safe_command,
     is_workspace_command,
     needs_confirm_always,
+    privilege_head,
+    privilege_purpose,
+    privilege_segments,
     scan_text,
     shell_words,
     split_shell_commands,
@@ -59,7 +62,7 @@ from llmlib.shell_policy import (
 )
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.8.0"
+VERSION = "0.9.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -3219,6 +3222,30 @@ def ask_shell_segment(
     return "n"
 
 
+def ask_shell_privilege(label: str, segment: str) -> str:
+    """권한 상승(sudo 등) 조각: 목적을 설명하고 매번 동의를 받는다. 반환: `y`/`n`.
+
+    권한 상승은 자동 허용(`a`)·이번 실행 생략(`all`)의 대상이 아니므로 항상
+    새로 묻는다(`--yes` 는 예외: 확인 자체를 건너뗀다).
+    """
+    head = privilege_head(segment) or "sudo"
+    purpose = privilege_purpose(segment) or "관리자 권한이 필요한 작업"
+    try:
+        answer = input(
+            f"{label}{C.yellow}🔐 관리자 권한이 필요합니다{C.reset} {C.dim}({head}){C.reset}\n"
+            f"   {C.dim}목적{C.reset}: {C.bold}{purpose}{C.reset}\n"
+            f"   {C.dim}실행할 명령{C.reset}: {C.bold}{segment}{C.reset}\n"
+            f"   {C.dim}권한 상승은 자동 허용으로 저장되지 않습니다(매번 확인){C.reset}\n"
+            f"   {C.bold}[y/N]{C.reset}: "
+        ).strip().lower()
+    except EOFError:
+        return "n"
+    except KeyboardInterrupt:
+        eprint()
+        return "n"
+    return "y" if answer in {"y", "yes", "ㅛ"} else "n"
+
+
 def confirm_shell(
     command: str,
     yes: bool,
@@ -3238,10 +3265,14 @@ def confirm_shell(
 
     `a`는 이 명령(과 같은 폴더·계열)을 앞으로 묻지 않도록 세션에 저장하고,
     `all`은 저장하지 않고 **이번 실행 동안만** 확인을 생략한다.
+
+    권한 상승(`sudo`/`su`/`doas`/`pkexec`) 조각은 모드와 무관하게 **항상**
+    목적을 함께 보여 주고 새로 동의받는다(`a`/`all`의 대상이 아니다).
     """
     if yes:
         return True
-    if approval is not None and approval.is_allowed(command):
+    escalating = privilege_segments(command)
+    if approval is not None and not escalating and approval.is_allowed(command):
         shell_log().record("auto", command, mode=RUN.ask_mode, note="허용 목록")
         return True
     if not sys.stdin.isatty():
@@ -3252,13 +3283,19 @@ def confirm_shell(
         shell_log().record(kind, segment, mode=RUN.ask_mode, note=note)
 
     def risky(segment: str) -> bool:
-        return not only_risky or needs_confirm_always(segment, root)
+        # 권한 상승(sudo 등)은 모드와 무관하게 항상 묻는다.
+        return (
+            bool(privilege_head(segment))
+            or not only_risky
+            or needs_confirm_always(segment, root)
+        )
 
     segments = [c for _, c in split_shell_commands(command)] or [command_key(command)]
     pending = [
         s
         for s in segments
-        if risky(s) and (approval is None or not approval.segment_allowed(s, root))
+        if privilege_head(s)
+        or (risky(s) and (approval is None or not approval.segment_allowed(s, root)))
     ]
     if not pending:
         log_kind("auto", command, "허용 목록(조각)")
@@ -3280,12 +3317,22 @@ def confirm_shell(
     for idx, segment in enumerate(segments, 1):
         if not risky(segment):
             continue  # 기본 모드: 위험하지 않은 조각은 확인 없이 실행
+        label = f"   {C.dim}{idx}) {C.reset}" if compound else "   "
+        if privilege_head(segment):
+            # 권한 상승은 목적을 설명하고 매번 묻는다(자동 허용·`all` 적용 안 함).
+            if ask_shell_privilege(label, segment) == "y":
+                log_kind("y", segment, "권한 상승 동의")
+                continue
+            log_kind("n", segment, "권한 상승 취소")
+            print_warn("셸 실행을 취소했습니다.", stream=True)
+            if approval is not None and snap is not None:
+                approval.restore(snap)
+            return False
         if approval is not None and approval.segment_allowed(segment, root):
             if compound and not approval.auto_all:
                 print(f"   {C.dim}{idx}) {segment} (이미 자동 허용){C.reset}")
             log_kind("auto", segment, "허용 목록(조각)")
             continue
-        label = f"   {C.dim}{idx}) {C.reset}" if compound else "   "
         answer = ask_shell_segment(label, segment, approval, root=root)
         if answer == "y":
             log_kind("y", segment, "이번만")
@@ -3369,8 +3416,11 @@ def tool_shell(
         return f"ERROR: 비밀값을 드러낼 수 있는 명령이라 실행하지 않았습니다({secret})."
     timeout = int(args.get("timeout") or 60)
     timeout = max(1, min(timeout, SHELL_MAX_TIMEOUT))
-    auto_run = bool(secret) or (
-        approval is not None
+    # 권한 상승(sudo 등)·허용 목록·`all` 로도 자동 실행하지 않는다(항상 확인).
+    escalating = privilege_segments(command)
+    auto_run = not escalating and (
+        bool(secret)
+        or approval is not None
         and approval.is_allowed(command)
         or auto_safe
         and is_safe_command(command)
@@ -4016,8 +4066,8 @@ def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
     return True, False, "outside", ""
 
 
-# repl 기본 확인 범위(명시 옵션·환경변수가 없을 때). 값은 “전부 확인”.
-REPL_DEFAULT_ASK_MODE = "all"
+# repl 기본 확인 범위(명시 옵션·환경변수가 없을 때). 값은 “읽기 전용 자동”.
+REPL_DEFAULT_ASK_MODE = "readonly"
 
 
 def repl_ask_mode(args: Any) -> tuple[bool, bool, str, str, bool]:
@@ -4025,9 +4075,11 @@ def repl_ask_mode(args: Any) -> tuple[bool, bool, str, str, bool]:
 
     반환: (auto_workspace, allow_all, 모드, 출처, repl기본적용여부)
 
-    대화형은 한 프로세스에서 여러 턴을 이어가며 셸을 자주 부르므로, 명시
-    옵션·환경변수가 없으면 기본을 **전부 확인**(`all`)으로 둔다. 허용한
-    명령은 프롬프트의 `a`/`all`로 다시 묻지 않게 하고 그 내역을 로그로 남긴다.
+    대화형은 한 프로세스에서 여러 턴을 이어가므로, 명시 옵션·환경변수가 없으면
+    기본을 **읽기 전용 자동**(`readonly`)으로 둔다. 조회·검사 명령(`ls`, `cat`,
+    `git status/diff/log`, 테스트 등)은 조용히 실행하고 그 밖의 명령은 확인을
+    받으며, 권한 상승(`sudo` 등)은 항상 목적을 보여 주고 묻는다. 허용한 명령은
+    프롬프트의 `a`/`all`로 다시 묻지 않게 하고 그 내역을 로그로 남긴다.
     `--safe`/`--trust`/`--yes`(또는 `LLM_*` 환경변수)를 주면 그대로 따른다.
     """
     auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
@@ -5613,8 +5665,10 @@ def cmd_repl(
     print_info("/help 명령 목록 · 빈 줄·/exit 종료 · Ctrl+C 는 진행 중인 턴만 중단 · @파일 첨부 · 줄 끝 \\ 여러 줄")
     if repl_default:
         print_info(
-            f"셸 {C.bold}{SHELL_ASK_LABELS['all']}{C.reset}(repl 기본) "
-            f"{C.dim}— 완화 --safe/--trust/--yes{C.reset} · "
+            f"셸 {C.bold}{SHELL_ASK_LABELS[REPL_DEFAULT_ASK_MODE]}{C.reset}(repl 기본) "
+            f"{C.dim}— 읽기 전용은 조용히 실행, 그 밖은 확인 · "
+            f"sudo 등 권한 상승은 목적 설명 후 매번 확인{C.reset} · "
+            f"완화 --safe/--trust/--yes · "
             f"자동 허용 기록 {C.bold}{short_home(shell_log_file(session))}{C.reset} "
             f"{C.dim}({shell_log_enabled() and '기록 켬' or 'LLM_SHELL_LOG=0 으로 끔'}"
             f" · 조회 /log){C.reset}"
@@ -5716,7 +5770,8 @@ def cmd_repl(
             stream=not args.no_stream,
             thinking=not args.no_thinking,
             show_thinking=args.show_thinking,
-            auto_safe=not args.confirm_all and not repl_default,
+            # repl 기본(readonly)도 읽기 전용 명령은 조용히 실행한다.
+            auto_safe=not args.confirm_all,
             auto_workspace=auto_workspace,
             allow_all=allow_all,
             ask_mode=ask_mode,

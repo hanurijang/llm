@@ -4,7 +4,7 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
-**버전:** v0.8.0 — 변경 요약은 [v0.8 변경 사항](#v08-변경-사항)
+**버전:** v0.9.0 — 변경 요약은 [v0.9 변경 사항](#v09-변경-사항)
 
 ## 최소 사용법
 
@@ -25,7 +25,7 @@ llm sync                        # 대화 기록만 원격에
 | 하고 싶은 일 | 명령 |
 |---|---|
 | 에이전트(도구) | `llm "질문"` · `llm ask "질문"` |
-| 대화형(여러 턴) | `llm -i` · `llm repl` (셸 확인 기본=전부 확인) |
+| 대화형(여러 턴) | `llm -i` · `llm repl` (셸 확인 기본=읽기 전용 자동) |
 | 순수 채팅 | `llm chat "질문"` · `llm --chat` |
 | 셸을 더 관대하게 | `llm --trust "질문"` |
 | 셸 전부 확인 | `llm --confirm-all "질문"` |
@@ -48,6 +48,18 @@ llm sync                        # 대화 기록만 원격에
 - **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`
 - **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도
 
+## v0.9 변경 사항
+
+대화형(REPL) 셸 확인 기본값을 “전부 확인”에서 “읽기 전용 자동”으로 바꾸고,
+권한 상승(`sudo`)만 목적을 설명한 뒤 묻도록 바꿨습니다.
+
+| 영역 | v0.8 | v0.9 |
+|---|---|---|
+| REPL 셸 확인 | 기본 `all` — 읽기 전용(`ls`·`cat`·`git status`·테스트 등)까지 매번 확인 | 기본 **`readonly`(읽기 전용 자동)** — 조회·검사 명령은 조용히 실행, 그 밖(설치·삭제·`git commit` 등)은 확인. `--safe/--trust/--yes/--confirm-all`·`LLM_*` 우선은 그대로 |
+| 권한 상승 | `sudo ls`도 일반 명령과 같은 한 줄 확인, `a`/`all`로 생략 가능 | **목적을 함께 설명**하는 전용 프롬프트(`🔐 관리자 권한이 필요합니다` · 목적 · 실행할 명령 · `[y/N]`), `a`/`all`·허용 목록·`--trust`로도 **항상 새로 확인**(`--yes`·`LLM_TRUST`만 예외) |
+| 셸 확인 표시 | 배너 `확인=전부` | 배너 `확인=읽기 전용 자동`, 시작 한 줄에 “읽기 전용은 조용히 실행, 그 밖은 확인 · sudo는 목적 설명 후 매번 확인” |
+| 테스트 | 88개 | **97개**(권한 상승 표·프롬프트·자동 실행 금지 검사 추가) |
+
 ## v0.8 변경 사항
 
 터미널 표시와 대화형(REPL) 안전성 위주의 개선입니다.
@@ -55,7 +67,7 @@ llm sync                        # 대화 기록만 원격에
 | 영역 | v0.7 | v0.8 |
 |---|---|---|
 | Markdown 표시 | 외부 `glow` 의존(없으면 원문 출력) | **내장 렌더러**(`llmlib/mdrender.py`) — 제목·목록·표·코드블록·인용 강조, `LLM_RAW`·파이프·비TTY는 원문 유지 |
-| REPL 셸 확인 | 기본 `safe`(작업 폴더 안 자동) | 대화형은 **기본 `all`(전부 확인)** — `--safe/--trust/--yes/--confirm-all`·`LLM_*`를 주면 그쪽 우선, 시작 시 설정 상태 한 줄 표시 |
+| REPL 셸 확인 | 기본 `readonly`(읽기 전용 자동) — 조회·검사만 조용히, 그 밖은 확인 | 대화형은 **기본 `readonly`** — `--safe/--trust/--yes/--confirm-all`·`LLM_*`를 주면 그쪽 우선, `sudo`는 모드와 무관하게 목적 설명 후 확인, 시작 시 설정 상태 한 줄 표시 |
 | 셸 로그 | 없음 | 프롬프트에서 허용했거나 자동 허용으로 **묻지 않고 실행된** 명령을 세션별 로그(`shell_log_<세션>.jsonl`)에 기록, `llm shell-log [N]`/`--shell-log`·REPL `/log`로 조회, `LLM_SHELL_LOG=0`으로 끔 |
 | 최대 단계 | 50 | **100**(`--max-steps`) |
 | 구조 | `llmlib/` 9개 모듈, 테스트 61개 | `llmlib/` 10개 모듈(`mdrender`·`shelllog` 추가), 테스트 88개 |
@@ -234,7 +246,7 @@ source ~/.bashrc
 
 ```bash
 which llm           # → /home/<user>/bin/llm
-llm                 # 상태 + 버전(v0.8.0) 표시 (API 호출 없음)
+llm                 # 상태 + 버전(v0.9.0) 표시 (API 호출 없음)
 llm --balance       # 키·네트워크 확인
 llm --chat "안녕"   # 모델 응답 확인
 llm "이 폴더 요약해줘"   # 도구까지 확인
@@ -367,7 +379,7 @@ llm shell-log clear
 표시됩니다.
 
 ```text
-── 에이전트 v0.8.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
+── 에이전트 v0.9.0  session=llm  root=/home/…/proj  rules=on  sync=off  확인=safe(폴더 안)
 ℹ️  이어가기 · 로컬 12턴 · 원격과 같음
 ▸ 원격 대화 기록 확인
 ```
@@ -987,7 +999,8 @@ alias로 동작합니다.
      같은 기준으로 판단합니다(`PATH`/`LD_PRELOAD`/`PYTHONPATH` 등 실행 대상을
      바꾸는 이름이 붙으면 확인 대상)
    - `--confirm-all`로 자동 실행을 끌 수 있습니다. **REPL(`llm -i`/`llm repl`)은
-    기본이 `all`(전부 확인)** 이며, 시작할 때 현재 설정을 한 줄로 보여 줍니다
+    기본이 `readonly`(읽기 전용 자동)** — 조회·검사 명령은 조용히 실행하고 그
+    밖은 확인하며, 시작할 때 현재 설정을 한 줄로 보여 줍니다
     (`llm --safe/--trust/--yes/--confirm-all`이나 `LLM_*` 환경변수를 직접 주면
     그쪽을 따릅니다).
 4. **사용자 확인** — 자동 실행 대상이 아니면 TTY에서 `[y/N/a]` 확인을 받습니다.
@@ -1035,8 +1048,30 @@ alias로 동작합니다.
      `--output`처럼 부작용을 켜는 인자가 붙으면 매번 확인합니다
      (예: `ruff check .`을 허용해도 `ruff format .`은 확인 대상).
    - 목록 확인/해제: `llm --allow-list`, `llm --allow-clear`
-6. **TTY가 아니면** `--yes` 없이 실행 불가
-7. **타임아웃** — 기본 60초, 최대 180초
+6. **권한 상승(`sudo` 등) — 목적 설명 후 항상 확인** — 명령에 `sudo`/`su`/`doas`/
+   `pkexec` 조각이 있으면 다른 모드·허용과 상관없이 **전용 프롬프트**가 뜽니다
+   (`--yes`만 생략). 무엇을 위해 필요한지 목적을 함께 보여 주므로, 명령만 보고
+   판단하지 않아도 됩니다.
+
+   ```text
+   🔐 관리자 권한이 필요합니다 (sudo)
+      목적: 패키지를 설치하거나 관리합니다
+      실행할 명령: sudo apt install -y jq
+      권한 상승은 자동 허용으로 저장되지 않습니다(매번 확인)
+      [y/N]:
+   ```
+
+   - 목적은 권한 상승으로 실제 실행되는 명령에서 뽑습니다
+     (`sudo -u root apt install jq` → “패키지를 설치하거나 관리합니다”,
+     `sudo systemctl restart nginx` → “서비스를 제어합니다”). 알려지지 않은
+     명령은 “<명령> 명령을 관리자 권한으로 실행합니다”, `sudo -i`처럼 대상이
+     없으면 “sudo 로 관리자 권한(셸)을 얻습니다”.
+   - 답은 `y`/`n` 뿐입니다(`a`·`all` 없음). 앞에서 `all`을 골라 이번 실행의
+     확인을 생략한 상태라도 **`sudo`는 다시 묻습니다**(`llm --trust`도 같음).
+   - 같은 이유로 `sudo`는 **읽기 전용 자동 실행 대상이 아닙니다** — `sudo ls`도
+     매번 확인합니다.
+7. **TTY가 아니면** `--yes` 없이 실행 불가
+8. **타임아웃** — 기본 60초, 최대 180초
 
 ### 프롬프트가 뜨는 기준 (기본 모드)
 
@@ -1098,8 +1133,20 @@ alias로 동작합니다.
 ### REPL 기본 확인 모드와 셸 로그
 
 `llm -i` / `llm repl`(대화형)은 한 프로세스에서 여러 턴을 이어가며 셸을 자주
-부르므로 **셸 확인 기본을 `--confirm-all`(전부 확인, `all`)로 둡니다.**
-일반(에이전트) 실행은 기존처럼 작업 폴더 안만 자동인 `safe`가 기본입니다.
+부르므로 **기본을 `readonly`(읽기 전용 자동)로 둡니다** — `ls`·`cat`·
+`git status/diff/log`·테스트처럼 읽기만 하는 명령은 조용히 실행하고, 그 밖의
+명령(설치·삭제·`git commit` 등)은 확인을 받습니다. 권한 상승(`sudo` 등)은
+대상이 읽기 전용이어도 **항상 목적 설명과 함께 확인**을 받습니다.
+일반(에이전트) 실행은 작업 폴더 안까지 자동인 `safe`가 기본입니다.
+`--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_AUTO_WORKSPACE` 같은
+`LLM_*` 환경변수를 **직접 주면 그쪽을 따릅니다**(repl 기본은 그때 쓰지 않음).
+다시 “전부 확인”으로 돌리려면 `llm repl --confirm-all`을 쓰세요.
+
+시작할 때 현재 설정을 한 줄로 보여 줍니다.
+
+```text
+ℹ️  셸 확인=읽기 전용 자동(repl 기본) — 읽기 전용은 조용히 실행, 그 밖은 확인 · sudo 등 권한 상승은 목적 설명 후 매번 확인 · 완화 --safe/--trust/--yes · 자동 허용 기록 ~/.local/share/llm/shell_log_llm.jsonl (기록 켐 · 조회 /log)
+```
 `--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_AUTO_WORKSPACE` 같은
 `LLM_*` 환경변수를 **직접 주면 그쪽을 따릅니다**(repl 기본은 그때 쓰지 않음).
 
@@ -1308,7 +1355,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 
 | 모듈 | 역할 |
 |---|---|
-| `shell_policy.py` | 셸 명령 안전 분류(`is_safe_command`·`is_workspace_command`·`needs_confirm_always`), 명령 분해, 의도 요약 |
+| `shell_policy.py` | 셸 명령 안전 분류(`is_safe_command`·`is_workspace_command`·`needs_confirm_always`), 명령 분해, 의도 요약, 권한 상승(`sudo` 등) 판별·목적 요약(`privilege_head`/`privilege_target`/`privilege_purpose`/`privilege_segments`) |
 | `guard.py` | 비밀 파일/변수 판정, `scrubbed_env`, `command_touches_secret`, 비밀값 수집·`redact` |
 | `netretry.py` | `urlopen_with_retry`(429·5xx·네트워크 지수 백오프, `Retry-After`) |
 | `filestate.py` | `FileTracker`(읽은 파일·외부 변경), `unified_diff`/`diff_stat`, `UndoStore` |
@@ -1339,7 +1386,8 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   (heredoc 본문은 데이터로, 셸에 넘길 때만 코드로 판정), `intent_summary`(명령 의도 요약),
   `confirm_shell` / `ask_shell_segment`(조각별 `[y/N/a]`/`all`, 중단 시 롤백),
   `resolve_ask_mode`/`repl_ask_mode`/`SHELL_ASK_LABELS`/`SHELL_ASK_SOURCES`(확인 모드 결정·배너
-  표시, 대화형은 기본 `all`), `shell_log_file`/`shell_log_enabled`/`shell_log`/
+  표시, 대화형은 기본 `readonly`), `privilege_head`/`privilege_target`/`privilege_purpose`/
+  `privilege_segments`(권한 상승 판별·목적 요약)·`ask_shell_privilege`(해당 조각은 목적 설명 후 매번 확인), `shell_log_file`/`shell_log_enabled`/`shell_log`/
   `short_home`/`cmd_shell_log`(허용·자동 실행 로그, `--shell-log`/`llm shell-log`/REPL `/log`),
   `scope_targets`/`scope_dir`/`scope_usable`/`scope_label`(폴더 단위 자동 허용 범위),
   `command_prefix` / `strip_env_assignments`(자동 허용 접두, 환경변수 지정 인식),
@@ -1445,15 +1493,17 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 
 - TTY가 아닌 환경이면 `--yes`가 필요합니다.
 - 기본(허용) 모드에서도 `sudo`·설치·폴더 밖 삭제는 확인을 받습니다.
-  자동화에서는 `--yes`를 쓰거나 해당 항목을 `a`로 한 번 허용하세요.
+  특히 권한 상승(`sudo` 등)은 목적 설명과 함께 **항상 다시** 묻고, 자동화에서
+  생략하려면 `--yes`를 쓰세요(설치·삭제는 `a`로 한 번 허용해도 됩니다).
 - 예상보다 자주 묻는다면 배너의 `확인=` 값을 보세요. `outside`로 떠 있으면
   `.env`의 `LLM_AUTO_WORKSPACE=1`이 원인일 수 있습니다(위 「설정과
   환경변수」). `llm --allow-all`로 이번 실행만 기본 모드로 돌릴 수 있습니다.
 - 같은 폴더에서 반복 작업이 많으면 확인 프롬프트에서 `a`를 골라 그 폴더를
   기억시키거나, `llm --allow-list`로 지금까지 허용된 범위를 확인하세요.
   `llm shell-log`는 확인 없이(또는 `a`/`all` 덕분에) 실행된 명령까지 시간순으로
-  보여 줍니다. 대화형(`llm repl`)은 셸 확인이 **기본 전부 확인**이라, 묻기 싫은
-  명령은 `a`(기억)나 `all`(이번만)로 넘기면 됩니다.
+  보여 줍니다. 대화형(`llm repl`)도 기본이 **읽기 전용 자동**이라 조회·테스트
+  명령은 묻지 않고, 그 밖의 명령은 `a`(기억)나 `all`(이번만)로 넘기면 됩니다.
+  `sudo`는 `all`로도 넘기지 못 하고 매번 확인합니다(`--yes`만 예외).
 
 ### 다른 PC에서 대화가 안 보임
 

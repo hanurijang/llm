@@ -48,6 +48,7 @@ SHELL_ASK_LABELS = {
     "all": "확인=전부",
     "risky": "확인=trust(위험만)",
     "outside": "확인=safe(폴더 안)",
+    "readonly": "확인=읽기 전용 자동",
     "none": "확인=없음",
 }
 # 모드가 CLI 옵션이 아니라 환경변수에서 온 경우의 안내 문구
@@ -821,6 +822,87 @@ def intent_for_step(command: str) -> str | None:
     if head.startswith("./") or name.endswith(SHELL_WORKSPACE_SCRIPT_SUFFIXES):
         return "스크립트를 실행합니다"
     return f"{name} 명령을 실행합니다"
+
+
+# 권한 상승 명령(sudo 등)에서 값을 받는 옵션: 다음 토큰까지 함께 건너뛴다.
+SHELL_PRIVILEGE_ARG_OPTIONS = frozenset(
+    {
+        "-u",
+        "-g",
+        "-p",
+        "-C",
+        "-T",
+        "-U",
+        "-r",
+        "-t",
+        "-h",
+        "-D",
+        "--user",
+        "--group",
+        "--prompt",
+        "--close-from",
+        "--other-user",
+        "--chdir",
+        "--host",
+        "--role",
+        "--type",
+        "--context",
+        "--preserve-env",
+    }
+)
+
+
+def privilege_head(segment: str) -> str:
+    """조각이 권한 상승 명령이면 그 이름(sudo/su/doas/pkexec), 아니면 빈 문자열."""
+    tokens = shell_words(segment)
+    _, tokens = strip_env_assignments(tokens)
+    if not tokens:
+        return ""
+    name = Path(tokens[0]).name
+    return name if name in SHELL_ASK_HEADS else ""
+
+
+def privilege_target(segment: str) -> str:
+    """권한 상승으로 실제 실행되는 명령(`sudo -u root apt install jq` → `apt install jq`)."""
+    head = privilege_head(segment)
+    if not head:
+        return ""
+    tokens = shell_words(segment)
+    _, tokens = strip_env_assignments(tokens)
+    rest = tokens[1:]
+    if head == "su" and "-c" in rest:
+        pos = rest.index("-c")
+        return rest[pos + 1].strip() if pos + 1 < len(rest) else ""
+    # 권한 상승 명령 자신의 옵션만 건너뛰고, 실제 명령은 원문 그대로 둔다.
+    idx = 0
+    while idx < len(rest):
+        tok = rest[idx]
+        if not tok.startswith("-"):
+            return " ".join(rest[idx:])
+        idx += 2 if tok in SHELL_PRIVILEGE_ARG_OPTIONS else 1
+    return ""
+
+
+def privilege_purpose(segment: str) -> str:
+    """권한 상승 조각의 목적 한 줄(`sudo apt install jq` → "패키지를 설치하거나 관리합니다")."""
+    head = privilege_head(segment)
+    if not head:
+        return ""
+    if head == "su" and "-c" not in shell_words(segment):
+        return "관리자 계정으로 전환합니다"
+    inner = privilege_target(segment)
+    if not inner:
+        return f"{head} 로 관리자 권한(셸)을 얻습니다"
+    intent = intent_for_step(inner)
+    if intent:
+        return intent
+    return f"{inner.split()[0]} 명령을 관리자 권한으로 실행합니다"
+
+
+def privilege_segments(command: str) -> list[str]:
+    """명령 안에서 권한 상승이 필요한 조각만 골라낸다(항상 확인을 받는다)."""
+    segments = [c for _, c in split_shell_commands(command)] or [command.strip()]
+    return [seg for seg in segments if privilege_head(seg)]
 
 
 def intent_summary(command: str) -> str:

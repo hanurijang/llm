@@ -89,10 +89,15 @@
 
 ## 셸 확인 기본값과 로그 (필수)
 
-- **대화형(`llm repl`/`llm -i`)의 셸 확인 기본은 `all`(전부 확인)** 이다
-  (`REPL_DEFAULT_ASK_MODE`, `repl_ask_mode`). 일반(에이전트) 실행은 기존대로
-  `safe`(작업 폴더 안 자동)이며, `--safe`/`--trust`/`--yes`/`--confirm-all`이나
-  `LLM_*` 환경변수를 주면 그쪽을 우선한다(repl 기본을 덮지 않는다).
+- **대화형(`llm repl`/`llm -i`)의 셸 확인 기본은 `readonly`(읽기 전용 자동)** 이다
+  (`REPL_DEFAULT_ASK_MODE`, `repl_ask_mode`). 읽기 전용 명령은 조용히 실행하고
+  그 밖은 확인한다. 일반(에이전트) 실행은 기존대로 `safe`(작업 폴더 안 자동)이며,
+  `--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_*` 환경변수를 주면 그쪽을
+  우선한다(repl 기본을 덮지 않는다).
+- **권한 상승(`sudo`/`su`/`doas`/`pkexec`) 조각은 모드·허용 목록·`a`/`all`·
+  `--trust`와 무관하게 매번 확인**한다(`ask_shell_privilege`, `[y/N]`). 프롬프트에
+  목적(`privilege_purpose`)·실제 실행 명령(`privilege_target`)을 보여 주고,
+  거부하면 실행하지 않는다.
 - repl 시작 시 **설정 상태를 한 줄로** 표시한다(확인 모드 · 완화 옵션 · 로그 파일
   경로/기록 여부 · 조회법).
 - 확인 프롬프트에서 허용해 **묻지 않고 실행된 셸 명령은 세션별 로그에 남긴다**
@@ -102,7 +107,8 @@
   비우기: `llm shell-log clear`(`--shell-log-clear`)/`/log clear`.
   `LLM_SHELL_LOG=0`이면 새로 남기지 않는다.
 - 이 동작을 바꿀 때는 `agent.py`의 `shell_log_file`/`shell_log_enabled`/
-  `shell_log`/`cmd_shell_log`/`REPL_DEFAULT_ASK_MODE`/`repl_ask_mode`,
+  `shell_log`/`cmd_shell_log`/`REPL_DEFAULT_ASK_MODE`/`repl_ask_mode`/
+  `ask_shell_privilege`, `llmlib/shell_policy.py`(권한 상승 판별·목적 요약),
   `llmlib/shelllog.py`와 README 「셸 실행과 안전장치」(「REPL 기본 확인 모드와
   셸 로그」)·「설정과 환경변수」·「파일/데이터 위치」를 함께 갱신한다.
 

@@ -139,21 +139,29 @@ def ns(**kwargs) -> argparse.Namespace:
 
 
 class ReplAskMode(unittest.TestCase):
-    """repl 기본 확인 모드 = 전부 확인(all), 명시 옵션은 그대로 존중."""
+    """repl 기본 확인 모드 = 읽기 전용 자동(readonly), 명시 옵션은 그대로 존중."""
 
     def setUp(self) -> None:
         patcher = mock.patch.dict("os.environ", {}, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
 
-    def test_repl_default_is_all(self) -> None:
+    def test_repl_default_reads_only(self) -> None:
         auto_workspace, allow_all, mode, source, default = llm.repl_ask_mode(ns())
         self.assertEqual(mode, llm.REPL_DEFAULT_ASK_MODE)
-        self.assertEqual(mode, "all")
+        self.assertEqual(mode, "readonly")
+        # 읽기 전용은 조용히, 그 밖은 확인: 폴더 안 자동·전부 허용·trust 모두 아님.
         self.assertFalse(auto_workspace)
         self.assertFalse(allow_all)
         self.assertEqual(source, "")
         self.assertTrue(default)
+
+    def test_repl_default_runs_readonly_shell_silently(self) -> None:
+        # repl 기본에서 읽기 전용은 자동 실행(auto_safe), 그 밖은 확인 대상이다.
+        self.assertTrue(llm.is_safe_command("git status --short"))
+        self.assertTrue(llm.is_safe_command("python3 -m pytest -q"))
+        self.assertFalse(llm.is_safe_command("git commit -m x"))
+        self.assertFalse(llm.is_safe_command("rm -rf build"))
 
     def test_agent_default_stays_safe(self) -> None:
         auto_workspace, allow_all, mode, source = llm.resolve_ask_mode(ns())
@@ -260,6 +268,75 @@ class AgentLogHooks(unittest.TestCase):
                 llm.confirm_shell("rm -rf /x", False, approval, only_risky=False)
             )
         self.assertEqual(self.entries(), [("n", "rm -rf /x")])
+
+    def test_privilege_is_always_asked_with_purpose(self) -> None:
+        """sudo 등 권한 상승은 `all`(이번 실행 생략)로도 건너뛰지 않는다."""
+        approval = llm.ShellApproval("t")
+        approval.auto_all = True  # 앞에서 `all` 을 골라도
+        with mock.patch.object(
+            llm, "ask_shell_privilege", return_value="y"
+        ) as asked, mock.patch.object(
+            llm, "ask_shell_segment", side_effect=AssertionError("일반 확인을 물으면 안 됨")
+        ):
+            self.assertTrue(
+                llm.confirm_shell("sudo apt install -y jq", False, approval, only_risky=False)
+            )
+        self.assertEqual(asked.call_count, 1)
+        self.assertEqual(self.entries(), [("y", "sudo apt install -y jq")])
+
+    def test_privilege_deny_stops_shell(self) -> None:
+        approval = llm.ShellApproval("t")
+        with mock.patch.object(llm, "ask_shell_privilege", return_value="n"):
+            self.assertFalse(
+                llm.confirm_shell("sudo systemctl restart nginx", False, approval)
+            )
+        self.assertEqual(self.entries(), [("n", "sudo systemctl restart nginx")])
+
+    def test_privilege_not_auto_run_even_with_trust(self) -> None:
+        # trust 모드(only_risky)에서도 권한 상승 조각은 확인을 받는다.
+        approval = llm.ShellApproval("t")
+        with mock.patch.object(llm, "ask_shell_privilege", return_value="y") as asked:
+            self.assertTrue(
+                llm.confirm_shell("git status && sudo -u root true", False, approval, only_risky=True)
+            )
+        self.assertEqual([c.args[1] for c in asked.call_args_list], ["sudo -u root true"])
+
+    def test_privilege_prompt_shows_purpose(self) -> None:
+        out_lines: list[str] = []
+        with mock.patch.object(llm, "input", side_effect=lambda prompt="": (
+            out_lines.append(prompt),
+            "y",
+        )[1]):
+            self.assertEqual(
+                llm.ask_shell_privilege("   ", "sudo apt install -y jq"), "y"
+            )
+        text = "".join(out_lines)
+        self.assertIn("관리자 권한이 필요합니다", text)
+        self.assertIn("패키지를 설치하거나 관리합니다", text)
+        self.assertIn("sudo apt install -y jq", text)
+        self.assertIn("[y/N]", text)
+
+    def test_privilege_shell_never_auto_runs(self) -> None:
+        """tool_shell: 읽기 전용 자동(auto_safe)·trust(allow_all)로도 sudo 는 안 돈다."""
+        with mock.patch.object(llm, "ask_shell_privilege", return_value="n"):
+            out = llm.tool_shell(
+                Path(self._tmp.name),
+                {"command": "sudo apt install -y jq"},
+                False,
+                auto_safe=True,
+                auto_workspace=True,
+                allow_all=True,
+            )
+        self.assertIn("거부", out)
+        # 허용 목록에 저장된 같은 명령도 재사용하지 않는다.
+        approval = llm.ShellApproval("t")
+        approval.auto_all = True
+        with mock.patch.object(llm, "ask_shell_privilege", return_value="n") as asked:
+            out = llm.tool_shell(
+                Path(self._tmp.name), {"command": "sudo ls /root"}, False, approval=approval
+            )
+        self.assertEqual(asked.call_count, 1)
+        self.assertIn("거부", out)
 
     def test_shell_log_enabled_env(self) -> None:
         self.assertTrue(llm.shell_log_enabled())
