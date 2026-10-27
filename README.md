@@ -4,7 +4,7 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
-**버전:** v0.12.0 — 변경 요약은 [v0.12 변경 사항](#v012-변경-사항)
+**버전:** v0.13.0 — 변경 요약은 [v0.13 변경 사항](#v013-변경-사항)
 
 ## 최소 사용법
 
@@ -51,6 +51,20 @@ llm sync                        # 대화 기록만 원격에
 - **비밀값 보호**: 셸에 API 키·토큰을 넘기지 않고, `.env`를 드러내는 명령은 항상 확인, 도구 결과의 키는 `[REDACTED]`
 - **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`
 - **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도
+
+## v0.13 변경 사항
+
+REPL에 **`/balance`** 명령을 추가했습니다. CLI `llm balance` 와 같은 블록
+(화폐별 잔액 + 원화 환산 + 적용 환율)을 대화 중에 바로 보여 줍니다.
+
+| 영역 | v0.12 | v0.13 |
+|---|---|---|
+| 잔액 확인 | REPL에서는 `/cost` 의 소요 금액으로만 간접 확인 (나가서 `llm balance`) | **REPL `/balance`** — 화폐별 잔액·원화 환산·적용 환율을 그 자리에서 표시 |
+| 캐시 공유 | `/cost` 만 캐시 사용 | `/balance` 가 조회한 잔액을 `COST_BALANCE_CACHE` 에 넣어 **직후 `/cost` 는 API를 다시 부르지 않음** (`balance_now`) |
+| 부가 줄 | — | 잔액 블록 아래에 세션 소요 금액 줄(`session_cost_lines`)을 함께 표시 |
+| 실패 처리 | `llm balance` 는 예외로 중단 | `llm balance`·`/balance` 모두 **경고 줄만** 남기고 계속 (종료 코드 1) |
+| `--no-balance` | 잔액 조회 생략 | REPL `/balance` 는 꺼진 이유를 안내만 하고 호출하지 않음 |
+| 테스트 | 124개 | **129개**(`/balance` 캐시 공유·등록·실패 처리 5개) |
 
 ## v0.12 변경 사항
 
@@ -305,7 +319,7 @@ source ~/.bashrc
 
 ```bash
 which llm               # → /home/<user>/bin/llm
-llm session ls          # 상태 + 버전(v0.12.0) 표시 (API 호출 없음)
+llm session ls          # 상태 + 버전(v0.13.0) 표시 (API 호출 없음)
 llm balance             # 키·네트워크 확인
 llm ask "안녕"          # 1턴으로 모델 응답 확인
 llm "이 폴더 요약해줘"   # 대화형 시작 + 도구까지 확인
@@ -499,7 +513,7 @@ llm shell log clear
 
 ```text
 
-────────────── ✦ llm v0.12.0 · 대화형 ──────────────
+────────────── ✦ llm v0.13.0 · 대화형 ──────────────
   세션      llm
   폴더      ~/codespace/userscript/llm
   셸        확인=safe(폴더 안)
@@ -557,6 +571,7 @@ llm undo
 | `/compact` | 지금 대화 요약(압축) |
 | `/model [이름]` | 모델 보기/바꾸기 |
 | `/cost` | 이번 REPL 세션의 누적 토큰 사용량 + **소요 금액**(세션 시작 잔액 − 현재 잔액, 원화 환산) |
+| `/balance` | 현재 DeepSeek 잔액(화폐별 + 원화 환산 + 적용 환율), `llm balance` 와 동일. 조회값은 `/cost` 캐시와 공유 |
 | `/undo` | 직전 턴의 파일 편집 되돌리기 |
 | `/plan` | plan 모드 켜기/끄기 (프롬프트가 `llm:plan>`로 바뀜) |
 | `/rules` | 세션 규칙·프로젝트 지침(CLAUDE.md 등) 보기 |
@@ -568,7 +583,7 @@ llm undo
 
 ```text
 
-────────────── ✦ llm v0.12.0 · 대화형 ──────────────
+────────────── ✦ llm v0.13.0 · 대화형 ──────────────
   세션      llm
   폴더      ~/codespace/userscript/llm
   셸        확인=읽기 전용 자동 (repl 기본)
@@ -991,6 +1006,29 @@ LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
   현재 잔액 조회 실패 · 잔액 형식 오류.
 - 채팅 모드(`/chat`)도 시작 시 조용히 잔액을 한 번 조회하므로(푸터는 없음)
   `/cost`의 금액 줄은 동일하게 동작합니다.
+
+### 대화형 `/balance` — 현재 잔액 보기
+
+REPL 안에서 `llm balance` 와 **같은 블록**을 그 자리에서 보여 줍니다.
+(화폐별 잔액 + 원화 환산 + 적용 환율, 아래에 세션 소요 금액 줄)
+
+```text
+llm:agent> /balance
+ℹ️  DeepSeek 계정 잔액을 조회합니다...
+──────────────── 💵 DeepSeek 잔액 정보 ────────────────
+  위안화 (CNY)  2.95 CNY
+  미국달러 (USD)  0.99 USD
+  원화 (KRW)  1,916.25 원  (환산)
+────────────────────────────────────────────────────────
+  적용 환율(실시간): 1 CNY = 199.43 KRW · 1 USD = 1,341.35 KRW   (Sat, 12 Sep 2026 00:02:31 +0000)
+  세션 소요 금액: 23.38 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 현재 2.95 CNY · 0.99 USD)
+```
+
+- 조회값은 `COST_BALANCE_CACHE` 에 넣으므로 **직후 `/cost` 는 잔액을 다시
+  호출하지 않습니다**(`balance_now`).
+- 조회에 실패하면 경고 줄만 남기고 대화는 계속됩니다(`llm balance` 도 같음,
+  종료 코드 1).
+- `--no-balance` 로 시작했으면 호출하지 않고 이유만 안내합니다.
 
 ---
 
@@ -1589,7 +1627,8 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   `tool_line_done`(도구 줄을 항목 하위 로그로 연결), `todo_rows`(상한 초과 시
   완료 항목부터 접기), `reset_todo`/`restore_todo`/
   `todo_plan_text`/`todo_stamp`(요약·다음 실행을 넘어 같은 계획 이어가기)
-- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `prefetch_balance(quiet=)`/
+- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `balance_now`(현재 잔액 조회 + `/cost` 캐시 갱신 — `llm balance`·REPL `/balance` 공통 경로)/
+  `prefetch_balance(quiet=)`/
   `SESSION_BALANCE_BASE`(첫 성공 조회 = `/cost` 기준 잔액)/`balance_cost`(`balance_cost_from`)/
   `current_balance_amounts`/`COST_BALANCE_CACHE`/`COST_BALANCE_TTL`(5초 캐시)/
   `cost_summary_lines`/`session_cost_lines`(세션 누적 금액 줄·불가 이유 안내)/`cost_krw`/

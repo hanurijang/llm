@@ -1,7 +1,7 @@
 [
   {
     "role": "user",
-    "content": "[이전 대화 요약] 아래는 이전 대화의 요약입니다. 이후 대화의 맥락으로 사용하세요.\n\n# 대화 요약\n\n## 사용자 목표/요청\n- **v0.11.1 진행**: `llm` 래퍼가 `readlink -f` 없는 환경(macOS/BSD)에서도 동작하도록 수정 + README 「다른 PC」 절 보강.\n- **질문**: 대화형 REPL에서 `/agent` 입력 시 `/chat`과의 차이.\n- **질문**: `/cost` 입력 시 금액이 안 나오고 토큰만 나오는 이유.\n- **요청**: `/cost` 개선을 **권장 방식으로 적용**.\n\n## 결정 사항과 이유\n- `llm` 래퍼는 `readlink -f`에 의존하지 않음 → `BASH_SOURCE` + `readlink` 루프로 심볼릭 링크 직접 해석(상대·다단계 링크, 최대 40 hop). 이유: `-f` 미지원 환경에서 `~/bin/llm`이 `agent.py`를 못 찾음(재현 확인).\n- **`LLM_PYTHON` 환경변수** 지원(기본 `python3`). macOS 기본 python3가 3.9일 수 있음.\n- `/cost` 금액은 **토큰 단가표가 없어** 잔액 차이 방식(**세션 시작 잔액 − 현재 잔액, 원화 환산**)으로 계산. 불가 시 이유를 안내 줄로 표시(권장 방식 채택).\n- `/chat` vs `/agent`: `chat_only` 변수 하나로 토글. chat=도구/`@파일`/undo/셸/todo/잔액 없음, 프롬프트 `llm:chat>`; agent=도구·규칙·편집·잔액 활성, `llm:agent>`. 모드 전환은 대화 기록·plan 모드를 바꾸지 않음.\n\n## 생성/수정된 파일과 핵심 코드 변경\n- **`llm`(래퍼)**: `readlink -f` 제거 → `readlink` 루프 해석, `LLM_PYTHON` 지정(미존재 시 안내 후 exit 127), `agent.py` 없으면 안내 후 exit 1.\n- **`agent.py`**:\n  - v0.11.1: `VERSION = \"0.11.1\"`.\n  - `/cost` 개선: `SESSION_BALANCE_BASE`(세션 기준 잔액)·`COST_BALANCE_CACHE`(5초 TTL)·`COST_BALANCE_TTL` 추가, `balance_cost_from`·`current_balance_amounts`·`cost_summary_lines`·`session_cost_lines` 구현.\n  - `prefetch_balance(quiet=False)`로 확장(첫 성공 조회를 세션 기준 잔액으로 기록), `/cost` 핸들러가 `session_cost_lines` 출력하도록 연결, REPL_COMMANDS 설명 갱신.\n- **`README.md`**: v0.11.1 버전 표기, 이식성 행, 「설치·실행 파일 배치」 링크 해석·`LLM_PYTHON`, 「① 코드 가져오기」 SSH 별칭(`github-hanurijang`) 주의, 새 절 「macOS·다른 환경에서 쓸 때」, 「준비물 체크」·「설정과 환경변수」에 `LLM_PYTHON`, 배너 예 v0.11.1.\n- **`.llm/rules.md`**: 「진입 래퍼(`llm`) 이식성 (필수)」 절 추가.\n- **테스트**: `tests/test_launcher.py` 신설 5개(체인 링크/BSD식 readlink/agent.py 누락/LLM_PYTHON 미존재·지정), `tests/test_phase1.py` 버전 0.11.1, `tests/test_cost.py` 신설 13개(잔액 차이 계산·불가 안내·캐시·기준 잔액).\n\n## 검증 및 커밋\n- v0.11.1: `py_compile` OK, 전체 **111 passed**, 커밋/push 완료 → `522ac5b`(717f7de→522ac5b).\n- `/cost` 개선: `tests/test_cost.py` **13 passed**, `python3 -m py_compile agent.py` OK(전체 스위트·커밋 아직).\n\n## 미해결 과제 (TODO)\n- **VERSION 0.12.0** 미적용(현재 0.11.1) 및 README `/cost` 표·잔액 절·v0.12 변경 표·함수 목록·배너 예 갱신 필요.\n- `/cost` 개선분 **전체 `pytest` 검증 후 커밋/push** 필요.\n- 로컬 미커밋: `.llm/history_llm.json`, 요약 파일들(규칙대로 `llm sync` 필요)."
+    "content": "[이전 대화 요약] 아래는 이전 대화의 요약입니다. 이후 대화의 맥락으로 사용하세요.\n\n# 대화 요약\n\n## 사용자 목표/요청\n- **v0.11.1 진행**: `llm` 래퍼가 `readlink -f` 없는 환경(macOS/BSD)에서도 동작하도록 수정 + README 「다른 PC」 절 보강.\n- **질문**: 대화형 REPL에서 `/agent` 입력 시 `/chat`과의 차이.\n- **질문**: `/cost` 입력 시 금액이 안 나오고 토큰만 나오는 이유.\n- **요청**: `/cost` 개선을 **권장 방식으로 적용**.\n\n## 결정 사항과 이유\n- `llm` 래퍼는 `readlink -f`에 의존하지 않음 → `BASH_SOURCE` + `readlink` 루프로 심볼릭 링크 직접 해석(상대·다단계 링크, 최대 40 hop). 이유: `-f` 미지원 환경에서 `~/bin/llm`이 `agent.py`를 못 찾음(재현 확인).\n- **`LLM_PYTHON` 환경변수** 지원(기본 `python3`). macOS 기본 python3가 3.9일 수 있음.\n- `/cost` 금액은 **토큰 단가표가 없어** 잔액 차이 방식(**세션 시작 잔액 − 현재 잔액, 원화 환산**)으로 계산. 불가 시 이유를 안내 줄로 표시(권장 방식 채택).\n- `/chat` vs `/agent`: `chat_only` 변수 하나로 토글. chat=도구/`@파일`/undo/셸/todo/잔액 없음, 프롬프트 `llm:chat>`; agent=도구·규칙·편집·잔액 활성, `llm:agent>`. 모드 전환은 대화 기록·plan 모드를 바꾸지 않음.\n\n## 생성/수정된 파일과 핵심 코드 변경\n- **`llm`(래퍼)**: `readlink -f` 제거 → `readlink` 루프 해석, `LLM_PYTHON` 지정(미존재 시 안내 후 exit 127), `agent.py` 없으면 안내 후 exit 1.\n- **`agent.py`**:\n  - v0.11.1: `VERSION = \"0.11.1\"`.\n  - `/cost` 개선: `SESSION_BALANCE_BASE`(세션 기준 잔액)·`COST_BALANCE_CACHE`(5초 TTL)·`COST_BALANCE_TTL` 추가, `balance_cost_from`·`current_balance_amounts`·`cost_summary_lines`·`session_cost_lines` 구현.\n  - `prefetch_balance(quiet=False)`로 확장(첫 성공 조회를 세션 기준 잔액으로 기록), `/cost` 핸들러가 `session_cost_lines` 출력하도록 연결, REPL_COMMANDS 설명 갱신.\n- **`README.md`**: v0.11.1 버전 표기, 이식성 행, 「설치·실행 파일 배치」 링크 해석·`LLM_PYTHON`, 「① 코드 가져오기」 SSH 별칭(`github-hanurijang`) 주의, 새 절 「macOS·다른 환경에서 쓸 때」, 「준비물 체크」·「설정과 환경변수」에 `LLM_PYTHON`, 배너 예 v0.11.1.\n- **`.llm/rules.md`**: 「진입 래퍼(`llm`) 이식성 (필수)」 절 추가.\n- **테스트**: `tests/test_launcher.py` 신설 5개(체인 링크/BSD식 readlink/agent.py 누락/LLM_PYTHON 미존재·지정), `tests/test_phase1.py` 버전 0.11.1, `tests/test_cost.py` 신설 13개(잔액 차이 계산·불가 안내·캐시·기준 잔액).\n\n## 검증 및 커밋\n- v0.11.1: `py_compile` OK, 전체 **111 passed**, 커밋/push 완료 → `522ac5b`(717f7de→522ac5b).\n- `/cost` 개선: `tests/test_cost.py` **13 passed**, `python3 -m py_compile agent.py` OK(전체 스위트·커밋 아직).\n\n## 미해결 과제 (TODO)\n- **VERSION 0.12.0** 미적용(현재 0.11.1) 및 README `/cost` 표·잔액 절·v0.12 변경 표·함수 목록·배너 예 갱신 필요.\n- `/cost` 개선분 **전체 `pytest` 검증 후 커밋/push** 필요.\n- 로컬 미커밋: `.llm/history_llm.json`, 요약 파일들(규칙대로 `llm sync` 필요).\n\n[진행 중인 작업 계획 — 새로 만들지 말고 이 계획을 이어서 갱신하세요]\n🎯 대화형(REPL)에 `/balance` 명령을 추가해 현재 DeepSeek 잔액(화폐별 + 원화 환산 + 적용 환율)을 보여 주고, 조회 결과를 `/cost` 캐시와 공유한다.\n   ▶ agent.py: balance_now 헬퍼·REPL `/balance` 핸들러·REPL_COMMANDS 추가, cmd_balance/current_balance_amounts 재사용\n   ☐ 테스트: balance_now 캐시 갱신·REPL_COMMANDS 등록·`/balance` 불가 안내\n   ☐ VERSION 0.13.0 · README(머리·v0.13 표·REPL 명령 표·함수 목록·배너 예)\n   ☐ py_compile·pytest 후 커밋/push\n<!-- llm-todo:{\"goal\": \"대화형(REPL)에 `/balance` 명령을 추가해 현재 DeepSeek 잔액(화폐별 + 원화 환산 + 적용 환율)을 보여 주고, 조회 결과를 `/cost` 캐시와 공유한다.\", \"items\": [{\"content\": \"agent.py: balance_now 헬퍼·REPL `/balance` 핸들러·REPL_COMMANDS 추가, cmd_balance/current_balance_amounts 재사용\", \"status\": \"in_progress\"}, {\"content\": \"테스트: balance_now 캐시 갱신·REPL_COMMANDS 등록·`/balance` 불가 안내\", \"status\": \"pending\"}, {\"content\": \"VERSION 0.13.0 · README(머리·v0.13 표·REPL 명령 표·함수 목록·배너 예)\", \"status\": \"pending\"}, {\"content\": \"py_compile·pytest 후 커밋/push\", \"status\": \"pending\"}]} -->"
   },
   {
     "role": "assistant",
@@ -710,5 +710,647 @@
   {
     "role": "assistant",
     "content": "`/cost`가 이제 토큰 사용량에 이어 **세션 누적 소요 금액**까지 보여 줍니다(v0.12.0, 검증 124 passed 후 push 완료).\n\n- **왜 잔액 차이인가**: DeepSeek이 모델별 토큰 단가표를 API로 주지 않아, 단가 곱셈으로는 금액을 낼 수 없습니다. 그래서 세션에서 **처음 성공한 잔액 조회**를 기준으로 `세션 시작 잔액 − 현재 잔액`을 원화로 환산합니다(`SESSION_BALANCE_BASE`).\n- **출력 예**:\n  ```text\n  ℹ️ 토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회\n    세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)\n  ```\n- **지어내지 않음**: 0.01 미만이면 `0.01 미만` + “정확한 금액은 알 수 없습니다”, 잔액이 늘면 `세션 잔액 증가`. 계산이 불가하면 이유 한 줄(`--no-balance`로 꺼짐 · API 키 없음 · 기준 잔액 없음 · 현재 잔액 조회 실패 · 잔액 형식 오류).\n- **API 아낌**: `/cost`의 현재 잔액 조회는 `COST_BALANCE_TTL`(5초) 캐시를 씁니다.\n- **채팅 모드**: 턴 푸터는 원래 표시하지 않지만, 시작 시 잔액을 조용히 한 번(경고 없이) 캐시해 `/chat`에서도 `/cost` 금액이 동작합니다. REPL 푸터는 첫 턴만 나오므로 이어가는 턴 금액은 `/cost`가 유일한 확인 경로입니다.\n- **함께 갱신**: `VERSION` 0.11.1→0.12.0, README(머리 버전·「v0.12 변경 사항」 표·REPL 명령 표·「잔액·소요 비용」에 「대화형 `/cost`」 절·함수 목록·`--no-balance` 행·배너 예), `tests/test_cost.py` 13개(총 124개), `tests/test_phase1.py` 버전 검사.\n\n🔁 동기화: 코드 push 완료 · 526d3c0 \"feat(cost): /cost 가 세션 누적 소요 금액(잔액 차이)과 불가 사유를 표시\" · agent.py 106±, README.md 59±, tests/test_cost.py +138, tests/test_phase1.py 2± · 대화 기록(.llm/history_llm.json·요약)도 같은 커밋으로 push됨"
+  },
+  {
+    "role": "user",
+    "content": "왜 api에 현재잔액 요청하는 명령어 없어?"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_fJNJ5ffPwmU1HSrncPKF3925",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"balance\\\" agent.py | grep -n \\\"def \\\\|add_parser\\\\|\\\\\\\"balance\\\\\\\"\\\\|'balance'\\\" | head -40 && echo ---- && grep -n \\\"balance\\\" llmlib/cliargs.py | head -30\", \"timeout\": 60}"
+        }
+      },
+      {
+        "id": "call_01_Ue1WTMFPpGF0u74MfZtd4131",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"balance\\\" README.md | head -40\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_fJNJ5ffPwmU1HSrncPKF3925",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n2:4333:def fetch_balance() -> tuple[dict[str, str], float | None]:\n5:4353:def print_balance_block(\n6:4384:def cmd_balance() -> int:\n9:4392:def prefetch_balance(quiet: bool = False) -> None:\n11:4418:def balance_cost_from(\n12:4433:def balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:\n14:4512:def current_balance_amounts() -> dict[str, str]:\n17:4543:def session_cost_lines(no_balance: bool = False) -> list[str]:\n21:4564:def show_balance_footer() -> None:\n----\n101:    if head == \"balance\":\n102:        return [\"--balance\", *rest], None\n"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_Ue1WTMFPpGF0u74MfZtd4131",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n97:| 규칙·기타 | `llm --init-rules` · `--rules` | `llm rules init` · `llm rules show` · `llm balance` 승격 |\n309:llm balance             # 키·네트워크 확인\n435:| `llm balance` | 잔액 조회 | `--balance` |\n469:| `--no-balance` | 시작 잔액 조회 및 종료 시 잔액·소요 비용·토큰 사용량 표시 생략 (`/cost` 금액도 이유 안내로 대체) |\n490:| `--balance` | DeepSeek API 잔액 조회 (화폐별 잔액 + 원화 환산). `llm balance` |\n544:> 서브커맨드(`ask`/`chat`/`plan`/`sync`/`undo`/`balance`/`rules`/`shell`/`session`/`repl`)는\n918:### 잔액·소요 비용 표시 (`--no-balance`)\n922:아래를 `--balance`와 같은 형식으로 보여줍니다.\n970:- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\n990:  `--no-balance`로 꺼져 있음 · API 키 없음 · 기준 잔액 없음(조회 실패) ·\n1592:- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `prefetch_balance(quiet=)`/\n1593:  `SESSION_BALANCE_BASE`(첫 성공 조회 = `/cost` 기준 잔액)/`balance_cost`(`balance_cost_from`)/\n1594:  `current_balance_amounts`/`COST_BALANCE_CACHE`/`COST_BALANCE_TTL`(5초 캐시)/\n1596:  `cost_negligible`/`cost_text`/`show_balance_footer`(시작 잔액 캐시 → 종료 시\n1597:  소요 비용·토큰 표시), `fetch_balance`/`amounts_krw`(API가 준 화폐별 잔액 + 원화\n1598:  환산)/`ordered_currencies`/`format_amounts`/`format_krw`/`print_balance_block`,\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_FUSNhjYaC6GtB8qFbXPq0793",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 70, \"offset\": 4333, \"path\": \"agent.py\"}"
+        }
+      },
+      {
+        "id": "call_01_UFfXEijkOfm00hElZFU77535",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 - <<'PY'\\nimport sys\\nsys.argv=['llm','balance','--help']\\nimport agent\\ntry:\\n    print(agent.main())\\nexcept SystemExit as e:\\n    print('exit', e.code)\\nPY\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_FUSNhjYaC6GtB8qFbXPq0793",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/agent.py (6268 lines)\n  4333|def fetch_balance() -> tuple[dict[str, str], float | None]:\n  4334|    \"\"\"API 가 주는 **화폐별** 계정 잔액과, 그 원화 환산 합계를 돌려준다.\n  4335|\n  4336|    DeepSeek 계정 잔액은 화폐별로 존재할 수 있다(예: CNY, USD). API 가 준\n  4337|    화폐별 금액을 그대로 담고(지어내지 않는다), 표시용으로 원화 환산 합계만\n  4338|    활성 환율(`KRW_RATES`, 실시간 시세 또는 가정 환율)로 계산한다.\n  4339|    잔액 정보가 없으면 `({}, None)`.\n  4340|    \"\"\"\n  4341|    data = http_json(BALANCE_URL)\n  4342|    amounts: dict[str, str] = {}\n  4343|    for info in data.get(\"balance_infos\") or []:\n  4344|        cur = str(info.get(\"currency\") or \"\").strip().upper()\n  4345|        if not cur:\n  4346|            continue\n  4347|        amounts[cur] = str(info.get(\"total_balance\") or \"0.00\")\n  4348|    if not amounts:\n  4349|        return {}, None\n  4350|    return amounts, amounts_krw(amounts)\n  4351|\n  4352|\n  4353|def print_balance_block(\n  4354|    amounts: dict[str, str], krw: float | None, extras: list[str] | None = None\n  4355|) -> None:\n  4356|    print_title(\"💵 DeepSeek 잔액 정보\")\n  4357|    order = ordered_currencies(amounts)\n  4358|    if not order:\n  4359|        print(f\"  {C.dim}(API 가 잔액 정보를 주지 않았습니다){C.reset}\")\n  4360|    for cur in order:\n  4361|        label = CURRENCY_LABELS.get(cur)\n  4362|        name = f\"{C.dim}{pad(label, 4)}{C.reset} \" if label else \"\"\n  4363|        note = \"\" if krw_rate(cur) is not None else f\"  {C.dim}(환율 미지정){C.reset}\"\n  4364|        print(\n  4365|            f\"  {name}{C.dim}({cur}){C.reset}\"\n  4366|            f\"  {C.bold}{amounts[cur]}{C.reset} {cur}{note}\"\n  4367|        )\n  4368|    print(\n  4369|        f\"  {C.dim}{pad(DISPLAY_CURRENCY_LABEL, 4)}{C.reset} {C.dim}({DISPLAY_CURRENCY}){C.reset}\"\n  4370|        f\"  {C.bold}{format_krw(krw)}{C.reset} 원  {C.dim}(환산){C.reset}\"\n  4371|    )\n  4372|    print(f\"{C.dim}{rule()}{C.reset}\")\n  4373|    rates = \" · \".join(\n  4374|        f\"1 {cur} = {krw_rate(cur):,.2f} KRW\" for cur in order if krw_rate(cur) is not None\n  4375|    )\n  4376|    if rates:\n  4377|        kind = \"실시간\" if RATES_LIVE else \"가정\"\n  4378|        info = f\"   {C.dim}({RATES_INFO}){C.reset}\" if RATES_INFO else \"\"\n  4379|        print(f\"  {C.dim}적용 환율({kind}): {rates}{C.reset}{info}\")\n  4380|    for line in extras or []:\n  4381|        print(f\"  {line}\")\n  4382|\n  4383|\n  4384|def cmd_balance() -> int:\n  4385|    print_info(\"DeepSeek 계정 잔액을 조회합니다...\")\n  4386|    load_rates()\n  4387|    amounts, krw = fetch_balance()\n  4388|    print_balance_block(amounts, krw)\n  4389|    return 0\n  4390|\n  4391|\n  4392|def prefetch_balance(quiet: bool = False) -> None:\n  4393|    \"\"\"에이전트 시작 전 잔액과 적용 환율을 미리 조회해 캐시한다.\n  4394|\n  4395|    종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 시작 잔액은\n  4396|    화면에 출력하지 않고(종료 시 시작→종료로만 보여준다) 조용히 캐시만 한다.\n  4397|    이번 실행에서 **처음** 성공한 조회는 `SESSION_BALANCE_BASE`로도 남겨\n  4398|    `/cost` 가 세션 누적 소요 금액을 계산할 수 있게 한다.\n  4399|    실패해도 경고만 출력하고 흐름은 막지 않는다(`quiet` 면 경고도 생략 —\n  4400|    채팅 모드처럼 턴 푸터를 쓰지 않는 경우).\n  4401|    \"\"\"\n  4402|    global START_BALANCE, SESSION_BALANCE_BASE\n... [1866 more lines; use offset/limit]"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_UFfXEijkOfm00hElZFU77535",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\nusage: llm [-h] [-s SESSION] [--ref 세션] [--chat] [-i] [--once]\n           [--list-sessions] [-y] [--model MODEL] [--max-steps MAX_STEPS]\n           [--no-stream] [--no-balance] [--no-rates] [--no-thinking]\n           [--show-thinking] [--confirm-all] [--confirm-edits] [--plan]\n           [--safe] [--trust] [--no-pull]\n           ...\n\nDeepSeek CLI 에이전트\n\npositional arguments:\n  prompt                질문\n\noptions:\n  -h, --help            show this help message and exit\n  -s SESSION, --session SESSION\n                        세션 이름 (이 폴더에 매핑, 기존 매핑은 갈아탐)\n  --ref 세션              다른 세션의 맥락을 이번 세션에 1회 주입 (여러 번 지정 가능, 참조 대상은 읽기 전용)\n  --chat                도구 없이 순수 채팅\n  -i, --interactive     대화형 REPL (같은 세션에서 여러 턴). llm repl · llm agent 와 동일\n  --once                1턴만 실행하고 끝냄(터미널에서도 대화형으로 가지 않음). llm ask\"질문\" 과 동일\n  --list-sessions       이 폴더의 세션 목록 보기 (llm session ls)\n  -y, --yes             셸 명령 확인 생략\n  --model MODEL         모델 (기본: deepseek-flash)\n  --max-steps MAX_STEPS\n                        에이전트 루프 최대 횟수 (기본: 100, 도달 시 이어서 진행할지 확인)\n  --no-stream           스트리밍 비활성화\n  --no-balance          에이전트 종료 후 잔액 표시 생략\n  --no-rates            실시간 환율 조회를 끄고 가정 환율로 환산 (LLM_RATES=0과 동일)\n  --no-thinking         사고(thinking) 비활성화 (더 빠른 응답)\n  --show-thinking       모델의 사고 과정(reasoning) 원문을 회색으로 실시간 출력\n  --confirm-all         모든 셸 명령과 파일 편집 확인 (가장 엄격)\n  --confirm-edits       파일 편집마다 diff 를 보여주고 확인 (LLM_CONFIRM_EDITS=1 과 동일)\n  --plan                plan 모드: 읽기 전용 조사 후 구현 계획만 제시 (llm plan \"질문\")\n  --safe                작업 폴더 안 명령은 자동(기본과 동일). 밖·설치 등은 확인\n  --trust               sudo·설치·폴더 밖 삭제만 확인(관대)\n  --no-pull             이번 실행은 원격의 최신 대화 기록을 자동으로 받아오지 않음 (LLM_AUTO_PULL=0과\n                        동일)\n\n서브커맨드:\n  ask|once \"질문\"           1턴만 실행(대화형으로 가지 않음)\n  chat \"질문\" / plan \"질문\"  1턴(도구 없이 / 계획만)\n  repl|agent|-i             대화형(여러 턴)\n  undo                      직전 편집 되돌리기\n  sync                      대화 기록 동기화\n  balance                   API 잔액 보기\n  rules [show|init]         세션 규칙 보기·생성\n  shell log [N|clear]       셸 허용/실행 로그\n  shell allow [clear]       셸 자동 허용 목록\n  session ls|adopt|view|clear|delete|compact|run|ref [이름]\n\n인자 없이 실행하면 터미널에서는 대화형(REPL)으로 시작합니다(llm \"질문\" 은 대화형 첫 턴). 파이프·리다이렉션에서는 1턴으로 끝납니다.\nexit 0\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_mNEU1YDCLA08oKNvxDPk9466",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && ls .env >/dev/null 2>&1 && echo \\\"env-file: yes\\\" || echo \\\"env-file: no\\\"; timeout 30 ./llm balance 2>&1 | head -20\", \"timeout\": 60}"
+        }
+      },
+      {
+        "id": "call_01_pii0551gITzHbr9ouChE9645",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"BALANCE_URL\\\" agent.py | head -5\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_mNEU1YDCLA08oKNvxDPk9466",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\nenv-file: yes\nℹ️  DeepSeek 계정 잔액을 조회합니다...\n──────────────────────────── 💵 DeepSeek 잔액 정보 ─────────────────────────────\n  위안화 (CNY)  19.98 CNY\n  미국달러 (USD)  0.15 USD\n  원화 (KRW)  4,160.21 원  (환산)\n────────────────────────────────────────────────────────────────────────────────\n  적용 환율(실시간): 1 CNY = 198.27 KRW · 1 USD = 1,325.19 KRW   (Tue, 27 Oct 2026 00:02:31 +0000)\n"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_pii0551gITzHbr9ouChE9645",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n73:BALANCE_URL = \"https://api.deepseek.com/user/balance\"\n4341:    data = http_json(BALANCE_URL)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_d0eWu0bZNLbN8WM194RG2704",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n '\\\"/balance\\\"\\\\|/balance' agent.py README.md | head\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_d0eWu0bZNLbN8WM194RG2704",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\nagent.py:73:BALANCE_URL = \"https://api.deepseek.com/user/balance\"\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_vxw3ijzD5U3zsfuGU1fX3028",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git status --short | head && git log --oneline origin/main..HEAD | wc -l\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_vxw3ijzD5U3zsfuGU1fX3028",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n M .llm/history_llm.json\n0\n"
+  },
+  {
+    "role": "assistant",
+    "content": "명령은 **이미 있습니다** — 다만 CLI(`llm balance`)에만 있고 REPL 안에는 없습니다.\n\n- **CLI**: `llm balance` (= 옛 `--balance`)가 `GET https://api.deepseek.com/user/balance`로 현재 잔액을 조회합니다. 방금 실행해서 정상 동작 확인했습니다(CNY 19.98 · USD 0.15 · 원화 환산 4,160.21 원, 실시간 환율 표기).\n- **REPL**: 명령 목록에 `/balance`가 없습니다. 대화형에서는 `/cost`가 내부적으로 현재 잔액을 조회해 **소요 금액 계산에만** 쓰고, 잔액 자체를 보여 주는 명령은 빠져 있습니다. 그래서 `llm:agent> /balance`를 치면 \"알 수 없는 명령\"이 됩니다.\n- 원래 의도는 \"잔액은 종료 푸터/`llm balance`로, 대화형에서는 누적 비용 확인용 `/cost`\"였는데, v0.12에서 `/cost`가 잔액을 조회하게 되면서 **REPL에서 현재 잔액을 직접 보는 수단이 없다는 구멍**이 생겼습니다.\n\n원하시면 `/balance`를 REPL에 추가하겠습니다 — `cmd_balance`와 같은 블록(화폐별 잔액 + 원화 환산 + 적용 환율)을 출력하고, 조회 결과를 `COST_BALANCE_CACHE`에 넣어 `/cost`와 캐시를 공유하도록요. (README REPL 명령 표·`REPL_COMMANDS`·테스트 함께 갱신)\n\n🔁 동기화: 변경 없음(원격과 동일 · 코드 변경 없음, 대화 기록만 로컬 수정 상태)"
+  },
+  {
+    "role": "user",
+    "content": "좋아 추가해줘"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_F6UPPLNjkRMMc5P3Ncjg4781",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 60, \"offset\": 4384, \"path\": \"agent.py\"}"
+        }
+      },
+      {
+        "id": "call_01_JsERhoBWIDdlNqhZqTfm6701",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 55, \"offset\": 4500, \"path\": \"agent.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_F6UPPLNjkRMMc5P3Ncjg4781",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/agent.py (6268 lines)\n  4384|def cmd_balance() -> int:\n  4385|    print_info(\"DeepSeek 계정 잔액을 조회합니다...\")\n  4386|    load_rates()\n  4387|    amounts, krw = fetch_balance()\n  4388|    print_balance_block(amounts, krw)\n  4389|    return 0\n  4390|\n  4391|\n  4392|def prefetch_balance(quiet: bool = False) -> None:\n  4393|    \"\"\"에이전트 시작 전 잔액과 적용 환율을 미리 조회해 캐시한다.\n  4394|\n  4395|    종료 시 소요 비용(시작 잔액 - 종료 잔액)을 계산하는 데 쓴다. 시작 잔액은\n  4396|    화면에 출력하지 않고(종료 시 시작→종료로만 보여준다) 조용히 캐시만 한다.\n  4397|    이번 실행에서 **처음** 성공한 조회는 `SESSION_BALANCE_BASE`로도 남겨\n  4398|    `/cost` 가 세션 누적 소요 금액을 계산할 수 있게 한다.\n  4399|    실패해도 경고만 출력하고 흐름은 막지 않는다(`quiet` 면 경고도 생략 —\n  4400|    채팅 모드처럼 턴 푸터를 쓰지 않는 경우).\n  4401|    \"\"\"\n  4402|    global START_BALANCE, SESSION_BALANCE_BASE\n  4403|    START_BALANCE = None\n  4404|    if not os.environ.get(\"DEEPSEEK_API_KEY\", \"\").strip():\n  4405|        return\n  4406|    load_rates()\n  4407|    try:\n  4408|        amounts, krw = fetch_balance()\n  4409|    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등\n  4410|        if not quiet:\n  4411|            print_warn(f\"시작 잔액을 조회하지 못했습니다: {exc}\", stream=True)\n  4412|        return\n  4413|    START_BALANCE = (amounts, krw)\n  4414|    if SESSION_BALANCE_BASE is None:\n  4415|        SESSION_BALANCE_BASE = (amounts, krw)\n  4416|\n  4417|\n  4418|def balance_cost_from(\n  4419|    start_amounts: dict[str, str], end_amounts: dict[str, str]\n  4420|) -> dict[str, float] | None:\n  4421|    \"\"\"두 잔액의 **화폐별** 차이(양수면 소모). 계산할 수 없으면 None.\"\"\"\n  4422|    costs: dict[str, float] = {}\n  4423|    for cur in ordered_currencies({**start_amounts, **end_amounts}):\n  4424|        try:\n  4425|            start_v = float(start_amounts.get(cur, \"0\") or \"0\")\n  4426|            end_v = float(end_amounts.get(cur, \"0\") or \"0\")\n  4427|        except (TypeError, ValueError):\n  4428|            return None\n  4429|        costs[cur] = start_v - end_v\n  4430|    return costs\n  4431|\n  4432|\n  4433|def balance_cost(end_amounts: dict[str, str]) -> dict[str, float] | None:\n  4434|    \"\"\"시작 대비 **화폐별** 소모액(양수면 소모). 계산할 수 없으면 None.\"\"\"\n  4435|    if START_BALANCE is None:\n  4436|        return None\n  4437|    return balance_cost_from(START_BALANCE[0], end_amounts)\n  4438|\n  4439|\n  4440|def cost_krw(costs: dict[str, float]) -> float | None:\n  4441|    \"\"\"화폐별 소모액을 원화로 환산한 합계. 환율을 모르는 화폐가 있으면 None.\"\"\"\n  4442|    total = 0.0\n  4443|    for cur, value in costs.items():\n... [1825 more lines; use offset/limit]"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_JsERhoBWIDdlNqhZqTfm6701",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/agent.py (6268 lines)\n  4500|    total = int(totals.get(\"total_tokens\", 0)) or (prompt + completion)\n  4501|    parts = [f\"입력 {prompt:,}\", f\"출력 {completion:,}\", f\"합계 {total:,} 토큰\"]\n  4502|    hit = int(totals.get(\"prompt_cache_hit_tokens\", 0))\n  4503|    miss = int(totals.get(\"prompt_cache_miss_tokens\", 0))\n  4504|    if hit or miss:\n  4505|        parts.append(f\"캐시 적중 {hit:,} / 미적중 {miss:,}\")\n  4506|    calls = int(totals.get(\"calls\", 0))\n  4507|    if calls:\n  4508|        parts.append(f\"API {calls}회\")\n  4509|    return [\"토큰 사용: \" + \" · \".join(parts)]\n  4510|\n  4511|\n  4512|def current_balance_amounts() -> dict[str, str]:\n  4513|    \"\"\"현재 잔액(화폐별)을 조회한다. 짧은 간격의 반복 호출은 캐시를 쓴다.\"\"\"\n  4514|    global COST_BALANCE_CACHE\n  4515|    now = time.monotonic()\n  4516|    if COST_BALANCE_CACHE is not None and now - COST_BALANCE_CACHE[0] < COST_BALANCE_TTL:\n  4517|        return COST_BALANCE_CACHE[1]\n  4518|    load_rates()\n  4519|    amounts, _krw = fetch_balance()\n  4520|    COST_BALANCE_CACHE = (now, amounts)\n  4521|    return amounts\n  4522|\n  4523|\n  4524|def cost_summary_lines(\n  4525|    start_amounts: dict[str, str], end_amounts: dict[str, str]\n  4526|) -> list[str]:\n  4527|    \"\"\"두 잔액(시작→현재)의 차이를 원화 기준 줄로 만든다(순수 계산).\"\"\"\n  4528|    costs = balance_cost_from(start_amounts, end_amounts)\n  4529|    if costs is None:\n  4530|        return [\"잔액 형식이 달라 소요 금액을 계산하지 못했습니다.\"]\n  4531|    krw_signed = cost_krw(costs)\n  4532|    signed = krw_signed if krw_signed is not None else sum(costs.values())\n  4533|    label = \"세션 소요 금액\" if signed >= 0 else \"세션 잔액 증가\"\n  4534|    lines = [\n  4535|        f\"{label}: {cost_text(costs)}\"\n  4536|        f\"   (시작 {format_amounts(start_amounts)} → 현재 {format_amounts(end_amounts)})\"\n  4537|    ]\n  4538|    if cost_negligible(costs):\n  4539|        lines.append(\"잔액이 화폐 최소 단위(0.01)로 반올림되어 정확한 금액은 알 수 없습니다.\")\n  4540|    return lines\n  4541|\n  4542|\n  4543|def session_cost_lines(no_balance: bool = False) -> list[str]:\n  4544|    \"\"\"`/cost` 에 붙일 세션 누적 소요 금액 줄(불가하면 이유를 안내).\n  4545|\n  4546|    금액은 **세션 시작 잔액 - 현재 잔액**으로만 구한다(토큰 단가표 없음).\n  4547|    \"\"\"\n  4548|    if no_balance:\n  4549|        return [\"금액 표시가 꺼져 있습니다(--no-balance) — 잔액 조회를 하지 않습니다.\"]\n  4550|    if not os.environ.get(\"DEEPSEEK_API_KEY\", \"\").strip():\n  4551|        return [\"API 키가 없어 금액을 계산하지 못했습니다.\"]\n  4552|    if SESSION_BALANCE_BASE is None:\n  4553|        return [\n  4554|            \"기준 잔액이 없어 금액을 계산하지 못했습니다\"\n... [1714 more lines; use offset/limit]"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_CBsyBRQUv9O0jTnQfXAK7937",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 60, \"offset\": 5790, \"path\": \"agent.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_CBsyBRQUv9O0jTnQfXAK7937",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/agent.py (6268 lines)\n  5790|                print_info(\"입력을 취소했습니다. 끝내려면 Ctrl+C 를 한 번 더 누르거나 /exit\")\n  5791|                continue\n  5792|            except EOFError:\n  5793|                eprint()\n  5794|                print_info(\"대화형 모드를 끝냅니다.\")\n  5795|                break\n  5796|        if not line or line in {\"/exit\", \"/quit\", \":q\"}:\n  5797|            print_info(\"대화형 모드를 끝냅니다.\")\n  5798|            break\n  5799|        if line.startswith(\"/\"):\n  5800|            cmd, _, rest = line.partition(\" \")\n  5801|            rest = rest.strip()\n  5802|            if cmd == \"/help\":\n  5803|                for name, desc in REPL_COMMANDS.items():\n  5804|                    print(f\"  {C.cyan}{pad(name, 10)}{C.reset} {desc}\")\n  5805|            elif cmd == \"/sync\":\n  5806|                cmd_sync_history(root, session)\n  5807|            elif cmd == \"/chat\":\n  5808|                chat_only = True\n  5809|                print_ok(\"채팅 모드\")\n  5810|            elif cmd == \"/agent\":\n  5811|                chat_only = False\n  5812|                print_ok(\"에이전트 모드\")\n  5813|            elif cmd == \"/plan\":\n  5814|                RUN.plan_mode = not RUN.plan_mode\n  5815|                print_ok(\"plan 모드 켬 — 읽기 전용 조사 후 계획만 제시합니다\" if RUN.plan_mode else \"plan 모드 끔 — 계획을 실행할 수 있습니다\")\n  5816|            elif cmd == \"/model\":\n  5817|                if rest:\n  5818|                    model = rest\n  5819|                    print_ok(f\"모델을 바꿨습니다: {model}\")\n  5820|                else:\n  5821|                    print_info(f\"현재 모델: {model}\")\n  5822|            elif cmd == \"/cost\":\n  5823|                lines = usage_lines(SESSION_USAGE) or [\"아직 사용량이 없습니다.\"]\n  5824|                print_info(lines[0])\n  5825|                for extra in session_cost_lines(no_balance=args.no_balance):\n  5826|                    print(f\"  {C.dim}{extra}{C.reset}\")\n  5827|            elif cmd == \"/compact\":\n  5828|                cmd_summarize(session, history_file, model, force=True)\n  5829|            elif cmd == \"/clear\":\n  5830|                old = load_history(history_file)\n  5831|                if old:\n  5832|                    backup = summaries_dir(session) / f\"cleared-{datetime.now():%Y-%m-%dT%H-%M-%S}.json\"\n  5833|                    backup.parent.mkdir(parents=True, exist_ok=True)\n  5834|                    backup.write_text(json.dumps(old, ensure_ascii=False, indent=2) + \"\\n\", encoding=\"utf-8\")\n  5835|                    print_info(f\"이전 대화 백업: {backup}\")\n  5836|                save_history(history_file, [])\n  5837|                FILES.clear()\n  5838|                reset_todo()\n  5839|                print_ok(\"대화를 비웠습니다.\")\n  5840|            elif cmd == \"/undo\":\n  5841|                cmd_undo(session, history_file, assume_yes=False)\n  5842|            elif cmd == \"/rules\":\n  5843|                cmd_show_rules(root)\n  5844|            elif cmd == \"/bg\":\n  5845|                print(bg_manager().summary())\n  5846|            elif cmd in {\"/log\", \"/shell-log\", \"/allow-log\"}:\n  5847|                if rest == \"clear\":\n  5848|                    cmd_shell_log(session, clear=True)\n  5849|                else:\n... [419 more lines; use offset/limit]"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_D8jcrMSOgCW7caLxEvIb4596",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && ls tests && grep -rn \\\"REPL_COMMANDS\\\" tests agent.py | head\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_D8jcrMSOgCW7caLxEvIb4596",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n__pycache__\ntest_cliargs.py\ntest_cost.py\ntest_improvements.py\ntest_launcher.py\ntest_mdrender.py\ntest_phase1.py\ntest_shell_policy.py\ntest_shelllog.py\nagent.py:5651:REPL_COMMANDS = {\nagent.py:5696:    commands = sorted(REPL_COMMANDS)\nagent.py:5803:                for name, desc in REPL_COMMANDS.items():\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_0CSaA4mR8qZrJRpSW6I92436",
+        "type": "function",
+        "function": {
+          "name": "todo",
+          "arguments": "{\"items\": [{\"content\": \"agent.py: balance_now 헬퍼·REPL `/balance` 핸들러·REPL_COMMANDS 추가, cmd_balance/current_balance_amounts 재사용\", \"status\": \"in_progress\"}, {\"content\": \"테스트: balance_now 캐시 갱신·REPL_COMMANDS 등록·`/balance` 불가 안내\", \"status\": \"pending\"}, {\"content\": \"VERSION 0.13.0 · README(머리·v0.13 표·REPL 명령 표·함수 목록·배너 예)\", \"status\": \"pending\"}, {\"content\": \"py_compile·pytest 후 커밋/push\", \"status\": \"pending\"}], \"goal\": \"대화형(REPL)에 `/balance` 명령을 추가해 현재 DeepSeek 잔액(화폐별 + 원화 환산 + 적용 환율)을 보여 주고, 조회 결과를 `/cost` 캐시와 공유한다.\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_0CSaA4mR8qZrJRpSW6I92436",
+    "name": "todo",
+    "content": "📋 작업 계획 갱신: 총 4개, 완료 0개 · 진행 중: agent.py: balance_now 헬퍼·REPL `/balance` 핸들러·REPL_COMMANDS 추가, cmd_balance/current_balance_amounts 재사용 · 목표 유지: 대화형(REPL)에 `/balance` 명령을 추가해 현재 DeepSeek 잔액(화폐별 + 원화 환산 + 적용 환율)을 보여 주고, 조회 결과를 `/cost` 캐시와 공유한다."
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_EWsUMnKGCPslH4wv8cLS3011",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"def balance_now() -> tuple[dict[str, str], float | None]:\\n    \\\"\\\"\\\"현재 잔액과 적용 환율을 조회하고 `/cost` 캐시도 갱신한다.\\n\\n    `llm balance` 와 REPL `/balance` 가 같은 경로를 쓴다. 갱신한 캐시 덕분에\\n    잔액을 본 직후의 `/cost` 는 같은 값을 재사용한다(API 호출 한 번 아낌).\\n    \\\"\\\"\\\"\\n    global COST_BALANCE_CACHE\\n    load_rates()\\n    amounts, krw = fetch_balance()\\n    COST_BALANCE_CACHE = (time.monotonic(), amounts)\\n    return amounts, krw\\n\\n\\ndef cmd_balance() -> int:\\n    print_info(\\\"DeepSeek 계정 잔액을 조회합니다...\\\")\\n    try:\\n        amounts, krw = balance_now()\\n    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등\\n        print_warn(f\\\"잔액을 조회하지 못했습니다: {exc}\\\")\\n        return 1\\n    print_balance_block(amounts, krw)\\n    return 0\", \"old_string\": \"def cmd_balance() -> int:\\n    print_info(\\\"DeepSeek 계정 잔액을 조회합니다...\\\")\\n    load_rates()\\n    amounts, krw = fetch_balance()\\n    print_balance_block(amounts, krw)\\n    return 0\"}, {\"new_string\": \"def current_balance_amounts() -> dict[str, str]:\\n    \\\"\\\"\\\"현재 잔액(화폐별)을 조회한다. 짧은 간격의 반복 호출은 캐시를 쓴다.\\\"\\\"\\\"\\n    now = time.monotonic()\\n    if COST_BALANCE_CACHE is not None and now - COST_BALANCE_CACHE[0] < COST_BALANCE_TTL:\\n        return COST_BALANCE_CACHE[1]\\n    amounts, _krw = balance_now()\\n    return amounts\", \"old_string\": \"def current_balance_amounts() -> dict[str, str]:\\n    \\\"\\\"\\\"현재 잔액(화폐별)을 조회한다. 짧은 간격의 반복 호출은 캐시를 쓴다.\\\"\\\"\\\"\\n    global COST_BALANCE_CACHE\\n    now = time.monotonic()\\n    if COST_BALANCE_CACHE is not None and now - COST_BALANCE_CACHE[0] < COST_BALANCE_TTL:\\n        return COST_BALANCE_CACHE[1]\\n    load_rates()\\n    amounts, _krw = fetch_balance()\\n    COST_BALANCE_CACHE = (now, amounts)\\n    return amounts\"}, {\"new_string\": \"    \\\"/cost\\\": \\\"이번 대화형 세션의 토큰 사용량·소요 금액\\\",\\n    \\\"/balance\\\": \\\"현재 DeepSeek 잔액 (llm balance)\\\",\", \"old_string\": \"    \\\"/cost\\\": \\\"이번 대화형 세션의 토큰 사용량·소요 금액\\\",\"}, {\"new_string\": \"            elif cmd == \\\"/balance\\\":\\n                if args.no_balance:\\n                    print_warn(\\\"잔액 조회가 꺼져 있습니다(--no-balance). 잔액을 보려면 빼고 실행하세요.\\\")\\n                else:\\n                    print_info(\\\"DeepSeek 계정 잔액을 조회합니다...\\\")\\n                    try:\\n                        amounts, krw = balance_now()\\n                    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등\\n                        print_warn(f\\\"잔액을 조회하지 못했습니다: {exc}\\\")\\n                    else:\\n                        print_balance_block(\\n                            amounts, krw, extras=session_cost_lines(no_balance=args.no_balance)\\n                        )\\n            elif cmd == \\\"/compact\\\":\", \"old_string\": \"            elif cmd == \\\"/compact\\\":\"}], \"path\": \"agent.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_EWsUMnKGCPslH4wv8cLS3011",
+    "name": "edit",
+    "content": "updated agent.py (+33 -6, 6295 lines) · 4 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_bOzHJRKuGA5XYTL5cp6q2188",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"VERSION = \\\"0.13.0\\\"\", \"old_string\": \"VERSION = \\\"0.12.0\\\"\"}], \"path\": \"agent.py\"}"
+        }
+      },
+      {
+        "id": "call_01_XifkHMRbAxSrEU0jjfzN2268",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"        self.assertEqual(llm.VERSION, \\\"0.13.0\\\")\", \"old_string\": \"        self.assertEqual(llm.VERSION, \\\"0.12.0\\\")\"}], \"path\": \"tests/test_phase1.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_bOzHJRKuGA5XYTL5cp6q2188",
+    "name": "edit",
+    "content": "updated agent.py (+1 -1, 6295 lines) · 1 replacement"
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_01_XifkHMRbAxSrEU0jjfzN2268",
+    "name": "edit",
+    "content": "ERROR: 먼저 read 로 파일을 읽은 뒤 편집하세요(읽지 않은 기존 파일은 고칠 수 없습니다)."
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_aNF4h19hzixMVhxaXGPv5430",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 6, \"offset\": 21, \"path\": \"tests/test_phase1.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_aNF4h19hzixMVhxaXGPv5430",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/tests/test_phase1.py (167 lines)\n    21|class Phase1Defaults(unittest.TestCase):\n    22|    def test_version(self) -> None:\n    23|        self.assertEqual(llm.VERSION, \"0.12.0\")\n    24|\n    25|    def test_version_matches_readme(self) -> None:\n    26|        \"\"\"README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신).\"\"\"\n... [141 more lines; use offset/limit]"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_xDYv7VuETgaRILqVbeoN5931",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"        self.assertEqual(llm.VERSION, \\\"0.13.0\\\")\", \"old_string\": \"        self.assertEqual(llm.VERSION, \\\"0.12.0\\\")\"}], \"path\": \"tests/test_phase1.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_xDYv7VuETgaRILqVbeoN5931",
+    "name": "edit",
+    "content": "updated tests/test_phase1.py (+1 -1, 167 lines) · 1 replacement"
+  },
+  {
+    "role": "assistant",
+    "content": "Now add tests for `/balance`.",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_MWdGqk5rHjBMsUCcUqtq1327",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 40, \"offset\": 100, \"path\": \"tests/test_cost.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_MWdGqk5rHjBMsUCcUqtq1327",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/tests/test_cost.py (138 lines)\n   100|\n   101|class PrefetchBase(unittest.TestCase):\n   102|    \"\"\"시작 잔액 조회가 세션 기준 잔액을 한 번만 기록하는지.\"\"\"\n   103|\n   104|    def setUp(self) -> None:\n   105|        for name in (\"START_BALANCE\", \"SESSION_BALANCE_BASE\", \"COST_BALANCE_CACHE\"):\n   106|            self.addCleanup(setattr, llm, name, getattr(llm, name))\n   107|        self._env = mock.patch.dict(\"os.environ\", {\"DEEPSEEK_API_KEY\": \"k\"}, clear=False)\n   108|        self._env.start()\n   109|        self.addCleanup(self._env.stop)\n   110|\n   111|    def test_first_fetch_becomes_base(self) -> None:\n   112|        llm.START_BALANCE = None\n   113|        llm.SESSION_BALANCE_BASE = None\n   114|        with mock.patch.object(llm, \"load_rates\", lambda *a, **k: None):\n   115|            with mock.patch.object(llm, \"fetch_balance\", lambda: ({\"CNY\": \"3.00\"}, 600.0)):\n   116|                llm.prefetch_balance()\n   117|                llm.START_BALANCE = None  # 다음 턴이 시작 잔액을 다시 조회한 상황\n   118|                with mock.patch.object(\n   119|                    llm, \"fetch_balance\", lambda: ({\"CNY\": \"2.50\"}, 500.0)\n   120|                ):\n   121|                    llm.prefetch_balance()\n   122|        assert llm.SESSION_BALANCE_BASE is not None\n   123|        self.assertEqual(llm.SESSION_BALANCE_BASE[0], {\"CNY\": \"3.00\"})\n   124|\n   125|    def test_quiet_prefetch_suppresses_warning(self) -> None:\n   126|        llm.START_BALANCE = None\n   127|        llm.SESSION_BALANCE_BASE = None\n   128|        with mock.patch.object(llm, \"load_rates\", lambda *a, **k: None):\n   129|            with mock.patch.object(llm, \"fetch_balance\", side_effect=OSError(\"down\")):\n   130|                with mock.patch.object(llm, \"print_warn\") as warn:\n   131|                    llm.prefetch_balance(quiet=True)\n   132|                    self.assertFalse(warn.called)\n   133|                    llm.prefetch_balance()\n   134|                    self.assertTrue(warn.called)\n   135|\n   136|\n   137|if __name__ == \"__main__\":\n   138|    unittest.main()"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_23GjCAi1kq0ka7J8GNGG7577",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"class BalanceCommand(unittest.TestCase):\\n    \\\"\\\"\\\"REPL `/balance` — 잔액 보기 + `/cost` 캐시 공유.\\\"\\\"\\\"\\n\\n    def setUp(self) -> None:\\n        for name in (\\\"START_BALANCE\\\", \\\"SESSION_BALANCE_BASE\\\", \\\"COST_BALANCE_CACHE\\\"):\\n            self.addCleanup(setattr, llm, name, getattr(llm, name))\\n        llm.COST_BALANCE_CACHE = None\\n        self._env = mock.patch.dict(\\\"os.environ\\\", {\\\"DEEPSEEK_API_KEY\\\": \\\"k\\\"}, clear=False)\\n        self._env.start()\\n        self.addCleanup(self._env.stop)\\n\\n    def test_balance_now_refreshes_cost_cache(self) -> None:\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", lambda: ({\\\"CNY\\\": \\\"3.00\\\"}, 600.0)):\\n                amounts, krw = llm.balance_now()\\n        self.assertEqual(amounts, {\\\"CNY\\\": \\\"3.00\\\"})\\n        self.assertEqual(krw, 600.0)\\n        self.assertIsNotNone(llm.COST_BALANCE_CACHE)\\n        assert llm.COST_BALANCE_CACHE is not None\\n        self.assertEqual(llm.COST_BALANCE_CACHE[1], {\\\"CNY\\\": \\\"3.00\\\"})\\n\\n    def test_cost_reuses_balance_cache(self) -> None:\\n        \\\"\\\"\\\"`/balance` 직후의 `/cost` 는 잔액을 다시 조회하지 않는다.\\\"\\\"\\\"\\n        llm.SESSION_BALANCE_BASE = ({\\\"CNY\\\": \\\"3.00\\\"}, 600.0)\\n        calls = []\\n\\n        def fake_fetch():\\n            calls.append(1)\\n            return ({\\\"CNY\\\": \\\"2.99\\\"}, 590.0)\\n\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", fake_fetch):\\n                llm.balance_now()\\n                lines = llm.session_cost_lines()\\n        self.assertEqual(len(calls), 1)\\n        self.assertIn(\\\"2.99\\\", lines[0])\\n\\n    def test_repl_commands_register_balance(self) -> None:\\n        self.assertIn(\\\"/balance\\\", llm.REPL_COMMANDS)\\n        self.assertIn(\\\"잔액\\\", llm.REPL_COMMANDS[\\\"/balance\\\"])\\n\\n    def test_cmd_balance_reports_failure(self) -> None:\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", side_effect=OSError(\\\"down\\\")):\\n                with mock.patch.object(llm, \\\"print_warn\\\") as warn:\\n                    self.assertEqual(llm.cmd_balance(), 1)\\n        self.assertTrue(warn.called)\\n\\n    def test_cmd_balance_prints_block(self) -> None:\\n        with mock.patch.object(llm, \\\"load_rates\\\", lambda *a, **k: None):\\n            with mock.patch.object(llm, \\\"fetch_balance\\\", lambda: ({\\\"CNY\\\": \\\"3.00\\\"}, 600.0)):\\n                with mock.patch.object(llm, \\\"print_balance_block\\\") as block:\\n                    self.assertEqual(llm.cmd_balance(), 0)\\n        block.assert_called_once()\\n\\n\\nif __name__ == \\\"__main__\\\":\", \"old_string\": \"if __name__ == \\\"__main__\\\":\"}], \"path\": \"tests/test_cost.py\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_23GjCAi1kq0ka7J8GNGG7577",
+    "name": "edit",
+    "content": "updated tests/test_cost.py (+56 -0, 194 lines) · 1 replacement"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_NtzwkpYWxbJrvLDilFCD8470",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 -m py_compile agent.py && python3 -m pytest -q tests/test_cost.py 2>&1 | tail -15\", \"timeout\": 300}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_NtzwkpYWxbJrvLDilFCD8470",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n..................                                                       [100%]\n18 passed in 0.06s\n"
+  },
+  {
+    "role": "assistant",
+    "content": "Now README updates (버전·v0.13 표·REPL 표·함수 목록·배너 예).",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_4LzRRnNcMglMWOYvTHbM0150",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 22, \"offset\": 55, \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_4LzRRnNcMglMWOYvTHbM0150",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1737 lines)\n    55|## v0.12 변경 사항\n    56|\n    57|`/cost`가 **세션 누적 소요 금액**까지 보여 줍니다(토큰 단가표가 없으므로\n    58|잔액 차이 방식 — 세션 시작 잔액 − 현재 잔액, 원화 환산). 금액을 낼 수 없으면\n    59|이유를 한 줄로 안내합니다.\n    60|\n    61|| 영역 | v0.11 | v0.12 |\n    62||---|---|---|\n    63|| `/cost` | 누적 토큰 사용량만(`토큰 사용: …`) | **토큰 + 세션 소요 금액** — `세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)` |\n    64|| 금액 계산 | 표시 없음 | 세션 시작 잔액(첫 성공 조회, `SESSION_BALANCE_BASE`) − 현재 잔액 |\n    65|| 계산 불가 | — | 이유를 안내(잔액 표시 꺼짐·API 키 없음·기준 잔액 없음·조회 실패). 금액을 지어내지 않음 |\n    66|| 반복 호출 | — | 현재 잔액은 `COST_BALANCE_TTL`(5초) 동안 캐시해 연속 `/cost` 로 API를 두드리지 않음 |\n    67|| 채팅 모드 | 시작 잔액을 조회하지 않음 | 조용히 기준 잔액만 캐시(푸터는 그대로 표시하지 않음) → `/cost` 금액은 동작 |\n    68|| 테스트 | 111개 | **124개**(잔액 차이 계산·불가 안내·캐시 13개) |\n    69|\n    70|## v0.11 변경 사항\n    71|\n    72|대화형(`llm`) 진입 화면을 다듬었습니다. 한 줄에 몰아 찍던 시작 배너를\n    73|**제목 줄 + 라벨 정렬 행** 구조로 바꾸고, 설정·셸 확인·로그·도움말을 행으로\n    74|나눠 보여 줍니다.\n    75|\n    76|| 영역 | v0.10 | v0.11 |\n... [1661 more lines; use offset/limit]"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_fee8yylNv4YhAspzmwYh7566",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"**버전:** v0.13.0 — 변경 요약은 [v0.13 변경 사항](#v013-변경-사항)\", \"old_string\": \"**버전:** v0.12.0 — 변경 요약은 [v0.12 변경 사항](#v012-변경-사항)\"}, {\"new_string\": \"## v0.13 변경 사항\\n\\nREPL에 **`/balance`** 명령을 추가했습니다. CLI `llm balance` 와 같은 블록\\n(화폐별 잔액 + 원화 환산 + 적용 환율)을 대화 중에 바로 보여 줍니다.\\n\\n| 영역 | v0.12 | v0.13 |\\n|---|---|---|\\n| 잔액 확인 | REPL에서는 `/cost` 의 소요 금액으로만 간접 확인 (나가서 `llm balance`) | **REPL `/balance`** — 화폐별 잔액·원화 환산·적용 환율을 그 자리에서 표시 |\\n| 캐시 공유 | `/cost` 만 캐시 사용 | `/balance` 가 조회한 잔액을 `COST_BALANCE_CACHE` 에 넣어 **직후 `/cost` 는 API를 다시 부르지 않음** (`balance_now`) |\\n| 부가 줄 | — | 잔액 블록 아래에 세션 소요 금액 줄(`session_cost_lines`)을 함께 표시 |\\n| 실패 처리 | `llm balance` 는 예외로 중단 | `llm balance`·`/balance` 모두 **경고 줄만** 남기고 계속 (종료 코드 1) |\\n| `--no-balance` | 잔액 조회 생략 | REPL `/balance` 는 꺼진 이유를 안내만 하고 호출하지 않음 |\\n| 테스트 | 124개 | **129개**(`/balance` 캐시 공유·등록·실패 처리 5개) |\\n\\n## v0.12 변경 사항\", \"old_string\": \"## v0.12 변경 사항\"}, {\"new_string\": \"| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 + **소요 금액**(세션 시작 잔액 − 현재 잔액, 원화 환산) |\\n| `/balance` | 현재 DeepSeek 잔액(화폐별 + 원화 환산 + 적용 환율), `llm balance` 와 동일. 조회값은 `/cost` 캐시와 공유 |\", \"old_string\": \"| `/cost` | 이번 REPL 세션의 누적 토큰 사용량 + **소요 금액**(세션 시작 잔액 − 현재 잔액, 원화 환산) |\"}], \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_fee8yylNv4YhAspzmwYh7566",
+    "name": "edit",
+    "content": "updated README.md (+16 -1, 1752 lines) · 3 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_efMwta0SO3wXVVXrj1bp3878",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && grep -n \\\"v0\\\\.12\\\\.0\\\\|0\\\\.12\\\\.0\\\" README.md | head -20\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_efMwta0SO3wXVVXrj1bp3878",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n322:llm session ls          # 상태 + 버전(v0.12.0) 표시 (API 호출 없음)\n516:────────────── ✦ llm v0.12.0 · 대화형 ──────────────\n586:────────────── ✦ llm v0.12.0 · 대화형 ──────────────\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_H6bQrGSOZY2CiTUuKwXr9447",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"llm session ls          # 상태 + 버전(v0.13.0) 표시 (API 호출 없음)\", \"old_string\": \"llm session ls          # 상태 + 버전(v0.12.0) 표시 (API 호출 없음)\"}, {\"new_string\": \"────────────── ✦ llm v0.13.0 · 대화형 ──────────────\", \"old_string\": \"────────────── ✦ llm v0.12.0 · 대화형 ──────────────\", \"replace_all\": true}, {\"new_string\": \"- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `balance_now`(현재 잔액 조회 + `/cost` 캐시 갱신 — `llm balance`·REPL `/balance` 공통 경로)/\\n  `prefetch_balance(quiet=)`/\", \"old_string\": \"- **비용/UI**: `duration_text`(경과 시간 `1m 05s` 표기), `prefetch_balance(quiet=)`/\"}], \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_H6bQrGSOZY2CiTUuKwXr9447",
+    "name": "edit",
+    "content": "updated README.md (+5 -4, 1753 lines) · 4 replacements"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_wIuYJJtDauyzUTXny8jW2683",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 30, \"offset\": 918, \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_wIuYJJtDauyzUTXny8jW2683",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1753 lines)\n   918|  `[진행 중인 작업 계획 — 새로 만들지 말고 이 계획을 이어서 갱신하세요]` 블록\n   919|  (목표 + 현재 항목/상태)을 함께 넣어, 모델이 **같은 계획을 이어서** 갱신합니다.\n   920|- 요약문에는 기계용 스냅샷 `<!-- llm-todo:{...} -->`도 심습니다. 다음 실행이\n   921|  그 대화를 불러오면 계획을 **복원**해 새로 시작하지 않고, `ℹ️ 이어가는 작업\n   922|  계획: 전체 N개 (완료 M개)`로 알려 줍니다.\n   923|- **끝난 계획은 되살리지 않습니다(중요).** 모든 항목이 완료(done)된 계획은\n   924|  다음 실행에서 복원·이어가기 대상이 아니며, 저장할 때마다 요약 헤드의 스냅샷을\n   925|  **지금 계획으로 최신화**하고 계획이 끝났으면 헤드에서 계획 블록·스냅샷을\n   926|  **걷어냅니다**. 그래야 옛 목표(`🎯 …`)가 새 작업의 목표처럼 자동 설정되지\n   927|  않습니다(진행 중인 계획은 그대로 이어갑니다).\n   928|- 스냅샷을 복원할 때는 **가장 마지막에 파싱되는 것**만 씁니다. 도구 출력 등에\n   929|  우연히 섞인 스탬프 모양의 문자열(파싱 불가) 때문에 멀쩡한 계획을 잃지 않습니다.\n   930|- 요약 시 계획을 함께 실었으면 `ℹ️ 진행 중인 작업 계획을 요약에 함께 실어\n   931|  이어갑니다.`로 안내합니다.\n   932|\n   933|### 잔액·소요 비용 표시 (`--no-balance`)\n   934|\n   935|에이전트 모드는 **시작할 때 잔액을 조용히 조회해 캐시**하고(화면에는 표시하지\n   936|않음. 실패하면 경고만), 정상 종료하면(`작업 완료 (N단계)`) **최종 답변 직전에**\n   937|아래를 `--balance`와 같은 형식으로 보여줍니다.\n   938|\n   939|```text\n   940|──────────────────────── 💵 DeepSeek 잔액 정보 ────────────────────────\n   941|  위안화 (CNY)  2.95 CNY\n   942|  미국달러 (USD)  0.99 USD\n   943|  원화 (KRW)  1,916.25 원  (환산)\n   944|────────────────────────────────────────────────────────────────────────\n   945|  적용 환율(실시간): 1 CNY = 199.43 KRW · 1 USD = 1,341.35 KRW   (Sat, 12 Sep 2026 00:02:31 +0000)\n   946|  소요 비용: 23.38 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 종료 2.95 CNY · 0.99 USD)\n   947|  토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회\n... [806 more lines; use offset/limit]"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_MRcm0ysKqDOQk9ESKf2W0437",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 32, \"offset\": 974, \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_MRcm0ysKqDOQk9ESKf2W0437",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1753 lines)\n   974|    `0.01 USD (13.50 원)`. 여러 화폐면 원화 합계를 앞세우고 화폐별 내역을\n   975|    괄호에 붙입니다: `24.50 원 (0.05 CNY · 0.01 USD)`.\n   976|  - 잔액이 **화폐 최소 단위(0.01)로만** 오므로, 환산액이 그 절반에도 못 미치면\n   977|    구분할 수 없습니다. 그때는 `소요 비용: 0.01 미만`과 함께 \"정확한 비용은 알\n   978|    수 없습니다\" 안내를 붙이고, 잔액이 늘었으면 `잔액 증가`로 표기합니다.\n   979|- **토큰 사용량**은 API 응답의 `usage`를 누적한 값입니다(입력/출력/합계,\n   980|  프롬프트 캐시 적중·미적중, API 호출 횟수). 스트리밍에서도 받도록\n   981|  `stream_options.include_usage`를 켭니다. 제공되지 않는 모델/버전에서는\n   982|  이 줄이 생략됩니다.\n   983|- 시작 잔액 조회에 실패하면 소요 비용만 생략하고 종료 잔액은 그대로 보여줍니다.\n   984|  종료 잔액 조회도 실패하면 경고만 출력하고 답변은 정상 표시됩니다.\n   985|- `--no-balance`는 **시작 잔액 조회와 종료 표시를 모두** 생략합니다(API 호출\n   986|  한 번을 아낌). `--chat` 모드에서는 푸터를 표시하지 않습니다(대신 기준 잔액만\n   987|  조용히 캐시해 `/cost`의 금액은 쓸 수 있습니다).\n   988|\n   989|### 대화형 `/cost` — 세션 누적 소요 금액\n   990|\n   991|토큰 단가표가 없으므로 **잔액 차이**로만 금액을 냅니다: **세션 시작 잔액(첫\n   992|성공 조회, `SESSION_BALANCE_BASE`) − 현재 잔액**, 원화로 환산.\n   993|\n   994|```text\n   995|ℹ️ 토큰 사용: 입력 4,484 · 출력 172 · 합계 4,656 토큰 · 캐시 적중 2,688 / 미적중 1,796 · API 3회\n   996|  세션 소요 금액: 23.38 원 (0.05 CNY)   (시작 3.00 CNY → 현재 2.95 CNY)\n   997|```\n   998|\n   999|- REPL 턴 푸터는 첫 턴에만 나오므로, **이어가는 턴의 금액은 `/cost`로 확인**합니다.\n  1000|- 현재 잔액은 `COST_BALANCE_TTL`(5초) 동안 캐시해 연속 `/cost`가 API를 두드리지\n  1001|  않습니다(`COST_BALANCE_CACHE`).\n  1002|- 금액이 화폐 최소 단위(0.01)에 못 미치면 `0.01 미만`과 “정확한 금액은 알 수\n  1003|  없습니다” 안내를 붙이고, 잔액이 늘었으면 `세션 잔액 증가`로 표기합니다.\n  1004|- 금액을 낼 수 없으면 **이유를 한 줄로 안내**하고 지어내지 않습니다:\n  1005|  `--no-balance`로 꺼져 있음 · API 키 없음 · 기준 잔액 없음(조회 실패) ·\n... [748 more lines; use offset/limit]"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_Ce0PE9eyq4htgRmSoTDS9570",
+        "type": "function",
+        "function": {
+          "name": "read",
+          "arguments": "{\"limit\": 14, \"offset\": 1005, \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_Ce0PE9eyq4htgRmSoTDS9570",
+    "name": "read",
+    "content": "/home/jang/codespace/userscript/llm/README.md (1753 lines)\n  1005|  `--no-balance`로 꺼져 있음 · API 키 없음 · 기준 잔액 없음(조회 실패) ·\n  1006|  현재 잔액 조회 실패 · 잔액 형식 오류.\n  1007|- 채팅 모드(`/chat`)도 시작 시 조용히 잔액을 한 번 조회하므로(푸터는 없음)\n  1008|  `/cost`의 금액 줄은 동일하게 동작합니다.\n  1009|\n  1010|---\n  1011|\n  1012|## 세션 규칙\n  1013|\n  1014|프로젝트별 지침을 대화 기록과 별개로 코드 저장소에 남길 수 있습니다.\n  1015|규칙은 **매 API 요청의 시스템 프롬프트에 포함**되어 모델이 따릅니다.\n  1016|\n  1017|### 파일 위치\n  1018|\n... [735 more lines; use offset/limit]"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_XvsvDyuQognZyKg94tsP9326",
+        "type": "function",
+        "function": {
+          "name": "edit",
+          "arguments": "{\"edits\": [{\"new_string\": \"- 채팅 모드(`/chat`)도 시작 시 조용히 잔액을 한 번 조회하므로(푸터는 없음)\\n  `/cost`의 금액 줄은 동일하게 동작합니다.\\n\\n### 대화형 `/balance` — 현재 잔액 보기\\n\\nREPL 안에서 `llm balance` 와 **같은 블록**을 그 자리에서 보여 줍니다.\\n(화폐별 잔액 + 원화 환산 + 적용 환율, 아래에 세션 소요 금액 줄)\\n\\n```text\\nllm:agent> /balance\\nℹ️  DeepSeek 계정 잔액을 조회합니다...\\n──────────────── 💵 DeepSeek 잔액 정보 ────────────────\\n  위안화 (CNY)  2.95 CNY\\n  미국달러 (USD)  0.99 USD\\n  원화 (KRW)  1,916.25 원  (환산)\\n────────────────────────────────────────────────────────\\n  적용 환율(실시간): 1 CNY = 199.43 KRW · 1 USD = 1,341.35 KRW   (Sat, 12 Sep 2026 00:02:31 +0000)\\n  세션 소요 금액: 23.38 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 현재 2.95 CNY · 0.99 USD)\\n```\\n\\n- 조회값은 `COST_BALANCE_CACHE` 에 넣으므로 **직후 `/cost` 는 잔액을 다시\\n  호출하지 않습니다**(`balance_now`).\\n- 조회에 실패하면 경고 줄만 남기고 대화는 계속됩니다(`llm balance` 도 같음,\\n  종료 코드 1).\\n- `--no-balance` 로 시작했으면 호출하지 않고 이유만 안내합니다.\", \"old_string\": \"- 채팅 모드(`/chat`)도 시작 시 조용히 잔액을 한 번 조회하므로(푸터는 없음)\\n  `/cost`의 금액 줄은 동일하게 동작합니다.\"}], \"path\": \"README.md\"}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_XvsvDyuQognZyKg94tsP9326",
+    "name": "edit",
+    "content": "updated README.md (+23 -0, 1776 lines) · 1 replacement"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_17h7pcapIiXCyINLtxLZ0793",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 -m py_compile agent.py llmlib/*.py && python3 -m pytest -q tests 2>&1 | tail -5\", \"timeout\": 600}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_17h7pcapIiXCyINLtxLZ0793",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n........................................................................ [ 55%]\n.........................................................                [100%]\n129 passed in 1.25s\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_GrbXVYBFqryYYebZbTsO7023",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && python3 - <<'PY'\\nimport agent as llm\\nllm.RATES_LIVE = True\\nllm.RATES_INFO = \\\"Sat, 12 Sep 2026 00:02:31 +0000\\\"\\nllm.print_balance_block({\\\"CNY\\\":\\\"2.95\\\",\\\"USD\\\":\\\"0.99\\\"}, 1916.25, extras=llm.cost_summary_lines({\\\"CNY\\\":\\\"3.00\\\",\\\"USD\\\":\\\"1.00\\\"},{\\\"CNY\\\":\\\"2.95\\\",\\\"USD\\\":\\\"0.99\\\"}))\\nPY\", \"timeout\": 60}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_GrbXVYBFqryYYebZbTsO7023",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n──────────────────────────── 💵 DeepSeek 잔액 정보 ─────────────────────────────\n  위안화 (CNY)  2.95 CNY\n  미국달러 (USD)  0.99 USD\n  원화 (KRW)  1,916.25 원  (환산)\n────────────────────────────────────────────────────────────────────────────────\n  적용 환율(실시간): 1 CNY = 220.00 KRW · 1 USD = 1,350.00 KRW   (Sat, 12 Sep 2026 00:02:31 +0000)\n  세션 소요 금액: 24.50 원 (0.05 CNY · 0.01 USD)   (시작 3.00 CNY · 1.00 USD → 현재 2.95 CNY · 0.99 USD)\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_nrijrko7ofTr6i92A9mn5505",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && timeout 40 ./llm balance 2>&1 | tail -6; echo \\\"rc=$?\\\"\", \"timeout\": 90}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_nrijrko7ofTr6i92A9mn5505",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n──────────────────────────── 💵 DeepSeek 잔액 정보 ─────────────────────────────\n  위안화 (CNY)  19.98 CNY\n  미국달러 (USD)  0.15 USD\n  원화 (KRW)  4,160.21 원  (환산)\n────────────────────────────────────────────────────────────────────────────────\n  적용 환율(실시간): 1 CNY = 198.27 KRW · 1 USD = 1,325.19 KRW   (Tue, 27 Oct 2026 00:02:31 +0000)\nrc=0\n"
+  },
+  {
+    "role": "assistant",
+    "content": "",
+    "tool_calls": [
+      {
+        "id": "call_00_ET_uHgcklFCyYJWyFDJLuQG1283",
+        "type": "function",
+        "function": {
+          "name": "shell",
+          "arguments": "{\"command\": \"cd /home/jang/codespace/userscript/llm && git pull --rebase --autostash 2>&1 | tail -3 && python3 -m py_compile agent.py llmlib/*.py && python3 -m pytest -q tests 2>&1 | tail -2\", \"timeout\": 300}"
+        }
+      }
+    ]
+  },
+  {
+    "role": "tool",
+    "tool_call_id": "call_00_ET_uHgcklFCyYJWyFDJLuQG1283",
+    "name": "shell",
+    "content": "exit 0\n--- stdout ---\n이미 업데이트 상태입니다.\n.........................................................                [100%]\n129 passed in 1.23s\n"
   }
 ]

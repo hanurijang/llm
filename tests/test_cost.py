@@ -134,5 +134,61 @@ class PrefetchBase(unittest.TestCase):
                     self.assertTrue(warn.called)
 
 
+class BalanceCommand(unittest.TestCase):
+    """REPL `/balance` — 잔액 보기 + `/cost` 캐시 공유."""
+
+    def setUp(self) -> None:
+        for name in ("START_BALANCE", "SESSION_BALANCE_BASE", "COST_BALANCE_CACHE"):
+            self.addCleanup(setattr, llm, name, getattr(llm, name))
+        llm.COST_BALANCE_CACHE = None
+        self._env = mock.patch.dict("os.environ", {"DEEPSEEK_API_KEY": "k"}, clear=False)
+        self._env.start()
+        self.addCleanup(self._env.stop)
+
+    def test_balance_now_refreshes_cost_cache(self) -> None:
+        with mock.patch.object(llm, "load_rates", lambda *a, **k: None):
+            with mock.patch.object(llm, "fetch_balance", lambda: ({"CNY": "3.00"}, 600.0)):
+                amounts, krw = llm.balance_now()
+        self.assertEqual(amounts, {"CNY": "3.00"})
+        self.assertEqual(krw, 600.0)
+        self.assertIsNotNone(llm.COST_BALANCE_CACHE)
+        assert llm.COST_BALANCE_CACHE is not None
+        self.assertEqual(llm.COST_BALANCE_CACHE[1], {"CNY": "3.00"})
+
+    def test_cost_reuses_balance_cache(self) -> None:
+        """`/balance` 직후의 `/cost` 는 잔액을 다시 조회하지 않는다."""
+        llm.SESSION_BALANCE_BASE = ({"CNY": "3.00"}, 600.0)
+        calls = []
+
+        def fake_fetch():
+            calls.append(1)
+            return ({"CNY": "2.99"}, 590.0)
+
+        with mock.patch.object(llm, "load_rates", lambda *a, **k: None):
+            with mock.patch.object(llm, "fetch_balance", fake_fetch):
+                llm.balance_now()
+                lines = llm.session_cost_lines()
+        self.assertEqual(len(calls), 1)
+        self.assertIn("2.99", lines[0])
+
+    def test_repl_commands_register_balance(self) -> None:
+        self.assertIn("/balance", llm.REPL_COMMANDS)
+        self.assertIn("잔액", llm.REPL_COMMANDS["/balance"])
+
+    def test_cmd_balance_reports_failure(self) -> None:
+        with mock.patch.object(llm, "load_rates", lambda *a, **k: None):
+            with mock.patch.object(llm, "fetch_balance", side_effect=OSError("down")):
+                with mock.patch.object(llm, "print_warn") as warn:
+                    self.assertEqual(llm.cmd_balance(), 1)
+        self.assertTrue(warn.called)
+
+    def test_cmd_balance_prints_block(self) -> None:
+        with mock.patch.object(llm, "load_rates", lambda *a, **k: None):
+            with mock.patch.object(llm, "fetch_balance", lambda: ({"CNY": "3.00"}, 600.0)):
+                with mock.patch.object(llm, "print_balance_block") as block:
+                    self.assertEqual(llm.cmd_balance(), 0)
+        block.assert_called_once()
+
+
 if __name__ == "__main__":
     unittest.main()

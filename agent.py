@@ -62,7 +62,7 @@ from llmlib.shell_policy import (
 )
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.12.0"
+VERSION = "0.13.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -4381,10 +4381,26 @@ def print_balance_block(
         print(f"  {line}")
 
 
-def cmd_balance() -> int:
-    print_info("DeepSeek 계정 잔액을 조회합니다...")
+def balance_now() -> tuple[dict[str, str], float | None]:
+    """현재 잔액과 적용 환율을 조회하고 `/cost` 캐시도 갱신한다.
+
+    `llm balance` 와 REPL `/balance` 가 같은 경로를 쓴다. 갱신한 캐시 덕분에
+    잔액을 본 직후의 `/cost` 는 같은 값을 재사용한다(API 호출 한 번 아낌).
+    """
+    global COST_BALANCE_CACHE
     load_rates()
     amounts, krw = fetch_balance()
+    COST_BALANCE_CACHE = (time.monotonic(), amounts)
+    return amounts, krw
+
+
+def cmd_balance() -> int:
+    print_info("DeepSeek 계정 잔액을 조회합니다...")
+    try:
+        amounts, krw = balance_now()
+    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
+        print_warn(f"잔액을 조회하지 못했습니다: {exc}")
+        return 1
     print_balance_block(amounts, krw)
     return 0
 
@@ -4511,13 +4527,10 @@ def usage_lines(totals: dict[str, int] | None = None) -> list[str]:
 
 def current_balance_amounts() -> dict[str, str]:
     """현재 잔액(화폐별)을 조회한다. 짧은 간격의 반복 호출은 캐시를 쓴다."""
-    global COST_BALANCE_CACHE
     now = time.monotonic()
     if COST_BALANCE_CACHE is not None and now - COST_BALANCE_CACHE[0] < COST_BALANCE_TTL:
         return COST_BALANCE_CACHE[1]
-    load_rates()
-    amounts, _krw = fetch_balance()
-    COST_BALANCE_CACHE = (now, amounts)
+    amounts, _krw = balance_now()
     return amounts
 
 
@@ -5655,6 +5668,7 @@ REPL_COMMANDS = {
     "/compact": "지금 대화 요약(압축)",
     "/model": "모델 보기/바꾸기  예) /model deepseek-reasoner",
     "/cost": "이번 대화형 세션의 토큰 사용량·소요 금액",
+    "/balance": "현재 DeepSeek 잔액 (llm balance)",
     "/undo": "직전 턴의 파일 편집 되돌리기",
     "/plan": "plan 모드 켜기/끄기 (읽기 전용 조사 + 계획만)",
     "/rules": "세션 규칙·프로젝트 지침 보기",
@@ -5824,6 +5838,19 @@ def cmd_repl(
                 print_info(lines[0])
                 for extra in session_cost_lines(no_balance=args.no_balance):
                     print(f"  {C.dim}{extra}{C.reset}")
+            elif cmd == "/balance":
+                if args.no_balance:
+                    print_warn("잔액 조회가 꺼져 있습니다(--no-balance). 잔액을 보려면 빼고 실행하세요.")
+                else:
+                    print_info("DeepSeek 계정 잔액을 조회합니다...")
+                    try:
+                        amounts, krw = balance_now()
+                    except (Exception, SystemExit) as exc:  # 네트워크/JSON/키 오류 등
+                        print_warn(f"잔액을 조회하지 못했습니다: {exc}")
+                    else:
+                        print_balance_block(
+                            amounts, krw, extras=session_cost_lines(no_balance=args.no_balance)
+                        )
             elif cmd == "/compact":
                 cmd_summarize(session, history_file, model, force=True)
             elif cmd == "/clear":
