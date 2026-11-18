@@ -4824,7 +4824,7 @@ def history_sync_paths(root: Path, session: str) -> list[str]:
 
 def repo_history_sessions(root: Path) -> list[str]:
     """이 폴더(`.llm/`)에 들어 있는 대화 기록의 세션 이름 목록(git clone 직후 안내용)."""
-    base = root / REPO_HISTORY_DIR_NAME
+    base = history_scope_dir(root)
     try:
         files = sorted(base.glob("history_*.json"))
     except OSError:
@@ -4868,7 +4868,8 @@ def auto_bind_from_repo_history(
     preferred = sanitize_session_name(root.name)
     if preferred in names:
         pick = preferred
-    elif len(names) == 1:
+    elif len(names) == 1 and history_scope_dir(root) == root / REPO_HISTORY_DIR_NAME:
+        # 공유형 LLM_HISTORY_DIR에서는 타 프로젝트의 유일한 기록을 연결하지 않는다.
         pick = names[0]
     else:
         return folders, None
