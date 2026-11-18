@@ -65,6 +65,34 @@ class Phase1Defaults(unittest.TestCase):
                 with mock.patch.dict(os.environ, {"LLM_HISTORY": "home"}):
                     self.assertEqual(llm.history_scope_dir(Path(tmp)), Path(tmp) / "home")
 
+    def test_history_directory_from_env(self) -> None:
+        """LLM_HISTORY_DIR 우선, 빈 값은 프로젝트 .llm/ 폴백."""
+        with tempfile.TemporaryDirectory() as temp:
+            root = Path(temp) / "project"
+            root.mkdir()
+            with mock.patch.dict(os.environ, {"LLM_HISTORY_DIR": "", "LLM_HISTORY": ""}):
+                self.assertEqual(llm.history_scope_dir(root), root / ".llm")
+            with mock.patch.dict(os.environ, {"LLM_HISTORY_DIR": "/data/llm-sessions", "LLM_HISTORY": ""}):
+                self.assertEqual(llm.history_scope_dir(root), Path("/data/llm-sessions"))
+            with mock.patch.dict(os.environ, {"LLM_HISTORY_DIR": "private_sessions", "LLM_HISTORY": ""}):
+                self.assertEqual(llm.history_scope_dir(root), (root / "private_sessions").resolve())
+            with mock.patch.dict(os.environ, {"LLM_HISTORY_DIR": "", "LLM_HISTORY": "home"}):
+                self.assertEqual(llm.history_scope_dir(root), llm.HISTORY_DIR)
+
+    def test_shared_history_directory_keeps_project_sessions_separate(self) -> None:
+        """공유 경로에 다른 폴더의 세션 하나만 있어도 잘못 자동 바인딩하지 않는다."""
+        with tempfile.TemporaryDirectory() as temp:
+            shared = Path(temp) / "sessions"
+            shared.mkdir()
+            (shared / "history_unrelated.json").write_text("[]", encoding="utf-8")
+            root = Path(temp) / "project"
+            root.mkdir()
+            with mock.patch.dict(os.environ, {"LLM_HISTORY_DIR": str(shared), "LLM_HISTORY": ""}):
+                with mock.patch.object(llm, "HISTORY_DIR", Path(temp) / "config"):
+                    bound, name = llm.auto_bind_from_repo_history({}, root)
+                    self.assertIsNone(name)
+                    self.assertEqual(bound, {})
+
     def test_ask_mode_default_safe(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
             for key in ("LLM_ALLOW_ALL", "LLM_AUTO_WORKSPACE", "LLM_SHELL_TRUST"):
