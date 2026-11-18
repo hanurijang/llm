@@ -1,4 +1,4 @@
-> 🔐 **로컬 대화 기록 정책 (2026-11)**: 모든 세션 대화와 요약은 현재 PC 내부에만 저장합니다. 기본 위치는 작업 폴더의 `.llm/history_<세션>.json`과 `.llm/summaries/`이며 `LLM_HISTORY=home` 설정 시 `~/.local/share/llm/`입니다. GitHub에는 소스코드와 검토된 프로젝트 규칙만 올립니다. `llm sync`(`--sync-history`) 및 자동 대화 Push/Pull(`LLM_AUTO_SYNC`, `LLM_AUTO_PULL`)은 안전을 위해 비활성화되어 있습니다. 기존 로컬 기록을 보존하려면 이전 PC에서 `git pull`하기 전에 `.llm/`을 별도 위치에 백업하세요. 다른 PC와 세션을 공유하거나 동기화하지 않습니다.
+> 🔐 **로컬 대화 기록 정책**: `llm/.env`에 `LLM_HISTORY_DIR=/data/llm-sessions`처럼 설정하면 대화 기록과 요약을 해당 로컬 폴더에 보관합니다. 비워두면 각 작업 폴더의 `.llm/`을 사용합니다. 작업 폴더별로 서로 다른 세션을 자동 생성·관리하며, GitHub에는 대화 기록을 전송하지 않습니다. `llm sync` 및 대화 기록 자동 Push/Pull은 비활성화되어 있습니다.
 
 # llm — DeepSeek CLI 에이전트
 
@@ -617,6 +617,19 @@ llm undo
 
 ### 대화 기록 — 로컬 저장 전용
 
+`llm/.env`에 다음과 같이 지정할 수 있습니다.
+
+```dotenv
+# 빈 값(기본): 현재 작업 폴더의 .llm/
+LLM_HISTORY_DIR=
+
+# 별도 데이터 SSD에 로컬 보관하려면 위 행 대신 사용
+# LLM_HISTORY_DIR=/data/llm-sessions
+```
+
+별도 경로를 사용하는 경우에도 **세션은 작업 폴더별로 서로 다른 이름으로 관리**됩니다. 세션 파일명은 `history_<세션명>.json`, 요약은 `summaries/<세션명>/`입니다. 세션 이름이 겹치면 폴더 경로를 이용해 이름을 구분합니다. 기존 경로의 기록을 새 위치로 바꾸려면 직접 백업·이전하세요. **저장 경로는 Git 저장소 외부를 권장**합니다.
+
+
 대화와 세션 요약은 현재 PC의 `<작업폴더>/.llm/`에 저장합니다. `LLM_HISTORY=home` 설정 시 `~/.local/share/llm/`에 저장합니다. GitHub에 기록을 올리는 기능은 제공하지 않습니다.
 
 ```bash
@@ -630,6 +643,19 @@ llm session compact         # 로컬 대화 요약과 백업
 - `LLM_AUTO_SYNC=1`과 `LLM_AUTO_PULL=1`을 지정해도 개인 대화는 Git으로 전송하거나 수신하지 않습니다.
 - 홈에 있는 예전 기록은 작업 폴더의 `.llm/`으로 옮겨질 수 있습니다. 저장 위치를 바꾸기 전에 현재 PC의 기록을 백업하세요.
 - Git은 **소스코드·테스트·프로젝트 규칙** 용도로만 사용합니다. 세션 파일을 수동 `git add -f`로 강제 추가하지 마세요.
+
+
+### 로컬 경로 설정 빠른 확인
+
+```bash
+# 코드 저장소의 .env 수정 (비밀키를 함께 저장하므로 Git에 올리지 않음)
+printf '\nLLM_HISTORY_DIR=/data/llm-sessions\n' >> /data/projects/llm/.env
+mkdir -p /data/llm-sessions
+chmod 700 /data/llm-sessions
+
+# 작업 폴더마다 독립 세션 생성
+cd /data/projects/프로젝트A && llm session ls
+```
 
 ### 소유와 권한
 
@@ -1439,7 +1465,8 @@ $ llm shell log            # 또는 REPL 에서 /log  (최근 20건, llm shell l
 | `LLM_RATES` | (미설정) | `0`이면 실시간 환율 끄고 가정 환율 (`--no-rates`) |
 | `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |
 | `LLM_PYTHON` | `python3` | `llm` 래퍼가 실행할 Python 실행기(3.10+). macOS 등에서 기본 `python3`가 3.9일 때 `LLM_PYTHON=python3.12` 처럼 지정 |
-| `LLM_HISTORY` | (미설정) | `home`이면 `~/.local/share/llm/`, 그 외 작업폴더 `.llm/` |
+| `LLM_HISTORY_DIR` | (빈 값) | **대화 기록 로컬 저장 디렉터리**. 절대경로 권장(예: `/data/llm-sessions`); 상대경로는 실행 중인 작업 폴더 기준. 비워두면 `<작업폴더>/.llm/` | 
+| `LLM_HISTORY` | (미설정) | 이전 버전 호환: `LLM_HISTORY_DIR`이 비어 있을 때만 `home`이면 `~/.local/share/llm/` 사용 |
 | `LLM_AUTO_SYNC` | (꺼짐) | 보안상 항상 비활성화(설정해도 대화 기록 Push 안 함) |
 | `LLM_AUTO_PULL` | (비활성화) | 보안상 대화 기록 자동 Pull 없음 |
 | `LLM_AUTO_PULL_TTL` | `120` | 호환성 설정(대화 기록 자동 Pull 비활성화) |
