@@ -78,6 +78,7 @@ HISTORY_DIR = Path.home() / ".local/share/llm"
 # (기기 로컬 정보인 bindings.json·rates.json·shell_allow_*.json·shell_log_*.jsonl은
 #  항상 홈에 남는다.)
 HISTORY_SCOPE_ENV = "LLM_HISTORY"
+HISTORY_PATH_ENV = "LLM_HISTORY_DIR"
 REPO_HISTORY_DIR_NAME = ".llm"
 HISTORY_SCOPE_HOME = "home"
 # 실행이 끝나면 대화 기록을 자동으로 커밋·push 할지 정하는 환경변수(기본 꺼짐).
@@ -733,6 +734,11 @@ def history_scope_dir(root: Path) -> Path:
     기본은 작업 폴더 안(`<작업폴더>/.llm`)이며 Git 추적에서 제외한다.
     `LLM_HISTORY=home`이면 사용자 홈에 로컬 저장한다.
     """
+    configured = os.environ.get(HISTORY_PATH_ENV, "").strip()
+    if configured:
+        # 상대 경로는 실행 프로젝트 루트(root) 기준이다.
+        target = Path(os.path.expandvars(configured)).expanduser()
+        return (target if target.is_absolute() else root / target).resolve()
     mode = os.environ.get(HISTORY_SCOPE_ENV, "").strip().lower()
     if mode in {HISTORY_SCOPE_HOME, "local"}:
         return HISTORY_DIR
@@ -783,10 +789,7 @@ def migrate_legacy_session(session: str) -> Path | None:
         print_info(
             f"[{session}] 대화 기록을 저장소 폴더로 옮겼습니다(복사): {dst}"
         )
-        print_info(
-            "이제 이 폴더를 커밋·push 하면 다른 PC에서도 대화가 이어집니다"
-            " (llm sync)."
-        )
+        print_info("대화 기록은 이 PC에만 저장되며 GitHub로 동기화하지 않습니다.")
     elif _history_len(src) > _history_len(dst):
         shutil.copy2(src, dst)
         print_info(f"[{session}] 옮기기 전 실행이 남긴 최신 기록을 반영했습니다: {dst}")
@@ -815,10 +818,7 @@ def history_file_for(session: str) -> Path:
 
 def history_file_of_folder(folder: Path | str, session: str) -> Path:
     """다른 세션(다른 폴더에 묶인)의 기록 파일 경로를 추정한다(--ref 등)."""
-    mode = os.environ.get(HISTORY_SCOPE_ENV, "").strip().lower()
-    if mode in {HISTORY_SCOPE_HOME, "local"}:
-        return HISTORY_DIR / f"history_{session}.json"
-    return Path(folder) / REPO_HISTORY_DIR_NAME / f"history_{session}.json"
+    return history_scope_dir(Path(folder)) / f"history_{session}.json"
 
 
 def find_history_file(session: str, folders: dict[str, str] | None = None) -> Path:
@@ -5053,86 +5053,10 @@ def maybe_auto_pull(root: Path, *, enabled: bool = True) -> None:
 
 
 def cmd_sync_history(root: Path, session: str) -> int:
-    """개인 대화 기록이 GitHub에 올라가는 것을 방지한다."""
+    """기존 CLI 호환: 대화 기록의 Git 동기화는 안전상 허용하지 않는다."""
     print_error("대화 기록은 로컬 전용입니다. llm sync/--sync-history는 비활성화되었습니다.")
-    print_info("코드 변경만 일반 git 명령으로 별도 커밋·push 하세요.")
+    print_info("소스코드만 일반 git 명령으로 별도 커밋·push 하세요.")
     return 1
-    if not history_scope_is_repo():
-        print_error(
-            f"{HISTORY_SCOPE_ENV}={HISTORY_SCOPE_HOME} 라서 기록이 홈에 있습니다"
-            f" ({HISTORY_DIR})."
-        )
-        print_info("동기화하려면 이 변수를 지우고 실행하세요 (기본값 = 세션 폴더).")
-        return 1
-    if not (root / ".git").exists() and git_run(root, "rev-parse", "--git-dir")[0] != 0:
-        print_error(f"git 저장소가 아닙니다: {root}")
-        return 1
-
-    paths = history_sync_paths(root, session)
-    if not paths:
-        print_error(f"동기화할 기록 경로를 찾지 못했습니다 (기록 폴더: {HISTORY_BASE}).")
-        return 1
-    rel = os.path.relpath(HISTORY_BASE, root)
-    code, out = git_run(root, "check-ignore", "--no-index", rel)
-    if code == 0:
-        print_error(f"{rel} 이 .gitignore 로 제외되어 있어 push 되지 않습니다.")
-        print_info(f".gitignore 에서 '{rel}' 관련 줄을 지운 뒤 다시 실행하세요.")
-        return 1
-
-    print_phase("대화 기록 동기화")
-    has_upstream = (
-        git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] == 0
-    )
-
-    # 1) 로컬 기록 먼저 커밋(미커밋이면 pull 이 dirty 로 막힘)
-    code, out = git_run(root, "add", "-A", "--", *paths)
-    if code != 0:
-        if "ignored" in out:
-            print_error(f"{rel} 이 .gitignore 로 제외되어 있어 push 되지 않습니다.")
-            print_info(f".gitignore 에서 '{rel}' 관련 줄을 지운 뒤 다시 실행하세요.")
-        else:
-            print_error(f"git add 실패: {out.splitlines()[0] if out else '알 수 없는 오류'}")
-        return 1
-    staged = git_run(root, "diff", "--cached", "--name-only", "--", *paths)[1]
-    if staged:
-        msg = f"llm: 대화 기록 동기화 (session={session})"
-        code, out = git_run(root, "commit", "-q", "-m", msg, "--", *paths)
-        if code != 0:
-            print_error(f"커밋 실패: {out.splitlines()[0] if out else '알 수 없는 오류'}")
-            return 1
-        print_ok(f"기록 커밋: {msg}")
-        for line in staged.splitlines()[:8]:
-            print_info(f"  {line}")
-    else:
-        print_info("커밋할 기록 변경이 없습니다.")
-
-    # 2) 원격은 ff-only 만 (갈라지면 안내)
-    if has_upstream:
-        status = history_receive_remote(root, reason="sync")
-        if status == "diverged":
-            print_warn("기록이 갈라져 push 를 건너뜁니다 — 로컬 커밋은 유지됩니다.")
-            explain_receive_status(status)
-            return 1
-        if status == "fail":
-            explain_receive_status(status)
-            return 1
-        if status == "dirty":
-            # 커밋 직후인데 dirty 면 다른 파일이 .llm 에 있음
-            explain_receive_status(status)
-            return 1
-    else:
-        print_warn("upstream(@{u})이 없어 pull/push 는 건너뜁니다 (기록만 커밋).")
-        return 0
-
-    # 3) push
-    code, out = git_run(root, "push")
-    if code != 0:
-        print_error("push 실패 — 인증·원격 상태를 확인하세요.")
-        for line in out.splitlines()[:6]:
-            print_info(f"  {line}")
-        return 1
-    print_ok("push 완료 — 다른 PC에서 git pull 하면 이 대화가 이어집니다.")
-    return 0
 
 
 def cmd_run(session: str, history_file: Path) -> int:
@@ -6079,7 +6003,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     folder_key = canonical_folder(root)
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    # 대화 기록은 로컬(.llm/ 또는 LLM_HISTORY=home) 전용이며 Git에 올리지 않는다.
+    # 대화는 로컬 전용. LLM_HISTORY_DIR 지정 시 그 경로, 미설정 시 <root>/.llm/.
     set_history_base(history_scope_dir(root))
     folders = load_bindings()
 
