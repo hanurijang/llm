@@ -94,35 +94,15 @@
   `refresh_todo_snapshot`와 README 「작업 계획(todo) 표시」
   섹션을 함께 갱신한다.
 
-## 대화 기록 위치와 동기화 (필수)
+## 대화 기록 위치와 보안 (필수)
 
-- 대화 기록은 **작업 폴더 안 `<작업폴더>/.llm/history_<세션>.json`**(기본)에
-  저장한다. `LLM_HISTORY=home`이면 예전처럼 `~/.local/share/llm/`에 저장한다
-  (이 폴백은 유지한다).
-- **기기 로컬 정보(`bindings.json`, `shell_allow_*.json`,
-  `shell_log_*.jsonl`, `rates.json`, `autopull.json`)는 항상 홈**에 둔다.
-  대화 기록 위치 변경과 무관하다.
-- 홈에만 있던 기록은 그 폴더에서 처음 실행할 때 `.llm/`으로 **한 번** 옮기고,
-  양쪽에 있으면 더 긴 쪽을 채택하며 홈 원본은 `*.migrated`로 남긴다.
-- **대화 기록 자동 커밋·push는 기본 꺼짐.** `LLM_AUTO_SYNC=1`일 때만 실행
-  종료 시 `auto_sync_history`가 기록·요약만 커밋 → **ff-only pull** → `push`.
-  평소에는 `llm sync`(=`--sync-history`)로 직접 올린다. rebase 하지 않는다.
-- **다른 PC에서 이어갈 때는 첫 질의 전에 원격 최신 기록을 먼저 받아온다**
-  (`maybe_auto_pull` → `history_receive_remote`: fetch 후 ff-only만).
-  시작 헤더의 **이어가기** 행으로 로컬 턴·미커밋·원격 ahead/behind를 보여 준다.
-  실패·갈라짐·dirty 면 경고만 하고 **로컬 기록으로 계속**.
-  끄는 방법은 `LLM_AUTO_PULL=0` 또는 `--no-pull`.
-- clone 직후 `.llm/history_*`가 하나이거나 폴더명과 같으면 **세션 자동 바인딩**.
-  여러 개면 `llm session adopt`.
-- 대화형: `llm`(인자 없음) / `llm -i` / `llm repl` / `llm agent` (같은 프로세스 다턴, 종료 시 sync 1회).
-- `.llm/`이 `.gitignore`에 있으면 에러로 안내하고 중단한다.
-- `LLM_HISTORY=home`으로 되돌리면 홈의 `*.migrated` 기록을 다시 꺼내 온다.
-- 이 동작을 바꿀 때는 `agent.py`의 `HISTORY_*`/`REPO_HISTORY_DIR_NAME`/
-  `history_scope_dir`/`set_history_base`/`find_history_file`/
-  `migrate_legacy_session`/`cmd_sync_history`/`auto_sync_enabled`/
-  `auto_sync_history`/`AUTO_SYNC_ENV`/`auto_pull_enabled`/`auto_pull_interval`/
-  `maybe_auto_pull`/`AUTO_PULL_*`와 README 「대화 기록 동기화」·
-  「파일/데이터 위치」·「설정과 환경변수」 표를 함께 갱신한다.
+- **대화 내용과 세션 요약은 로컬 PC 전용**이다. 기본 위치는 `<작업폴더>/.llm/history_<세션>.json` 및 `.llm/summaries/`이며, `LLM_HISTORY=home`이면 `~/.local/share/llm/`에 저장한다.
+- `.llm/rules.md`만 프로젝트 정책으로 Git에서 관리한다. 대화 기록과 요약은 `.gitignore`로 제외하며 **커밋하거나 GitHub로 Push하지 않는다**.
+- `llm sync`(`--sync-history`)는 오류를 안내하고 종료한다. `LLM_AUTO_SYNC=1` / `LLM_AUTO_PULL=1`을 지정해도 대화 기록의 자동 Push·Pull은 수행하지 않는다.
+- 세션 목록·조회·요약·참조·삭제·복원은 모두 이 PC의 로컬 파일과 바인딩만 사용한다. 다른 PC에서 이어가기, 원격 기록 수신, Git 기반 세션 동기화는 제공하지 않는다.
+- 기존 로컬 `.llm/` 기록은 그대로 사용한다. 기존 PC에서 이미 추적된 세션 파일이 있는 경우 `git pull` 전에 별도 로컬 폴더로 복사하여 보존한다.
+- 개발 코드와 검토된 문서만 GitHub에 Push한다. 개인 대화, 인증정보, 세션 요약, 실행 로그는 로컬에서만 보관한다.
+- 로컬 기록은 필요한 경우 Git과 무관하게 다른 디스크에 백업한다. 기록 위치·동기화 정책 변경 시 README와 관련 테스트를 함께 갱신한다.
 
 ## 셸 확인 기본값과 로그 (필수)
 
@@ -203,25 +183,11 @@
   꺼져 있으면 대화 기록은 로컬에만 있으므로 필요할 때 `llm sync`로 올린다.
 - 커밋 메시지는 무엇을 바꿨는지 한 줄로 요약한다.
 
-## 답변 마무리 — 동기화 상태 표시 (필수)
+## 답변 마무리 — 소스코드 동기화 상태 표시 (필수)
 
-- **답변(최종 응답)의 마지막 줄에 git 동기화 상태를 한 줄로 보여준다.** 답변을
-  쓰기 직전의 실제 상태를 확인해서 적는다: `git status --short`,
-  `git log --oneline origin/main..HEAD`(또는 `git rev-list --count`),
-  push한 커밋의 변경 파일(`git show --stat --oneline <해시>`).
-- 표시 내용: **push 여부**와 **push한 커밋(짧은 해시 + 제목)**, 그 커밋이 바꾼
-  **코드/파일 목록**(대화 기록 JSON만 바뀐 경우와 코드가 바뀐 경우를 구분),
-  그리고 대화 기록 동기화 상태(자동 동기화가 끝나면 올라가고
-  `LLM_AUTO_SYNC=0`이면 아직 로컬이라는 사실까지). 예:
-  - `🔁 동기화: 코드 push 완료 · aeff65e "fix(todo): …" · agent.py 85±, README.md 11±, .llm/rules.md 8± · 대화 기록은 로컬(llm sync 로 올림)`
-  - `🔁 동기화: 규칙 push 완료 · d721695 "rules: …" · .llm/rules.md +15 · 대화 기록은 LLM_AUTO_SYNC=1 이면 종료 시 자동 push`
-  - `🔁 동기화: 변경 없음(원격과 동일 · 코드 변경 없음, 대화 기록은 로컬)`
-  - `🔁 동기화: push 실패(<원인>) · 로컬 커밋만 있음(<해시> "…")`
-- 파일 목록은 **코드·문서·규칙 파일을 먼저** 적고, 대화 기록/요약(`.llm/`)은
-  "대화 기록 …" 항목으로 묶어 표현한다(길어지면 대표 파일만 적어도 된다).
-- push를 못 했거나 실패했으면 **숨기지 않고 이유와 함께** 적는다(우회 push 금지).
-- 이 규칙은 `agent.py`가 아니라 **답변 형식**에 관한 것이므로, 바꿀 때는
-  README 「응답 표시와 사고 과정」의 답변 골격 설명도 함께 갱신한다.
+- 최종 응답의 마지막 줄에는 실제 코드 변경의 git commit/push 여부를 정확히 적는다.
+- **대화 기록은 로컬 전용이며 push하지 않는다.** 대화 기록의 원격 동기화를 권하거나 수행하지 않는다.
+- push 실패나 미완료는 숨기지 않고 이유를 명시한다.
 
 ## 셀프테스트 잔여 파일 (삭제 상시 허용)
 
