@@ -1,3 +1,5 @@
+> 🔐 **로컬 대화 기록 정책 (2026-11)**: 모든 세션 대화와 요약은 현재 PC 내부에만 저장합니다. 기본 위치는 작업 폴더의 `.llm/history_<세션>.json`과 `.llm/summaries/`이며 `LLM_HISTORY=home` 설정 시 `~/.local/share/llm/`입니다. GitHub에는 소스코드와 검토된 프로젝트 규칙만 올립니다. `llm sync`(`--sync-history`) 및 자동 대화 Push/Pull(`LLM_AUTO_SYNC`, `LLM_AUTO_PULL`)은 안전을 위해 비활성화되어 있습니다. 기존 로컬 기록을 보존하려면 이전 PC에서 `git pull`하기 전에 `.llm/`을 별도 위치에 백업하세요. 다른 PC와 세션을 공유하거나 동기화하지 않습니다.
+
 # llm — DeepSeek CLI 에이전트
 
 터미널에서 DeepSeek API를 사용해 파일 읽기/편집, 검색, 셸 실행을 수행하는
@@ -444,7 +446,7 @@ llm shell log clear
 | `llm chat "질문"` | 도구 없이 채팅 | `--chat` |
 | `llm plan "질문"` | 읽기 전용 계획만 | `--plan` |
 | `llm repl` · `agent` · `i` | 대화형 시작 | `-i` / `--interactive` |
-| `llm sync` | 기록 커밋 → ff-only pull → push | `--sync-history` |
+| `llm sync` | 비활성화 — 대화 기록은 로컬 전용 | `--sync-history` |
 | `llm undo` | 직전 턴 편집 되돌리기 | `--undo` |
 | `llm balance` | 잔액 조회 | `--balance` |
 | `llm rules [show\|init]` | 규칙 보기·생성 | `--rules` / `--init-rules` |
@@ -1718,34 +1720,14 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
   명령은 묻지 않고, 그 밖의 명령은 `a`(기억)나 `all`(이번만)로 넘기면 됩니다.
   `sudo`는 `all`로도 넘기지 못 하고 매번 확인합니다(`--yes`만 예외).
 
-### 다른 PC에서 대화가 안 보임
+### 로컬 PC의 세션 관리
 
-- 기록은 작업 폴더의 `.llm/history_<세션>.json`에 있고, **원할 때
-  `llm sync`(또는 `LLM_AUTO_SYNC=1`)로 커밋·push**합니다. 다른 PC에서는 **같은 폴더**에서
-  실행만 하면 시작할 때 원격 최신 기록을 자동으로 받아옵니다(끄려면
-  `LLM_AUTO_PULL=0`/`--no-pull`). 지난 대화를 지금 올리려면 `llm sync`.
-- 자동 수신이 안 되면 `git status`로 확인하세요: 로컬 커밋이 갈라졌거나(fast-forward
-  불가), 커밋되지 않은 기록 변경이 있거나, 네트워크·인증 문제면 경고만 하고 로컬
-  기록으로 진행합니다. 이때는 `llm sync`(또는
-  `git pull --rebase --autostash`)로 정리한 뒤 다시 실행하세요.
-- `.llm/`이 `.gitignore`에 있으면 push가 안 됩니다. 그 줄을 지우세요
-  (`.llm/rules.md`는 저장소에, 기록은 다른 PC로 — 둘 다 `.llm/` 안입니다).
-- `LLM_HISTORY=home`으로 실행하면 기록이 홈에 남아 동기화되지 않습니다.
-  변수를 지우고 실행하면 `.llm/`으로 한 번 옮겨집니다.
-- 세션 이름이 다르면 다른 대화가 열립니다. `llm session ls`의 세션 목록에서
-  이름을 확인하거나 `llm -s <이름>`으로 지정하세요. 폴더에 기록이 있는데 매핑이
-  없으면 `llm session view` 등이 `-s`로 이어가라고 안내합니다.
-- `~/.local/share/llm/`(README의 설치 경로)에 **같은 이름**으로 clone하면 첫
-  대화 때 세션 이름이 폴더 이름(`llm`)으로 자동 생성되어 기록이 그대로
-  이어집니다. 폴더 이름이 다르면 `llm -s llm`을 쓰세요.
-
-### 기록 병합 충돌(`.llm/history_*.json`)
-
-- 두 PC가 같은 세션을 동시에 진행하면 `git pull`에서 충돌이 날 수 있습니다.
-  이때는 기록을 읽지 못한다는 경고가 뜨고 **빈 대화로 시작하지 않도록** 다시
-  확인하세요: `git status`로 충돌 파일을 확인하고, `.llm/summaries/<세션>/`의
-  백업 스냅샷을 참고해 한쪽을 고르거나 수동 병합한 뒤
-  `git add`/`git rebase --continue` 하고 `llm sync`로 다시 올리면 됩니다.
+- 대화 기록은 현재 PC에서만 보관하며 기본 위치는 작업 폴더의 `.llm/history_<세션>.json`, 요약은 `.llm/summaries/`입니다.
+- `llm session ls`로 세션 목록을 보고, `llm session view [이름]`으로 지난 대화를 확인할 수 있습니다. `session compact`는 로컬 요약을 생성합니다.
+- `LLM_HISTORY=home`을 선택하면 기록은 `~/.local/share/llm/`에 저장합니다. 기본 위치를 변경하기 전에는 기존 기록을 백업하거나 수동 이전해야 합니다.
+- `llm sync`는 대화 기록의 GitHub 유출을 방지하기 위해 사용하지 않습니다. `LLM_AUTO_SYNC=1`과 `LLM_AUTO_PULL=1`도 대화 기록 동기화를 활성화하지 못합니다.
+- `git pull`은 **소스코드 업데이트용으로만 사용**합니다. 이 저장소의 이전 버전에서 Git이 추적하던 대화 파일은 GitHub `main`에서 제거됐으므로, 예전 PC에서 업데이트하기 전 로컬 `.llm/` 디렉터리를 별도 저장 공간에 복사하세요.
+- 로컬 SSD 손상·PC 재설치에 대비한 별도 백업은 권장하지만 **다른 PC에서 세션을 이어가기 위한 Git 동기화는 제공하지 않습니다.**
 
 ---
 
