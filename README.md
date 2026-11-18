@@ -22,7 +22,7 @@ export PATH="$HOME/bin:$PATH"
 llm                             # 인자 없으면 대화형(여러 턴)으로 시작
 llm "이 프로젝트 구조 요약해줘"   # 대화형 시작 + 첫 턴 실행
 llm ask "이 함수 설명해줘"        # 1턴만 하고 종료
-llm sync                        # 대화 기록만 원격에
+llm session ls                  # 이 PC에 저장된 세션 목록 확인
 ```
 
 > 파이프·리다이렉션(`llm "질문" | tee log`)처럼 터미널이 아니면 대화형으로
@@ -39,10 +39,10 @@ llm sync                        # 대화 기록만 원격에
 | 편집마다 diff 확인 | `llm --confirm-edits "질문"` |
 | 직전 편집 되돌리기 | `llm undo` · REPL `/undo` |
 | 파일 첨부 | `llm "@src/app.py 의 버그 고쳐"` |
-| 대화 기록만 원격에 | `llm sync` |
+| 로컬 대화 기록 조회 | `llm session ls` · `llm session view` |
 | 세션 목록/연결 | `llm session ls` · `llm session adopt` |
 
-기본값: **실행=대화형(터미널)** · **셸=safe** · **자동 sync=끔** · 원격 수신=**ff-only**(rebase 없음) · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.
+기본값: **실행=대화형(터미널)** · **셸=safe** · **자동 sync=끔** · 대화 기록 원격 동기화=**비활성화** · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.
 
 - **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수
 - **채팅 모드**: 도구 없이 순수 대화
@@ -342,24 +342,12 @@ Linux/WSL이 아니어도 아래 두 가지만 맞추면 됩니다.
 링크도 해석합니다. `LLM_PYTHON` 을 바꾼 뒤 `llm --help` 가 사용법을 출력하면
 정상이고, 실행기를 못 찾거나 버전이 낮으면 그 사실을 알려 주는 오류가 나옵니다.
 
-### 새 PC에서 달라지는 점
+### 새 PC에서의 코드 설치와 세션
 
-- **홈의 보조 파일은 자동 생성**: `~/.local/share/llm/`(폴더 매핑·셸 허용
-  목록·환율 캐시)는 첫 실행 때 만들어집니다. 따로 만들 필요가 없습니다.
-- **대화 기록은 저장소와 함께 옵니다**: 기록이 `<작업폴더>/.llm/`에 있어
-  `git pull`(또는 clone)만 하면 이전 PC의 대화가 그대로 이어집니다.
-  다른 PC에서 작업했다면 **첫 질의 때 원격 최신 기록을 자동으로 받아온 뒤**
-  이어가고(`LLM_AUTO_PULL=0`/`--no-pull`이면 끔). 대화 기록 **자동
-  커밋·push는 기본 꺼짐**입니다. 켤 때만 `LLM_AUTO_SYNC=1`, 수동은
-  `llm sync`. clone 직후 `.llm/history_*` 가 하나이거나 폴더명과
-  같으면 **세션을 자동으로 연결**합니다.
-- **저장소 폴더 이름을 같게 유지**하세요(README의 설치 경로 그대로면 자동).
-  세션 이름이 폴더 이름에서 만들어지므로, 이름이 다르면 `llm -s <이름>`으로
-  지정하거나 `llm session view`가 알려주는 `-s` 안내를 따르면 됩니다.
-- **`bindings.json`은 복사하지 마세요.** 예전 PC의 절대 경로가 들어 있어
-  "다른 폴더에 바인딩됨" 경고가 납니다. `mv`로 폴더를 옮긴 경우에는 실행 시
-  이어받을 후보를 물어봅니다.
-- `.llm/rules.md`(세션 규칙)는 저장소에 들어 있어 clone하면 함께 옵니다.
+- GitHub의 Clone은 **소스코드와 규칙**만 가져옵니다. 개인 대화 기록은 GitHub에 없으며 새 PC로 자동 이전되지 않습니다.
+- 각 PC의 세션은 해당 PC 로컬에만 저장됩니다. 이 프로젝트는 다른 PC와 대화를 공유하거나 동기화하지 않습니다.
+- `~/.local/share/llm/`에는 로컬 세션 매핑과 설정이 저장됩니다. `.llm/rules.md`는 코드와 함께 가져옵니다.
+- 이미 사용 중인 PC라면 기존 `.llm/` 기록을 백업한 뒤 코드 업데이트를 진행하세요.
 
 ### 준비물 체크
 
@@ -497,8 +485,8 @@ llm shell log clear
 | `--init-rules` | 이 폴더에 `.llm/rules.md` 생성 (`llm rules init`) |
 | `--rules` | 이 폴더의 세션 규칙 보기 (`llm rules show`) |
 | `--summarize` | 현재 대화를 지금 요약·백업(강제 실행). `llm session compact` |
-| `--sync-history` | 기록만 커밋 → **ff-only** pull → push (`llm sync`). 자동 sync 기본 끔 |
-| `--no-pull` | 이번 실행은 원격의 최신 대화 기록을 자동으로 받아오지 않음 (`LLM_AUTO_PULL=0`과 동일) |
+| `--sync-history` | 로컬 기록 보호를 위해 비활성화됨 |
+| `--no-pull` | 호환성 옵션(대화 자동 Pull은 항상 비활성화됨) |
 | `--run` | 직전 응답의 bash/sh 코드 블록 추출 후 실행 (`llm session run`) |
 | `--view` | 세션 대화 내용 보기 (Markdown). `llm session view [이름]` |
 | `--clear` | 현재 세션 내용만 비우기 (`llm session clear`) |
@@ -627,60 +615,21 @@ llm undo
   폴더를 옮겨 온 흔적(고아 매핑)이 있으면 새 세션 대신 **이어받을지 먼저
   확인**합니다([폴더를 옮기거나 이름을 바꾼 경우](#폴더를-옮기거나-이름을-바꾼-경우-mv) 참고).
 
-### 대화 기록 동기화 (다른 PC에서 이어가기)
+### 대화 기록 — 로컬 저장 전용
 
-대화 기록이 작업 폴더 안 `.llm/`에 있으므로, **커밋·push만 하면 다른 PC에서
-`git pull`(또는 clone) 후 같은 세션으로 그대로 이어집니다.** 다른 PC에서 이미
-작업했다면 **첫 질의 때 원격의 최신 기록을 자동으로 먼저 받아온 뒤** 그 내용을
-읽어 맥락을 이어갑니다(수동 `git pull` 없이도 됩니다).
+대화와 세션 요약은 현재 PC의 `<작업폴더>/.llm/`에 저장합니다. `LLM_HISTORY=home` 설정 시 `~/.local/share/llm/`에 저장합니다. GitHub에 기록을 올리는 기능은 제공하지 않습니다.
 
 ```bash
-llm "이어서 작업 해줘"     # 대화형 시작 + 첫 턴 · 시작 때 원격 최신 기록 자동 수신 · sync는 기본 안 함
-llm ask "질문"            # 1턴만 하고 종료
-llm -i                     # 여러 턴을 이어가기(인자 없는 llm 과 같음) · 끝낼 때 sync(켜져 있으면)
-llm --no-pull "질문"       # 이번 실행은 자동 수신을 건너뜀
-llm sync                   # 기록을 지금 올리고 싶을 때 (커밋 → ff-only pull → push)
-LLM_AUTO_SYNC=1 llm "…"   # 이번부터 끝날 때 자동 커밋·push
+llm                         # 기존 로컬 세션 이어가기
+llm session ls              # 현재 PC의 세션 목록 조회
+llm session view            # 로컬 대화 기록 보기
+llm session compact         # 로컬 대화 요약과 백업
 ```
 
-- **자동 커밋·push는 기본 꺼짐.** `LLM_AUTO_SYNC=1`일 때만 실행 종료 시
-  기록·요약을 커밋하고 push 합니다(화면에 `▸ 대화 기록 동기화` 표시).
-- **질의 전·sync 공통 정책 = fast-forward only** (`history_receive_remote`).
-  rebase 하지 않으며, 갈라지면 안내만 하고 로컬로 계속합니다. 미커밋 `.llm`
-  변경이 있으면 수신을 건너뜁니다.
-- **질의 전 자동 수신**(`LLM_AUTO_PULL`, 기본 켜짐): 원격이 앞서면 ff-only로
-  받아 맥락을 잇습니다. 시작 헤더의 **이어가기** 행으로 로컬 턴 수·미커밋·원격
-  ahead/behind를 보여 줍니다.
-- **clone 직후**: `.llm/history_*`가 하나이거나 폴더명과 같으면 세션을
-  자동 바인딩합니다. 여러 개면 `llm session adopt` 또는 `llm -s <이름>`.
-- 끄려면 수신은 `LLM_AUTO_PULL=0`/`--no-pull`, 자동 업로드는 변수를 비우거나
-  `0`(기본이 이미 끔).
-- `LLM_HISTORY=home`(홈 저장)이거나 git 저장소가 아니거나 기록에 변경이 없으면
-  아무 것도 하지 않습니다. upstream(`@{u}`)이 없으면 커밋만 하고 push는
-  건너뜁니다.
-- `llm sync`(=`--sync-history`)는 **이 세션의 기록 파일**(`.llm/history_<세션>.json`)과
-  **요약 백업**(`.llm/summaries/<세션>/`)만 스테이징합니다. 소스 코드·규칙 파일
-  등 나머지 변경은 건드리지 않으므로 평소처럼 직접 커밋하세요.
-- 커밋 메시지는 `llm: 대화 기록 동기화 (session=<세션>)` 형식입니다.
-- 실행 시작 때 아직 못 올린 변경이 남아 있으면(이전 턴의 push 실패 등) 그
-  사실을 알려주고, 실행이 끝날 때 다시 자동 시도합니다.
-- 원격에 새 커밋이 있으면 **ff-only**로 먼저 받아옵니다(갈라지면 안내만).
-- `.llm/`이 `.gitignore`에 있으면 push가 되지 않으므로, 그 줄을 지우라는
-  안내와 함께 중단합니다.
-- 기본값이 세션 폴더 저장이므로, 예전처럼 홈(`~/.local/share/llm/`)에 두고
-  싶다면 `LLM_HISTORY=home`으로 실행하세요(그때는 `llm sync`대신 예전처럼
-  `history_*.json`을 직접 복사).
-- 홈에만 있던 기존 기록은 **그 폴더에서 처음 실행할 때 `.llm/`으로 한 번
-  옮겨집니다**(양쪽에 있으면 더 긴 쪽 채택, 홈 원본은 `*.migrated`로 개명).
-  `LLM_HISTORY=home`으로 되돌리면 그 `*.migrated`를 다시 꺼내 옵니다
-  (백업은 그대로 남음).
-- 새 PC에서 clone한 폴더에 아직 매핑이 없어도, `.llm/`에 기록이 있으면
-  `llm session view` 등이 `llm -s <이름>`으로 이어가라고 알려줍니다. 폴더 이름을
-  README의 설치 경로(`~/.local/share/llm`)와 같게 두면 세션 이름이 폴더
-  이름으로 자동 생성되어 별도 지정 없이 이어집니다.
-- 요약 백업(`.llm/summaries/`)도 함께 동기화됩니다. 기록이 요약으로 압축된
-  뒤에도 원본 대화가 다른 PC에 남습니다(용량이 커지면 `git rm -r --cached
-  .llm/summaries` 로 직접 정리해도 됩니다).
+- `llm sync`(`--sync-history`)는 보안상 비활성화되어 오류 안내 후 종료합니다.
+- `LLM_AUTO_SYNC=1`과 `LLM_AUTO_PULL=1`을 지정해도 개인 대화는 Git으로 전송하거나 수신하지 않습니다.
+- 홈에 있는 예전 기록은 작업 폴더의 `.llm/`으로 옮겨질 수 있습니다. 저장 위치를 바꾸기 전에 현재 PC의 기록을 백업하세요.
+- Git은 **소스코드·테스트·프로젝트 규칙** 용도로만 사용합니다. 세션 파일을 수동 `git add -f`로 강제 추가하지 마세요.
 
 ### 소유와 권한
 
@@ -1491,9 +1440,9 @@ $ llm shell log            # 또는 REPL 에서 /log  (최근 20건, llm shell l
 | `LLM_ENV_FILE` | (미설정) | 읽을 `.env` 경로 (가장 먼저) |
 | `LLM_PYTHON` | `python3` | `llm` 래퍼가 실행할 Python 실행기(3.10+). macOS 등에서 기본 `python3`가 3.9일 때 `LLM_PYTHON=python3.12` 처럼 지정 |
 | `LLM_HISTORY` | (미설정) | `home`이면 `~/.local/share/llm/`, 그 외 작업폴더 `.llm/` |
-| `LLM_AUTO_SYNC` | (꺼짐) | `1`/`true`/`yes`/`on` 이면 종료 시 자동 커밋·push |
-| `LLM_AUTO_PULL` | `1`(켜짐) | `0`이면 질의 전 원격 수신 끔 |
-| `LLM_AUTO_PULL_TTL` | `120` | 같은 폴더에서 원격을 다시 확인하기까지의 최소 간격(초) |
+| `LLM_AUTO_SYNC` | (꺼짐) | 보안상 항상 비활성화(설정해도 대화 기록 Push 안 함) |
+| `LLM_AUTO_PULL` | (비활성화) | 보안상 대화 기록 자동 Pull 없음 |
+| `LLM_AUTO_PULL_TTL` | `120` | 호환성 설정(대화 기록 자동 Pull 비활성화) |
 | `NO_COLOR` | (미설정) | 설정 시 색상 출력 비활성화 |
 | `LLM_CONFIRM_EDITS` | (꺼짐) | `1`이면 `--confirm-edits` (편집마다 diff 확인) |
 | `LLM_EDIT_REQUIRE_READ` | `1`(켜짐) | `0`이면 읽지 않은 파일 편집 허용(v0.6 동작) |
@@ -1524,8 +1473,8 @@ $ llm shell log            # 또는 REPL 에서 /log  (최근 20건, llm shell l
 |------|------|
 | `<저장소>/.env` | API 키 등 환경변수 (자동 로드, `.gitignore` 제외 대상) |
 | `/etc/env/.env` | API 키 등 환경변수 (자동 로드, 시스템 공용 폴백) |
-| `<작업폴더>/.llm/history_<세션>.json` | 세션별 대화 기록 (**기본**, 저장소에 커밋해 다른 PC와 동기화) |
-| `<작업폴더>/.llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 (기본, `llm sync` 커밋 대상) |
+| `<작업폴더>/.llm/history_<세션>.json` | 세션별 대화 기록 (**기본**, 현재 PC에만 저장·Git 제외) |
+| `<작업폴더>/.llm/summaries/<세션>/` | 요약본(`.md`)과 원본 스냅샷(`.json`) 백업 (기본, 현재 PC에만 저장·Git 제외) |
 | `~/.local/share/llm/history_<세션>.json` | 대화 기록 (예전 위치, `LLM_HISTORY=home`일 때만. 옮기면 `*.migrated`로 남음) |
 | `~/.local/share/llm/bindings.json` | 폴더 ↔ 세션 매핑 (기기 로컬, 경로 키 정규화, 사라진 폴더 항목은 매핑에서 무시하고 `mv` 이어받기 후보로만 사용) |
 | `~/.local/share/llm/summaries/<세션>/` | 요약 백업 (`LLM_HISTORY=home`일 때만) |
@@ -1745,8 +1694,7 @@ llm (bash)  →  agent.py (CLI·에이전트 루프·UI)  →  llmlib/ (분리 �
 7. 편집 후에는 `python3 -m py_compile agent.py llmlib/*.py`와 `python3 -m pytest -q tests`로 검증합니다.
 8. **코드 수정 전 `git pull --rebase --autostash`, 검증 통과 후 커밋·`git push`**
    를 수행합니다. 검증 실패·중단 시에는 되돌리고 push하지 않습니다.
-   **대화 기록 자동 커밋·push는 기본 꺼짐**입니다(`LLM_AUTO_SYNC=1`이면
-   켜지고, 수동은 `llm sync`). 절차 원본:
+   **대화 기록은 로컬 전용**이며 자동·수동 Git 동기화가 차단됩니다. 절차 원본:
    [`.llm/rules.md`](.llm/rules.md).
 
 세션 규칙 원본은 [`.llm/rules.md`](.llm/rules.md)에서 관리됩니다.
