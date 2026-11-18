@@ -47,15 +47,23 @@ class Phase1Defaults(unittest.TestCase):
         names = [t["function"]["name"] for t in llm.tool_schemas()]
         self.assertEqual(names, ["todo", "read", "edit", "find", "shell", "web_fetch", "task"])
 
-    def test_auto_sync_default_off(self) -> None:
-        with mock.patch.dict(os.environ, {}, clear=False):
-            os.environ.pop("LLM_AUTO_SYNC", None)
+    def test_conversation_git_sync_is_disabled(self) -> None:
+        """환경변수를 켜도 대화 기록이 원격 저장소로 전송되지 않는다."""
+        with mock.patch.dict(os.environ, {"LLM_AUTO_SYNC": "1", "LLM_AUTO_PULL": "1"}):
             self.assertFalse(llm.auto_sync_enabled())
-            os.environ["LLM_AUTO_SYNC"] = "1"
-            self.assertTrue(llm.auto_sync_enabled())
-            os.environ["LLM_AUTO_SYNC"] = "0"
-            self.assertFalse(llm.auto_sync_enabled())
-            os.environ.pop("LLM_AUTO_SYNC", None)
+            self.assertFalse(llm.auto_pull_enabled())
+            with mock.patch.object(llm, "git_run", side_effect=AssertionError("git must not run")):
+                self.assertEqual(llm.cmd_sync_history(Path("/tmp"), "test"), 1)
+                llm.auto_sync_history(Path("/tmp"), "test")
+                llm.maybe_auto_pull(Path("/tmp"))
+
+    def test_history_directory_remains_local(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            with mock.patch.object(llm, "HISTORY_DIR", Path(tmp) / "home"):
+                with mock.patch.dict(os.environ, {"LLM_HISTORY": ""}):
+                    self.assertEqual(llm.history_scope_dir(Path(tmp)), Path(tmp) / ".llm")
+                with mock.patch.dict(os.environ, {"LLM_HISTORY": "home"}):
+                    self.assertEqual(llm.history_scope_dir(Path(tmp)), Path(tmp) / "home")
 
     def test_ask_mode_default_safe(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=False):
