@@ -96,7 +96,8 @@
 
 ## 대화 기록 위치와 보안 (필수)
 
-- **대화 내용과 세션 요약은 로컬 PC 전용**이다. 기본 위치는 `<작업폴더>/.llm/history_<세션>.json` 및 `.llm/summaries/`이며, `LLM_HISTORY=home`이면 `~/.local/share/llm/`에 저장한다.
+- **대화 내용과 세션 요약은 로컬 PC 전용**이다. `llm/.env`의 `LLM_HISTORY_DIR`에 저장 경로를 설정한다. 빈 값이면 기본 위치 `<작업폴더>/.llm/history_<세션>.json` 및 `.llm/summaries/`를 사용한다. `LLM_HISTORY_DIR`이 비어 있고 `LLM_HISTORY=home`이면 예전처럼 `~/.local/share/llm/`에 저장한다.
+- `LLM_HISTORY_DIR`은 절대경로를 권장하며, 상대경로는 현재 작업 폴더 기준이다. 작업 폴더별 세션 이름을 구분하며 공유 로컬 경로에서 다른 프로젝트의 세션을 잘못 자동 연결하지 않는다. 저장 경로는 Git 저장소 바깥으로 지정한다.
 - `.llm/rules.md`만 프로젝트 정책으로 Git에서 관리한다. 대화 기록과 요약은 `.gitignore`로 제외하며 **커밋하거나 GitHub로 Push하지 않는다**.
 - `llm sync`(`--sync-history`)는 오류를 안내하고 종료한다. `LLM_AUTO_SYNC=1` / `LLM_AUTO_PULL=1`을 지정해도 대화 기록의 자동 Push·Pull은 수행하지 않는다.
 - 세션 목록·조회·요약·참조·삭제·복원은 모두 이 PC의 로컬 파일과 바인딩만 사용한다. 다른 PC에서 이어가기, 원격 기록 수신, Git 기반 세션 동기화는 제공하지 않는다.
