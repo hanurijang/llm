@@ -730,8 +730,8 @@ def api_key() -> str:
 def history_scope_dir(root: Path) -> Path:
     """대화 기록(history·summaries)을 둘 폴더를 정한다.
 
-    기본은 세션 폴더 안(`<작업폴더>/.llm`) — 프로젝트 저장소와 함께 push/pull 되어
-    다른 PC에서도 대화를 이어갈 수 있다. `LLM_HISTORY=home`이면 홈(예전 방식).
+    기본은 작업 폴더 안(`<작업폴더>/.llm`)이며 Git 추적에서 제외한다.
+    `LLM_HISTORY=home`이면 사용자 홈에 로컬 저장한다.
     """
     mode = os.environ.get(HISTORY_SCOPE_ENV, "").strip().lower()
     if mode in {HISTORY_SCOPE_HOME, "local"}:
@@ -4902,9 +4902,8 @@ def print_history_sync_hint(root: Path, history_file: Path) -> None:
 def auto_sync_enabled() -> bool:
     """실행 종료 시 기록 자동 동기화 여부(기본 꺼짐, `LLM_AUTO_SYNC=1`이면 켬)."""
     val = os.environ.get(AUTO_SYNC_ENV, "").strip().lower()
-    if not val:
-        return False
-    return val in {"1", "true", "yes", "on"}
+    # 보안 정책: 대화 기록은 로컬 전용이며 환경변수로도 자동 push 불가.
+    return False
 
 
 def auto_sync_history(root: Path, session: str) -> None:
@@ -4927,7 +4926,8 @@ def auto_sync_history(root: Path, session: str) -> None:
 def auto_pull_enabled() -> bool:
     """질의 전 원격 기록 자동 수신 여부(기본 켜짐, `LLM_AUTO_PULL=0`이면 끔)."""
     val = os.environ.get(AUTO_PULL_ENV, "").strip().lower()
-    return val not in {"0", "false", "no", "off"}
+    # 대화 기록은 원격에서 수신하지 않는다. Git 소스코드는 수동 관리.
+    return False
 
 
 def auto_pull_interval() -> int:
@@ -5053,7 +5053,10 @@ def maybe_auto_pull(root: Path, *, enabled: bool = True) -> None:
 
 
 def cmd_sync_history(root: Path, session: str) -> int:
-    """대화 기록(.llm/)만 커밋하고 ff-only pull 후 push 한다(rebase 없음)."""
+    """개인 대화 기록이 GitHub에 올라가는 것을 방지한다."""
+    print_error("대화 기록은 로컬 전용입니다. llm sync/--sync-history는 비활성화되었습니다.")
+    print_info("코드 변경만 일반 git 명령으로 별도 커밋·push 하세요.")
+    return 1
     if not history_scope_is_repo():
         print_error(
             f"{HISTORY_SCOPE_ENV}={HISTORY_SCOPE_HOME} 라서 기록이 홈에 있습니다"
@@ -6076,7 +6079,7 @@ def main(argv: list[str] | None = None) -> int:
         return 1
     folder_key = canonical_folder(root)
     HISTORY_DIR.mkdir(parents=True, exist_ok=True)
-    # 대화 기록을 둘 폴더를 확정한다(기본: 이 폴더 안 .llm/ — push 하면 다른 PC에서 이어짐).
+    # 대화 기록은 로컬(.llm/ 또는 LLM_HISTORY=home) 전용이며 Git에 올리지 않는다.
     set_history_base(history_scope_dir(root))
     folders = load_bindings()
 
@@ -6282,7 +6285,7 @@ def main(argv: list[str] | None = None) -> int:
         no_balance=args.no_balance,
         auto_pull=not args.no_pull,
     )
-    # 실행이 끝나면 대화 기록을 자동으로 커밋·push 한다(다음 턴으로 미루지 않는다).
+    # 자동 기록 push는 보안 정책에 따라 항상 비활성화되어 있다.
     auto_sync_history(root, session)
     return rc
 
