@@ -3558,17 +3558,21 @@ def tool_shell(
             f"종료: shell(bg_id=\"{job.id}\", kill=true)"
         )
     try:
-        proc = subprocess.run(
-            command,
-            shell=True,
-            cwd=str(root),
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-            env=env,
-            executable="/bin/bash",
-            stdin=subprocess.DEVNULL,
-        )
+        if os.name == "nt":
+            bash = shutil.which("bash")
+            if not bash:
+                return "ERROR: Windows 셸 명령 실행에는 Git Bash가 필요합니다 (Git for Windows 설치)."
+            proc = subprocess.run(
+                [bash, "-lc", command], shell=False, cwd=str(root),
+                capture_output=True, text=True, timeout=timeout,
+                env=env, stdin=subprocess.DEVNULL,
+            )
+        else:
+            proc = subprocess.run(
+                command, shell=True, cwd=str(root),
+                capture_output=True, text=True, timeout=timeout,
+                env=env, executable="/bin/bash", stdin=subprocess.DEVNULL,
+            )
     except subprocess.TimeoutExpired:
         return (
             f"ERROR: {timeout}s 시간 초과 (최대 {SHELL_MAX_TIMEOUT}s. 서버·watch 처럼 "
