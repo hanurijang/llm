@@ -108,6 +108,31 @@ class Phase1Defaults(unittest.TestCase):
             self.assertFalse(aa)
             self.assertEqual(mode, "outside")
 
+    def test_repl_default_approvals_are_simple(self) -> None:
+        args = SimpleNamespace(confirm_all=False, yes=False, trust=False,
+                               allow_all=False, safe=False, auto_workspace=False)
+        with mock.patch.dict(os.environ, {
+            "LLM_SHELL_TRUST": "0", "LLM_ALLOW_ALL": "0", "LLM_AUTO_WORKSPACE": "0"
+        }):
+            auto_ws, allow_all, mode, source, default = llm.repl_ask_mode(args)
+        self.assertTrue(auto_ws)
+        self.assertFalse(allow_all)
+        self.assertEqual(mode, "outside")
+        self.assertTrue(default)
+
+    def test_compaction_cooldown_and_emergency(self) -> None:
+        msgs = [{"role": "user", "content": "old " * 6000}]
+        msgs += [{"role": "assistant", "content": "ok"} for _ in range(30)]
+        stamped = llm.apply_summary(msgs, "이전 대화 핵심")
+        last_tokens = llm.LAST_PROMPT_TOKENS
+        self.addCleanup(setattr, llm, "LAST_PROMPT_TOKENS", last_tokens)
+        llm.LAST_PROMPT_TOKENS = llm.compact_token_limit()
+        self.assertFalse(llm.should_summarize(stamped))
+        # 사용량 보고가 한도를 넘었다고 해서, 압축할 맥락이 적은데
+        # 같은 요약을 연속 호출하지 않는다.
+        llm.LAST_PROMPT_TOKENS = int(llm.compact_token_limit() * 1.3)
+        self.assertFalse(llm.should_summarize(stamped))
+
     def test_ask_mode_trust(self) -> None:
         args = SimpleNamespace(
             confirm_all=False,
