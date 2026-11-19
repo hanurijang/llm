@@ -35,6 +35,8 @@ class Expand(unittest.TestCase):
         self.assertEqual(self.expand(["sync"]), ["--sync-history"])
         self.assertEqual(self.expand(["undo"]), ["--undo"])
         self.assertEqual(self.expand(["balance"]), ["--balance"])
+        self.assertEqual(self.expand(["bal"]), ["--balance"])
+        self.assertEqual(self.expand(["help"]), ["--help"])
         self.assertEqual(self.expand(["rules"]), ["--rules"])
         self.assertEqual(self.expand(["rules", "show"]), ["--rules"])
         self.assertEqual(self.expand(["rules", "init"]), ["--init-rules"])
