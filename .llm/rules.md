@@ -91,34 +91,14 @@
 - 개발 코드와 검토된 문서만 GitHub에 Push한다. 개인 대화, 인증정보, 세션 요약, 실행 로그는 로컬에서만 보관한다.
 - 로컬 기록은 필요한 경우 Git과 무관하게 다른 디스크에 백업한다. 기록 위치·동기화 정책 변경 시 README와 관련 테스트를 함께 갱신한다.
 
-## 셸 확인 기본값과 로그 (필수)
+## REPL 맥락·API 비용·셸 승인 (필수)
 
-- **대화형(`llm`/`llm -i`/`llm repl`/`llm agent`)의 셸 확인 기본은 `readonly`(읽기 전용 자동)** 이다
-  (`REPL_DEFAULT_ASK_MODE`, `repl_ask_mode`). 읽기 전용 명령은 조용히 실행하고
-  그 밖은 확인한다. 1턴 실행(`llm ask`)은 기존대로 `safe`(작업 폴더 안 자동)이며,
-  `--safe`/`--trust`/`--yes`/`--confirm-all`이나 `LLM_*` 환경변수를 주면 그쪽을
-  우선한다(repl 기본을 덮지 않는다).
-- **권한 상승(`sudo`/`su`/`doas`/`pkexec`) 조각은 모드·허용 목록·`a`/`all`·
-  `--trust`와 무관하게 매번 확인**한다(`ask_shell_privilege`, `[y/N]`). 프롬프트에
-  목적(`privilege_purpose`)·실제 실행 명령(`privilege_target`)을 보여 주고,
-  거부하면 실행하지 않는다.
-- repl 시작 시 **설정 상태를 시작 헤더의 행으로** 표시한다(확인 모드 · 완화 옵션 ·
-  로그 파일 경로/기록 여부 · 조회법). 헤더는 `print_banner`(제목 줄 + `header_line`
-  행: 세션·폴더·셸·설정) + `print_continue_status`(이어가기 행) + `cmd_repl` 의
-  `완화`/`로그`/`도움말` 행으로 구성하고, 라벨 폭은 `HEADER_LABEL_WIDTH` 로
-  맞춘다(`display_width`/`pad` 사용). 행 구성·문구를 바꾸면 README「시작 헤더」
-  예시도 함께 고친다.
-- 확인 프롬프트에서 허용해 **묻지 않고 실행된 셸 명령은 세션별 로그에 남긴다**
-  (`shelllog.ShellLog` → `~/.local/share/llm/shell_log_<세션>.jsonl`, 종류
-  `auto/a/all/y/n`, 최근 500건). 로그 쓰기 실패는 셸 실행을 막지 않는다.
-- 조회: `llm shell log [N]`(`--shell-log`), REPL `/log [N]`;
-  비우기: `llm shell log clear`(`--shell-log-clear`)/`/log clear`.
-  `LLM_SHELL_LOG=0`이면 새로 남기지 않는다.
-- 이 동작을 바꿀 때는 `agent.py`의 `shell_log_file`/`shell_log_enabled`/
-  `shell_log`/`cmd_shell_log`/`REPL_DEFAULT_ASK_MODE`/`repl_ask_mode`/
-  `ask_shell_privilege`, `llmlib/shell_policy.py`(권한 상승 판별·목적 요약),
-  `llmlib/shelllog.py`와 README 「셸 실행과 안전장치」(「REPL 기본 확인 모드와
-  셸 로그」)·「설정과 환경변수」·「파일/데이터 위치」를 함께 갱신한다.
+- REPL 기본 셸 정책은 `safe`(`outside`)이며 작업 폴더의 안전한 명령은 자동 실행한다. 관리자 권한 상승, 설치, 위험하거나 영향 범위가 큰 명령은 사용자에게 확인한다. `--trust`, `--yes` 등 기존 고급 옵션은 유지하되 기본 사용법에서 강조하지 않는다.
+- `sudo`/`su`/`doas`/`pkexec` 같은 권한 상승은 `--yes`를 명시하지 않는 한 매번 개별 확인하며 자동 허용 목록이나 전체 허용으로 건너뛰지 않는다. 비밀값 노출 가능성이 있는 명령은 별도 보호한다.
+- 권한 허용·거부 기록은 PC의 `~/.local/share/llm/shell_log_<세션>.jsonl`에만 남긴다. 반복 확인을 피하기 위해 기존 세션별 허용 목록을 유지한다.
+- 맥락 관리에서는 `clear_old_tool_results`로 오래된 도구 결과를 먼저 줄인 뒤 `maybe_summarize`를 호출한다. 최근 메시지·도구 호출/결과 결합 상태를 보존하고, 요약 직후 불필요한 재요약을 금지한다. 극단적인 토큰 초과는 예외로 하되 실제 줄일 맥락이 충분해야 한다.
+- 요약은 DeepSeek API 비용을 발생시키므로 요청마다 반복하지 않는다. 요약·원본 스냅샷은 로컬 저장만 허용하고, 요약에 따른 비용 절감 수치는 실제 토큰 사용량으로 확인한다.
+- 관련 코드 변경 시 `agent.py`, `llmlib/conversation.py`, 관련 테스트 및 README를 함께 점검한다.
 
 ## README 갱신 (필수)
 
