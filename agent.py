@@ -4067,45 +4067,21 @@ def header_line(label: str, value: str) -> str:
 
 
 def print_banner(
-    session: str,
-    root: Path,
-    chat_only: bool,
-    ask_mode: str = "outside",
-    ask_source: str = "",
-    repl: bool = False,
+    session: str, root: Path, chat_only: bool, ask_mode: str = "outside",
+    ask_source: str = "", repl: bool = False,
 ) -> None:
-    """시작 헤더: 제목 줄 + 라벨 정렬 행(세션·폴더·셸·설정).
-
-    한 줄에 몰아 찍던 정보를 행 단위로 구조화해, 대화형 진입 화면에서
-    세션·폴더·확인 모드·규칙/동기화 상태가 눈에 바로 들어오게 한다.
-    """
-    mode = "대화형" if repl else ("채팅" if chat_only else "에이전트")
-    mode_color = C.magenta if chat_only else C.cyan
-    has_rules = bool(load_session_rules(root))
-    rules = f"{C.green}on{C.reset}" if has_rules else f"{C.dim}off{C.reset}"
-    sync_on = auto_sync_enabled() and history_scope_is_repo()
-    sync = f"{C.green}on{C.reset}" if sync_on else f"{C.dim}off{C.reset}"
+    """핵심 정보만 보이는 간결한 TTY 시작 화면."""
+    mode = "CHAT" if chat_only else ("PLAN" if RUN.plan_mode else "AGENT")
     print()
-    print(f"{C.bold}{C.cyan}{rule('─', f'✦ llm v{VERSION} · {mode}')}{C.reset}")
-    print(header_line("세션", f"{mode_color}{C.bold}{session}{C.reset}"))
-    print(header_line("폴더", short_home(root)))
-    if not chat_only:
-        label = SHELL_ASK_LABELS.get(ask_mode, ask_mode)
-        if repl and ask_mode == REPL_DEFAULT_ASK_MODE:
-            label += (
-                f" {C.dim}(repl 기본) — 읽기 전용은 조용히 실행, 그 밖은 확인{C.reset}"
-            )
-        print(header_line("셸", label))
-    tail = [f"rules {rules}", f"sync {sync}"]
-    if not chat_only and RUN.confirm_edits:
-        tail.append(f"편집={C.yellow}확인{C.reset}")
-    if not chat_only and RUN.plan_mode:
-        tail.append(f"{C.yellow}{C.bold}PLAN{C.reset}")
-    print(header_line("설정", " · ".join(tail)))
-    if ask_source:
-        info = SHELL_ASK_SOURCES.get(ask_source)
-        if info:
-            print_info(info)
+    print(f"{C.bold}{C.cyan}✦ DeepSeek CLI  v{VERSION}{C.reset}")
+    print(f"  Project  {root.name}")
+    print(f"  Session  {session}")
+    print(f"  Mode     {mode}")
+    print(f"  History  {short_home(HISTORY_BASE)}  {C.dim}(local only){C.reset}")
+    if repl:
+        print(f"  {C.dim}/plan 계획 · /chat 대화 · /prompt 지침 · /help 도움말{C.reset}")
+    print()
+
 
 
 def print_phase(label: str) -> None:
@@ -4114,59 +4090,13 @@ def print_phase(label: str) -> None:
 
 
 def print_continue_status(root: Path, session: str, history_file: Path) -> None:
-    """이어가기 상태를 한 줄로 보여 준다(로컬/원격/막힘)."""
+    """원격 Git 상태 대신 로컬 대화 턴만 보여 준다."""
     turns = 0
     if history_file.is_file():
-        try:
-            msgs = load_history(history_file)
-            turns = sum(1 for m in msgs if m.get("role") == "user")
-        except OSError:
-            turns = 0
-    parts = [f"로컬 {turns}턴"]
-    if not history_scope_is_repo():
-        parts.append("기록=홈(동기화 안 함)")
-        print(header_line("이어가기", " · ".join(parts)))
-        return
-    if not (root / ".git").exists() and git_run(root, "rev-parse", "--git-dir")[0] != 0:
-        parts.append("git 없음")
-        print(header_line("이어가기", " · ".join(parts)))
-        return
-    dirty = False
-    rel = ""
-    try:
-        rel = os.path.relpath(history_file, root)
-    except ValueError:
-        rel = ""
-    if rel and not rel.startswith(".."):
-        code, out = git_run(
-            root, "status", "--porcelain", "--untracked-files=all", "--", rel
-        )
-        dirty = code == 0 and bool(out)
-    if dirty:
-        parts.append(f"{C.yellow}로컬 기록 미커밋{C.reset}")
-        if auto_sync_enabled():
-            parts.append("끝나면 자동 sync")
-        else:
-            parts.append("필요 시 llm sync")
-    ahead = behind = 0
-    if git_run(root, "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{u}")[0] == 0:
-        code, out = git_run(root, "rev-list", "--count", "HEAD..@{u}")
-        if code == 0 and out.isdigit():
-            behind = int(out)
-        code, out = git_run(root, "rev-list", "--count", "@{u}..HEAD")
-        if code == 0 and out.isdigit():
-            ahead = int(out)
-        if behind and dirty:
-            parts.append(f"{C.yellow}원격 +{behind} · 먼저 sync 권장{C.reset}")
-        elif behind:
-            parts.append(f"원격 +{behind} (곧 받아옴)")
-        elif ahead:
-            parts.append(f"로컬 +{ahead} (미 push)")
-        else:
-            parts.append("원격과 같음")
-    else:
-        parts.append("upstream 없음")
-    print(header_line("이어가기", " · ".join(parts)))
+        msgs = load_history(history_file)
+        turns = sum(1 for item in msgs if item.get("role") == "user")
+    print(f"  {C.dim}Local history  {turns} turns{C.reset}")
+
 
 
 def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
@@ -5708,22 +5638,17 @@ def cmd_undo(session: str, history_file: Path, assume_yes: bool = False) -> int:
 
 
 REPL_COMMANDS = {
-    "/help": "명령 목록",
-    "/exit": "종료 (빈 줄·Ctrl+D 도 종료)",
-    "/clear": "대화 비우기 (이전 대화는 summaries/ 에 백업)",
-    "/compact": "지금 대화 요약(압축)",
-    "/model": "모델 보기/바꾸기  예) /model deepseek-reasoner",
-    "/cost": "이번 대화형 세션의 토큰 사용량·소요 금액",
-    "/balance": "현재 DeepSeek 잔액 (llm balance)",
-    "/undo": "직전 턴의 파일 편집 되돌리기",
-    "/plan": "plan 모드 켜기/끄기 (읽기 전용 조사 + 계획만)",
-    "/rules": "세션 규칙·프로젝트 지침 보기",
-    "/bg": "백그라운드 셸 작업 목록",
-    "/log": "셸 허용/실행 로그 (llm shell log [N|clear])",
-    "/sync": "대화 기록 올리기",
-    "/chat": "채팅 모드(도구 없음)",
     "/agent": "에이전트 모드",
+    "/chat": "일반 대화 모드",
+    "/plan": "계획 모드 전환 (읽기 전용)",
+    "/undo": "직전 파일 편집 복원",
+    "/bal": "현재 DeepSeek 잔액",
+    "/prompt": "시스템·프로젝트·세션 프롬프트 관리",
+    "/help": "내부 명령어 안내",
+    "/exit": "대화 종료",
 }
+
+
 
 
 def ansi_prompt(text: str) -> str:
@@ -5797,32 +5722,8 @@ def cmd_repl(
         session, root, args.chat, ask_mode=ask_mode, ask_source=ask_source, repl=True
     )
     print_continue_status(root, session, history_file)
-    if not args.chat and repl_default:
-        print(
-            header_line(
-                "완화",
-                f"--safe / --trust / --yes {C.dim}(셸 확인 완화){C.reset}"
-                f" · sudo 등 권한 상승은 목적 설명 후 매번 확인",
-            )
-        )
-        print(
-            header_line(
-                "로그",
-                f"{C.bold}{short_home(shell_log_file(session))}{C.reset} "
-                f"{C.dim}({shell_log_enabled() and '기록 켬' or 'LLM_SHELL_LOG=0 으로 끔'}"
-                f" · 조회 /log){C.reset}",
-            )
-        )
-    print(
-        header_line(
-            "도움말",
-            r"/help 명령 · 빈 줄·/exit 종료 · @파일 첨부 · 줄 끝 \ 이어쓰기"
-            ' · 1턴만 llm ask "질문"',
-        )
-    )
+    print(f"  {C.dim}/agent · /chat · /plan · /undo · /bal · /prompt · /help · /exit{C.reset}")
     print()
-    if not args.no_pull:
-        maybe_auto_pull(root, enabled=True)
     setup_readline()
 
     chat_only = bool(args.chat)
@@ -5839,7 +5740,8 @@ def cmd_repl(
         else:
             try:
                 mode_tag = "chat" if chat_only else ("plan" if RUN.plan_mode else "agent")
-                line = read_repl_input(f"{C.cyan}llm:{mode_tag}>{C.reset} ").strip()
+                color = C.yellow if mode_tag == "plan" else (C.magenta if mode_tag == "chat" else C.green)
+                line = read_repl_input(f"{color}{mode_tag} ❯{C.reset} ").strip()
                 interrupted = False
             except KeyboardInterrupt:
                 eprint()
@@ -5862,17 +5764,20 @@ def cmd_repl(
             if cmd == "/help":
                 for name, desc in REPL_COMMANDS.items():
                     print(f"  {C.cyan}{pad(name, 10)}{C.reset} {desc}")
-            elif cmd == "/sync":
-                cmd_sync_history(root, session)
+            elif cmd == "/prompt":
+                prompt_manager(root, session)
             elif cmd == "/chat":
                 chat_only = True
+                RUN.plan_mode = False
                 print_ok("채팅 모드")
             elif cmd == "/agent":
                 chat_only = False
+                RUN.plan_mode = False
                 print_ok("에이전트 모드")
             elif cmd == "/plan":
+                chat_only = False
                 RUN.plan_mode = not RUN.plan_mode
-                print_ok("plan 모드 켬 — 읽기 전용 조사 후 계획만 제시합니다" if RUN.plan_mode else "plan 모드 끔 — 계획을 실행할 수 있습니다")
+                print_ok("Plan 모드 — 읽기 전용" if RUN.plan_mode else "Agent 모드")
             elif cmd == "/model":
                 if rest:
                     model = rest
@@ -5884,7 +5789,7 @@ def cmd_repl(
                 print_info(lines[0])
                 for extra in session_cost_lines(no_balance=args.no_balance):
                     print(f"  {C.dim}{extra}{C.reset}")
-            elif cmd == "/balance":
+            elif cmd in {"/bal", "/balance"}:
                 if args.no_balance:
                     print_warn("잔액 조회가 꺼져 있습니다(--no-balance). 잔액을 보려면 빼고 실행하세요.")
                 else:
