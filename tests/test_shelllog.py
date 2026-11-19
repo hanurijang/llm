@@ -150,8 +150,8 @@ class ReplAskMode(unittest.TestCase):
         auto_workspace, allow_all, mode, source, default = llm.repl_ask_mode(ns())
         self.assertEqual(mode, llm.REPL_DEFAULT_ASK_MODE)
         self.assertEqual(mode, "outside")
-        # 읽기 전용은 조용히, 그 밖은 확인: 폴더 안 자동·전부 허용·trust 모두 아님.
-        self.assertFalse(auto_workspace)
+        # 작업 폴더 내 안전한 명령은 자동, 위험한 작업은 확인한다.
+        self.assertTrue(auto_workspace)
         self.assertFalse(allow_all)
         self.assertEqual(source, "")
         self.assertTrue(default)
