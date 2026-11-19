@@ -98,8 +98,10 @@ def expand(argv: list[str]) -> tuple[list[str], str | None]:
         return ["--undo", *rest], None
     if head == "plan":
         return ["--plan", *rest], None
-    if head == "balance":
+    if head in {"bal", "balance"}:
         return ["--balance", *rest], None
+    if head == "help":
+        return ["--help", *rest], None
     if head == "rules":
         return _rules(rest)
     if head in {"shell", "sh"}:
