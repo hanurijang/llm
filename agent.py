@@ -5959,26 +5959,12 @@ def cmd_repl(
 def parse_args(argv: list[str]) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         prog="llm",
-        add_help=True,
+        add_help=False,
         description="DeepSeek CLI 에이전트",
-        epilog=(
-            "서브커맨드:\n"
-            '  ask|once "질문"           1턴만 실행(대화형으로 가지 않음)\n'
-            '  chat "질문" / plan "질문"  1턴(도구 없이 / 계획만)\n'
-            "  repl|agent|-i             대화형(여러 턴)\n"
-            "  undo                      직전 편집 되돌리기\n"
-            "  sync                      대화 기록 동기화\n"
-            "  balance                   API 잔액 보기\n"
-            "  rules [show|init]         세션 규칙 보기·생성\n"
-            "  shell log [N|clear]       셸 허용/실행 로그\n"
-            "  shell allow [clear]       셸 자동 허용 목록\n"
-            "  session ls|adopt|view|clear|delete|compact|run|ref [이름]\n"
-            "\n"
-            "인자 없이 실행하면 터미널에서는 대화형(REPL)으로 시작합니다"
-            '(llm "질문" 은 대화형 첫 턴). 파이프·리다이렉션에서는 1턴으로 끝납니다.\n'
-        ),
+        epilog='llm · llm "질문" · llm bal · llm session · llm help',
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
+    parser.add_argument("--help", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("-s", "--session", help="세션 이름 (이 폴더에 매핑, 기존 매핑은 갈아탐)")
     parser.add_argument(
         "--ref",
@@ -6111,6 +6097,9 @@ def main(argv: list[str] | None = None) -> int:
     global RATES_OFFLINE
     RATES_OFFLINE = bool(args.no_rates)
 
+    if args.help:
+        print_cli_help()
+        return 0
     if args.balance:
         return cmd_balance()
 
@@ -6133,8 +6122,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_sync_history(root, folders.get(folder_key) or root.name)
 
     if args.list_sessions:
-        list_sessions(None, folders, root)
-        return 0
+        return session_manager(root)
 
     if args.init_rules:
         rc = cmd_init_rules(root)
@@ -6158,11 +6146,10 @@ def main(argv: list[str] | None = None) -> int:
     read_only = bool(args.view or args.allow_list or args.shell_log is not None)
     # 인자 없이(또는 질문만 주고) 실행했을 때의 기본 형태: 터미널이면 대화형(REPL).
     # 파이프·리다이렉션은 1턴, --once(`llm ask`)나 `llm chat`/`llm plan` 은 1턴이다.
+    # 인자가 없으면 터미널에서 REPL, 인자 질문이 있으면 언제나 한 번 실행.
     interactive_default = (
-        not inspect_only
-        and not args.interactive
-        and not (args.chat or args.plan)
-        and cliargs.wants_repl(args.once, sys.stdin.isatty(), sys.stdout.isatty())
+        not inspect_only and not args.interactive and not (args.chat or args.plan)
+        and not prompt and cliargs.wants_repl(args.once, sys.stdin.isatty(), sys.stdout.isatty())
     )
 
     owned = folders.get(folder_key)  # 이 폴더에 묶인 세션
@@ -6249,7 +6236,7 @@ def main(argv: list[str] | None = None) -> int:
         return cmd_undo(session, history_file, assume_yes=args.yes)
 
     if args.interactive or interactive_default:
-        return cmd_repl(session, history_file, root, args, first_prompt=prompt or None)
+        return cmd_repl(session, history_file, root, args)
 
     if args.view:
         return cmd_view(session, history_file)
@@ -6300,7 +6287,7 @@ def main(argv: list[str] | None = None) -> int:
             return 0
 
     if not prompt:
-        list_sessions(session, folders, root)
+        print_cli_help()
         return 0
 
     # 셸 확인 범위: 명시 옵션이 환경변수보다 우선한다.
