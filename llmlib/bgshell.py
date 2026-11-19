@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import atexit
 import os
+import shutil
 import signal
 import subprocess
 import tempfile
@@ -42,17 +43,22 @@ class BgManager:
         log = self.dir / f"{job_id}.log"
         handle = open(log, "wb")
         try:
-            proc = subprocess.Popen(
-                command,
-                shell=True,
-                cwd=str(cwd),
-                env=env,
-                stdout=handle,
-                stderr=subprocess.STDOUT,
-                stdin=subprocess.DEVNULL,
-                executable="/bin/bash",
-                start_new_session=True,  # Ctrl+C 가 백그라운드 작업까지 죽이지 않게
-            )
+            if os.name == "nt":
+                bash = shutil.which("bash")
+                if not bash:
+                    raise OSError("Windows 백그라운드 셸 실행에는 Git Bash가 필요합니다.")
+                proc = subprocess.Popen(
+                    [bash, "-lc", command], shell=False, cwd=str(cwd),
+                    env=env, stdout=handle, stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL, creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+                )
+            else:
+                proc = subprocess.Popen(
+                    command, shell=True, cwd=str(cwd), env=env,
+                    stdout=handle, stderr=subprocess.STDOUT,
+                    stdin=subprocess.DEVNULL, executable="/bin/bash",
+                    start_new_session=True,
+                )
         finally:
             handle.close()
         job = BgJob(job_id, command, proc, log)
@@ -92,13 +98,19 @@ class BgManager:
         if job.proc.poll() is not None:
             return
         try:
-            os.killpg(job.proc.pid, signal.SIGTERM)
+            if os.name == "nt":
+                job.proc.terminate()
+            else:
+                os.killpg(job.proc.pid, signal.SIGTERM)
             job.proc.wait(timeout=3)
         except (ProcessLookupError, PermissionError):
             pass
         except subprocess.TimeoutExpired:
             try:
-                os.killpg(job.proc.pid, signal.SIGKILL)
+                if os.name == "nt":
+                    job.proc.kill()
+                else:
+                    os.killpg(job.proc.pid, signal.SIGKILL)
             except (ProcessLookupError, PermissionError):
                 pass
 
