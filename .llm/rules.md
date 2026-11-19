@@ -16,29 +16,15 @@
 - **표준 라이브러리만 사용**. 외부 의존성 추가 금지.
 - Python 3.10+ 문법 사용.
 
-## CLI 표면 (필수)
+## CLI 표면·대화 UI (필수)
 
-- **인자 없는 `llm`(TTY)과 `llm -i`·`llm repl`·`llm agent`는 모두 대화형(REPL)** 이다
-  (계산은 `wants_repl(once, stdin_tty, stdout_tty)`; 파이프·리다이렉션은 1턴).
-  `llm "질문"`은 대화형 **첫 턴**, 1턴 실행은 `llm ask "질문"`(= `--once`).
-  `cmd_agent`는 에이전트 루프 하나를 돌리고 `cmd_repl`이 그걸 반복한다 — 두 이름을
-  마로게 두지 않는다.
-- **주제별 서브커맨드**는 **첫 번째 인자**일 때만 펴진다: `ask|once`·`chat`·
-  `plan`·`repl|agent|i`·`sync`·`undo`·`balance`·`rules show|init`·
-  `shell log [N|clear]`·`shell allow [clear]`·
-  `session ls|adopt|view|clear|delete|compact|run|ref [이름]`.
-  변환은 순수 함수 `llmlib/cliargs.expand(argv)→(argv, err)` 하나만 쓰고
-  (`agent.py`의 `expand_cli_argv`가 얇은 중계), `agent.py`의 `main`/`argparse`는
-  펴진 플래그만 본다. 잘못된 사용법은 `err`(사용법 한 줄)을 돌려 `--help`로 안내한다.
-- **옛 플래그는 별짐으로 유지하되 `argparse.SUPPRESS`로 `--help`에서 숨긴다**
-  (`--allow-all`, `--auto-workspace`, `--allow-list`/`--allow-clear`,
-  `--shell-log`/`--shell-log-clear`, `--init-rules`/`--rules`/`--summarize`,
-  `--sync-history`, `--view`/`--run`/`--clear`/`--delete`/`--session-adopt`).
-  제거는 별도 단계(2단계)에서 한다.
-- 이 표면(서브커맨드 목록·기본 실행 형태·숨긴 별짐)을 바꿀 때는
-  `llmlib/cliargs.py`, `agent.py`(`expand_cli_argv`·`main`·`parser` epilog),
-  `tests/test_cliargs.py`, `tests/test_phase1.py`(`test_expand_cli_argv`·
-  `test_help_has_subcommands`), README 「사용법 (CLI 옵션)」·「최소 사용법」을 함께 고친다.
+- 외부 주요 명령: `llm`(TTY REPL), `llm "질문"`(TTY 포함 1회 실행), `llm bal`(잔액), `llm help`(사용법), `llm session`(대화형 세션 관리 메뉴). 질문 인자가 없는 비대화형 실행은 CLI 도움말을 표시한다.
+- 대화형 내부 명령: `/agent`, `/chat`, `/plan`(읽기 전용), `/undo`, `/bal`, `/prompt`, `/help`, `/exit`. 모드 전환은 현재 대화 기록을 유지한다.
+- `/prompt`는 사용자 로컬 프롬프트를 관리한다. System=`~/.local/share/llm/system.md`, Project=`<작업폴더>/.llm/rules.md`, Session=`<기록폴더>/prompts/<세션>.md`. 기본 안전 지침은 사용자 프롬프트로 제거하지 않는다.
+- `llm session`은 로컬 세션 목록·조회·연결·초기화·삭제를 메뉴로 제공한다. 폴더별 세션 소유권을 유지하며 파괴적 변경에는 확인을 받는다.
+- 기존 외부 명령·플래그는 호환을 위해 일부 남길 수 있으나 기본 도움말에는 나타내지 않는다. 더 이상 대화 기록을 Git에 동기화하지 않으며 `llm sync`는 거부한다.
+- 시스템은 무거운 외부 UI 의존성을 추가하지 않고 ANSI·readline·내장 Markdown 렌더러를 유지한다. 비대화형 환경에서는 인터랙티브 메뉴를 열지 않는다.
+- CLI·프롬프트 구조를 변경할 때 `agent.py`, `llmlib/cliargs.py`, 관련 테스트, README를 함께 갱신한다.
 
 ## 진입 래퍼(`llm`) 이식성 (필수)
 
