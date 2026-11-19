@@ -16,5 +16,24 @@ jobs:
           python-version: '3.12'
       - name: Python syntax check
         run: python -m compileall -q agent.py llmlib tests
-      - name: Unit tests
+      - name: Bash syntax check
+        run: bash -n install.sh llm
+      - name: Python unit tests (including Linux installer)
         run: python -m unittest discover -s tests -v
+
+  windows-install:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Windows install and launcher smoke test
+        shell: pwsh
+        run: |
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
+          $launcher = Join-Path $env:LOCALAPPDATA 'Programs\llm\bin\llm.cmd'
+          if (-not (Test-Path $launcher)) { throw 'llm.cmd not installed' }
+          & $launcher help
+          if ($LASTEXITCODE -ne 0) { throw 'llm help failed on Windows' }
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\install.ps1
