@@ -112,7 +112,7 @@ SUMMARY_TRIGGER_CHARS = 120_000
 SUMMARY_TRIGGER_MESSAGES = 160
 SUMMARY_KEEP_RECENT = 24
 # 요약 직후에는 새 메시지가 이만큼 쌓이기 전까지 다시 요약하지 않는다(쿨다운).
-SUMMARY_MIN_NEW_MESSAGES = 40
+SUMMARY_MIN_NEW_MESSAGES = 50
 SUMMARY_MAX_CHARS = 4_000
 # 실제 입력 토큰(API usage.prompt_tokens)이 이 값을 넘으면 문자 수와 무관하게 압축한다.
 COMPACT_TOKENS_ENV = "LLM_COMPACT_TOKENS"
@@ -1139,13 +1139,15 @@ def should_summarize(messages: list[dict[str, Any]]) -> bool:
     if len(head) == 1 and SUMMARY_MARKER in (head[0].get("content") or ""):
         return False
 
-    # 실제 토큰이 한도에 다가가면(컨텍스트 초과 직전) 다른 조건보다 우선한다.
-    if LAST_PROMPT_TOKENS >= compact_token_limit():
-        return True
-
     last = last_summary_count(messages)
     if last is not None and len(messages) - last < SUMMARY_MIN_NEW_MESSAGES:
-        return False
+        # 방금 압축한 직후의 재요약을 막는다. 정말 한도 초과가 임박했고
+        # 제거할 오래된 맥락이 충분한 예외에만 다시 압축한다.
+        return (LAST_PROMPT_TOKENS >= int(compact_token_limit() * 1.2)
+                and history_chars(head) >= 24_000)
+    # 실제 입력 토큰이 임계값을 넘으면 문자 수보다 우선한다.
+    if LAST_PROMPT_TOKENS >= compact_token_limit():
+        return True
 
     if len(head) > SUMMARY_TRIGGER_MESSAGES:
         return True
@@ -4127,7 +4129,7 @@ def resolve_ask_mode(args: Any) -> tuple[bool, bool, str, str]:
 
 
 # repl 기본 확인 범위(명시 옵션·환경변수가 없을 때). 값은 “읽기 전용 자동”.
-REPL_DEFAULT_ASK_MODE = "readonly"
+REPL_DEFAULT_ASK_MODE = "outside"
 
 
 def repl_ask_mode(args: Any) -> tuple[bool, bool, str, str, bool]:
@@ -4135,17 +4137,15 @@ def repl_ask_mode(args: Any) -> tuple[bool, bool, str, str, bool]:
 
     반환: (auto_workspace, allow_all, 모드, 출처, repl기본적용여부)
 
-    대화형은 한 프로세스에서 여러 턴을 이어가므로, 명시 옵션·환경변수가 없으면
-    기본을 **읽기 전용 자동**(`readonly`)으로 둔다. 조회·검사 명령(`ls`, `cat`,
-    `git status/diff/log`, 테스트 등)은 조용히 실행하고 그 밖의 명령은 확인을
-    받으며, 권한 상승(`sudo` 등)은 항상 목적을 보여 주고 묻는다. 허용한 명령은
+    대화형 기본은 안전한 조회 및 작업 폴더 내 명령을 자동 허용한다.
+    설치·폴더 밖 삭제·권한 상승 등 위험한 변경은 확인한다. 허용한 명령은
     프롬프트의 `a`/`all`로 다시 묻지 않게 하고 그 내역을 로그로 남긴다.
     `--safe`/`--trust`/`--yes`(또는 `LLM_*` 환경변수)를 주면 그대로 따른다.
     """
     auto_workspace, allow_all, ask_mode, ask_source = resolve_ask_mode(args)
-    # 기본값(=safe, 출처 없음)일 때만 바꾼다. 사용자가 준 옵션·환경변수는 존중.
+    # REPL에서도 기본 safe 정책을 유지하고 별도 권한 모드를 강요하지 않는다.
     if ask_mode == "outside" and not ask_source:
-        return False, False, REPL_DEFAULT_ASK_MODE, "", True
+        return True, False, REPL_DEFAULT_ASK_MODE, "", True
     return auto_workspace, allow_all, ask_mode, ask_source, False
 
 
@@ -5445,20 +5445,15 @@ def cmd_agent(
             else:
                 PANEL.begin(f"{C.dim}⚙️ {step}단계{C.reset}")
 
-            # 대화가 커지면 요약·백업 후 최근 메시지만 유지한다.
-
-            messages = maybe_summarize(
-                session,
-                history_file,
-                messages,
-                model,
-                auto=True,
-            )
-            # 오래된 긴 도구 결과는 한꺼번에 비워 맥락을 아낀다(최근 결과는 유지).
+            # 비용 절감을 위해 오래된 도구 결과를 먼저 줄이고, 그래도
+            # 문맥이 큰 경우에만 유료 요약 API를 호출한다.
             messages, cleared, saved = clear_old_tool_results(messages)
             if cleared:
-                print_info(f"오래된 도구 결과 {cleared}개를 비워 {saved:,}자를 줄였습니다 (최근 결과는 유지).")
+                print_info(f"오래된 도구 결과 {cleared}개 정리 · {saved:,}자 절감")
                 save_history(history_file, messages)
+            messages = maybe_summarize(
+                session, history_file, messages, model, auto=True,
+            )
 
             # API 호출 직전 최종 구조 검증
             repaired_messages = repair_history(messages)
