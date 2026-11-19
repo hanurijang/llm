@@ -52,7 +52,7 @@ class LauncherResolution(unittest.TestCase):
             link.symlink_to(first)
             proc = self._run([str(link), "--help"])
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("usage: llm", proc.stdout)
+            self.assertIn("DeepSeek CLI · HELP", proc.stdout)
 
     def test_works_without_readlink_dash_f(self) -> None:
         """readlink -f 없는 환경(macOS/BSD)에서도 동작해야 한다."""
@@ -68,7 +68,7 @@ class LauncherResolution(unittest.TestCase):
             link.symlink_to(WRAPPER)
             proc = self._run([str(link), "--help"], path_prepend=[str(fakebin)])
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("usage: llm", proc.stdout)
+            self.assertIn("DeepSeek CLI · HELP", proc.stdout)
             self.assertNotIn("illegal option", proc.stderr)
 
     def test_missing_agent_next_to_wrapper(self) -> None:
@@ -99,7 +99,7 @@ class LauncherResolution(unittest.TestCase):
             link.symlink_to(WRAPPER)
             proc = self._run([str(link), "--help"], LLM_PYTHON=sys.executable)
             self.assertEqual(proc.returncode, 0, proc.stderr)
-            self.assertIn("usage: llm", proc.stdout)
+            self.assertIn("DeepSeek CLI · HELP", proc.stdout)
 
 
 if __name__ == "__main__":
