@@ -139,7 +139,7 @@ def ns(**kwargs) -> argparse.Namespace:
 
 
 class ReplAskMode(unittest.TestCase):
-    """repl 기본 확인 모드 = 읽기 전용 자동(readonly), 명시 옵션은 그대로 존중."""
+    """repl 기본 확인 모드 = 작업 폴더 안전 작업 자동(outside), 명시 옵션은 그대로 존중."""
 
     def setUp(self) -> None:
         patcher = mock.patch.dict("os.environ", {}, clear=True)
@@ -149,7 +149,7 @@ class ReplAskMode(unittest.TestCase):
     def test_repl_default_reads_only(self) -> None:
         auto_workspace, allow_all, mode, source, default = llm.repl_ask_mode(ns())
         self.assertEqual(mode, llm.REPL_DEFAULT_ASK_MODE)
-        self.assertEqual(mode, "readonly")
+        self.assertEqual(mode, "outside")
         # 읽기 전용은 조용히, 그 밖은 확인: 폴더 안 자동·전부 허용·trust 모두 아님.
         self.assertFalse(auto_workspace)
         self.assertFalse(allow_all)
