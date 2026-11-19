@@ -20,7 +20,7 @@ import agent as llm  # noqa: E402
 
 class Phase1Defaults(unittest.TestCase):
     def test_version(self) -> None:
-        self.assertEqual(llm.VERSION, "0.13.0")
+        self.assertEqual(llm.VERSION, "0.14.0")
 
     def test_version_matches_readme(self) -> None:
         """README 머리의 버전 표기는 VERSION 과 같아야 한다(버전 올릴 때 함께 갱신)."""
@@ -30,18 +30,16 @@ class Phase1Defaults(unittest.TestCase):
         self.assertIn(f"**버전:** v{llm.VERSION} ", readme)
         self.assertIn(f"## v{llm.VERSION.rsplit('.', 1)[0]} 변경 사항", readme)
 
-    def test_header_rows_align_and_show_state(self) -> None:
-        """시작 헤더는 라벨 정렬 행으로 세션·폴더·셸·설정을 보여 준다."""
+    def test_banner_is_compact_and_local_only(self) -> None:
+        """시작 화면에는 필수 정보만 표시하며 Git 동기화 상태는 노출하지 않는다."""
         lines: list[str] = []
         with mock.patch("builtins.print", lambda *a, **k: lines.append(" ".join(map(str, a)))):
-            with mock.patch.object(llm, "load_session_rules", lambda root: "x"):
-                llm.print_banner("sess", Path("/tmp/proj"), False, ask_mode="readonly", repl=True)
-        text = "\n".join(lines)
-        self.assertIn("· 대화형", text)
-        for label in ("세션", "폴더", "셸", "설정"):
-            self.assertIn(label, text)
-        self.assertEqual(llm.header_line("세션", "v").startswith("  "), True)
-        self.assertIn("rules on", text)
+            llm.print_banner("sess", Path("/tmp/proj"), False, repl=True)
+        output = "\n".join(lines)
+        for label in ("DeepSeek CLI", "Project", "Session", "Mode", "History", "local only"):
+            self.assertIn(label, output)
+        self.assertNotIn("sync on", output)
+
 
     def test_tool_schema_names(self) -> None:
         names = [t["function"]["name"] for t in llm.tool_schemas()]
@@ -173,6 +171,8 @@ class Phase2Cli(unittest.TestCase):
         self.assertEqual(llm.expand_cli_argv(["agent"]), ["--interactive"])
         self.assertEqual(llm.expand_cli_argv(["session", "adopt"]), ["--session-adopt"])
         self.assertEqual(llm.expand_cli_argv(["session"]), ["--list-sessions"])
+        self.assertEqual(llm.expand_cli_argv(["bal"]), ["--balance"])
+        self.assertEqual(llm.expand_cli_argv(["help"]), ["--help"])
         self.assertEqual(llm.expand_cli_argv(["-s", "a"]), ["-s", "a"])
 
     def test_parse_interactive(self) -> None:
@@ -184,19 +184,31 @@ class Phase2Cli(unittest.TestCase):
         self.assertTrue(args.once)
         self.assertFalse(getattr(args, "interactive"))
 
-    def test_help_has_subcommands(self) -> None:
-        """`llm --help` 는 새 서브커맨드 안내를 보여야 한다."""
+    def test_help_only_shows_public_commands(self) -> None:
         import contextlib
         import io
 
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
-            with self.assertRaises(SystemExit):
-                llm.parse_args(["--help"])
-        out = buf.getvalue()
-        self.assertIn("session ls|adopt|view", out)
-        self.assertIn("shell log", out)
-        self.assertNotIn("--shell-log ", out)  # 옛 플래그는 help 에서 숨긴다
+            llm.print_cli_help()
+        output = buf.getvalue()
+        for command in ("llm", "session", "bal", "/prompt", "/undo"):
+            self.assertIn(command, output)
+        self.assertNotIn("llm sync", output)
+
+    def test_prompt_scopes_are_local(self) -> None:
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp) / "code"
+            history = Path(tmp) / "session-data"
+            with mock.patch.object(llm, "HISTORY_DIR", Path(tmp) / "config"):
+                with mock.patch.object(llm, "HISTORY_BASE", history):
+                    self.assertEqual(llm.prompt_file("system", root, "AX"), Path(tmp) / "config" / "system.md")
+                    self.assertEqual(llm.prompt_file("project", root, "AX"), root / ".llm" / "rules.md")
+                    self.assertEqual(llm.prompt_file("session", root, "AX"), history / "prompts" / "AX.md")
+                    (history / "prompts").mkdir(parents=True)
+                    (history / "prompts" / "AX.md").write_text("세션 지침", encoding="utf-8")
+                    self.assertIn("세션 지침", llm.custom_prompt_context(root, "AX"))
+
 
 
 if __name__ == "__main__":
