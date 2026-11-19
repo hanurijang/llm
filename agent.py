@@ -12,6 +12,7 @@ import http.client
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -62,7 +63,7 @@ from llmlib.shell_policy import (
 )
 
 # 실행 배너에 표시할 버전. 사용자에게 보이는 동작이 바뀌면 함께 올린다.
-VERSION = "0.13.0"
+VERSION = "0.14.0"
 
 # 환경변수 파일(.env) 조회 위치. 앞이 우선이고, 시스템 공용 파일은 마지막 폴백이다.
 # (`LLM_ENV_FILE`을 지정하면 그 경로가 가장 먼저 읽힌다.)
@@ -1782,6 +1783,120 @@ def cmd_init_rules(root: Path) -> int:
     return 0
 
 
+
+# 전역·프로젝트·세션 프롬프트는 모두 로컬에서 편집한다.
+# 프로젝트 규칙(.llm/rules.md)은 기존 형식을 그대로 유지한다.
+def prompt_file(scope: str, root: Path, session: str) -> Path:
+    if scope == "system":
+        return HISTORY_DIR / "system.md"
+    if scope == "project":
+        return rules_path(root)
+    if scope == "session":
+        return HISTORY_BASE / "prompts" / f"{sanitize_session_name(session)}.md"
+    raise ValueError(f"알 수 없는 프롬프트 범위: {scope}")
+
+
+def load_custom_prompt(scope: str, root: Path, session: str) -> str:
+    path = prompt_file(scope, root, session)
+    try:
+        return clip(path.read_text(encoding="utf-8").strip(), MAX_RULES_CHARS)
+    except FileNotFoundError:
+        return ""
+    except OSError as exc:
+        print_warn(f"프롬프트를 읽지 못했습니다: {exc}")
+        return ""
+
+
+def custom_prompt_context(root: Path, session: str) -> str:
+    parts: list[str] = []
+    for scope, title in (("system", "Global user instructions"), ("session", "Session instructions")):
+        value = load_custom_prompt(scope, root, session)
+        if value:
+            parts.append(f"\n<{scope}_instructions>\n{value}\n</{scope}_instructions>\n")
+    return "".join(parts)
+
+
+def edit_local_prompt(path: Path) -> bool:
+    """사용자의 편집기로 로컬 프롬프트를 편집한다. 셸 문자열은 실행하지 않는다."""
+    if not sys.stdin.isatty():
+        print_warn("프롬프트 편집에는 터미널이 필요합니다.")
+        return False
+    editor = os.environ.get("EDITOR", "").strip()
+    try:
+        command = shlex.split(editor) if editor else []
+    except ValueError:
+        command = []
+    if not command:
+        for candidate in ("nano", "vi"):
+            if shutil.which(candidate):
+                command = [candidate]
+                break
+    if not command:
+        print_error("편집기를 찾지 못했습니다. EDITOR 환경변수를 설정하세요.")
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    if not path.exists():
+        path.touch(mode=0o600)
+    try:
+        result = subprocess.run([*command, str(path)], check=False)
+    except OSError as exc:
+        print_error(f"편집기를 실행하지 못했습니다: {exc}")
+        return False
+    if result.returncode != 0:
+        print_warn("편집기가 정상 종료되지 않았습니다.")
+        return False
+    print_ok("프롬프트 저장 완료 — 다음 요청부터 적용됩니다.")
+    return True
+
+
+def prompt_manager(root: Path, session: str) -> int:
+    """REPL 내부 /prompt에서 사용하는 메뉴. 프로젝트 규칙은 그대로 사용한다."""
+    if not sys.stdin.isatty():
+        print_warn("/prompt 메뉴는 대화형 터미널에서 실행하세요.")
+        return 1
+    names = {"1": ("system", "System · 모든 프로젝트"), "2": ("project", "Project · 현재 폴더"), "3": ("session", "Session · 현재 세션")}
+    while True:
+        print("\n  ✦ PROMPT MANAGER")
+        for key, (_, label) in names.items():
+            print(f"  {key}. {label}")
+        print("  0. 돌아가기")
+        try:
+            choice = input("  선택 ❯ ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if choice == "0":
+            return 0
+        if choice not in names:
+            print_warn("0~3을 선택하세요.")
+            continue
+        scope, label = names[choice]
+        path = prompt_file(scope, root, session)
+        print(f"\n  {label}\n  저장: {path}")
+        print("  [E] 편집  [V] 내용 보기  [D] 삭제  [0] 돌아가기")
+        try:
+            action = input("  선택 ❯ ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if action == "0":
+            continue
+        if action == "v":
+            content = load_custom_prompt(scope, root, session)
+            render_markdown(content) if content else print_info("작성된 프롬프트가 없습니다.")
+        elif action == "e":
+            edit_local_prompt(path)
+        elif action == "d":
+            if not path.exists():
+                print_info("삭제할 프롬프트가 없습니다.")
+                continue
+            if input(f"  {label} 프롬프트를 삭제할까요? [y/N] ").strip().lower() == "y":
+                path.unlink()
+                print_ok("프롬프트를 삭제했습니다.")
+        else:
+            print_warn("지원하지 않는 선택입니다.")
+
+
 def build_system_prompt(root: Path, session: str) -> str:
     rules = load_session_rules(root)
     prompt = (
@@ -1835,7 +1950,7 @@ def build_system_prompt(root: Path, session: str) -> str:
             f"\nNo session rules file yet. If the user wants persistent project rules, "
             f"create {RULES_REL}.\n"
         )
-    return prompt
+    return prompt + custom_prompt_context(root, session)
 
 
 def build_chat_system_prompt() -> str:
@@ -5259,7 +5374,10 @@ def cmd_agent(
     save_history(history_file, messages)
 
     if chat_only:
-        system = build_chat_system_prompt()
+        system = build_chat_system_prompt() + custom_prompt_context(root, session)
+        project_rules = load_session_rules(root)
+        if project_rules:
+            system += f"\n<project_instructions>\n{project_rules}\n</project_instructions>"
         tools = None
     else:
         system = build_system_prompt(root, session)
