@@ -6,53 +6,58 @@
 경량 코딩 에이전트입니다. Python 표준 라이브러리만으로 동작하며, 별도의
 패키지 설치가 필요 없습니다.
 
-**버전:** v0.13.0 — 변경 요약은 [v0.13 변경 사항](#v013-변경-사항)
+**버전:** v0.14.0 — 로컬 프롬프트 관리·간결한 CLI·세션 메뉴
 
 ## 최소 사용법
 
 ```bash
-# API 키(저장소 폴더 .env)
-printf 'DEEPSEEK_API_KEY=sk-...\n' > .env && chmod 600 .env
-
-# PATH (한 번)
-ln -sf "$(pwd)/llm" ~/bin/llm   # 또는 이 레포의 llm 경로
-export PATH="$HOME/bin:$PATH"
-
-# 작업할 프로젝트 폴더에서
-llm                             # 인자 없으면 대화형(여러 턴)으로 시작
-llm "이 프로젝트 구조 요약해줘"   # 대화형 시작 + 첫 턴 실행
-llm ask "이 함수 설명해줘"        # 1턴만 하고 종료
-llm session ls                  # 이 PC에 저장된 세션 목록 확인
+llm                    # REPL 대화형 실행
+llm "프로젝트 분석해줘"  # 1회 실행 후 종료
+llm bal                # API 잔액 조회
+llm session            # 로컬 세션 관리 메뉴
+llm help               # 간결한 도움말
 ```
 
-> 파이프·리다이렉션(`llm "질문" | tee log`)처럼 터미널이 아니면 대화형으로
-> 들어가지 않고 **1턴만** 실행합니다. 스크립트에서는 `llm ask`를 쓰면 분명합니다.
+REPL에서는 `/agent`, `/chat`, `/plan`으로 모드를 전환하며, `/undo`로 마지막 추적 파일 편집을 복원합니다. `/bal`은 잔액, `/prompt`는 프롬프트 관리, `/help`는 도움말, `/exit`는 종료입니다. **`llm "질문"`은 TTY 여부와 관계없이 1회만 실행합니다.**
 
-| 하고 싶은 일 | 명령 |
-|---|---|
-| 대화형(여러 턴, **기본**) | `llm` · `llm -i` · `llm repl` · `llm agent` |
-| 1턴만 (도구 사용) | `llm ask "질문"` · `llm --once "질문"` |
-| 순수 채팅 | `llm chat "질문"` · `llm --chat` |
-| 셸을 더 관대하게 | `llm --trust "질문"` |
-| 셸 전부 확인 | `llm --confirm-all "질문"` |
-| 계획만 세우기(읽기 전용) | `llm plan "질문"` · `llm --plan` · REPL `/plan` |
-| 편집마다 diff 확인 | `llm --confirm-edits "질문"` |
-| 직전 편집 되돌리기 | `llm undo` · REPL `/undo` |
-| 파일 첨부 | `llm "@src/app.py 의 버그 고쳐"` |
-| 로컬 대화 기록 조회 | `llm session ls` · `llm session view` |
-| 세션 목록/연결 | `llm session ls` · `llm session adopt` |
+### 프롬프트 관리
 
-기본값: **실행=대화형(터미널)** · **셸=safe** · **자동 sync=끔** · 대화 기록 원격 동기화=**비활성화** · 도구 `todo`/`read`/`edit`/`find`/`shell`/`web_fetch`/`task`.
+REPL에서 `/prompt`를 입력하면 세 종류의 프롬프트를 선택해 조회·편집·삭제할 수 있습니다. 텍스트 편집기는 `EDITOR` 환경변수를 우선 사용하고 없으면 `nano` 또는 `vi`를 사용합니다. 다음 요청부터 반영되며 기존 대화 기록은 유지합니다.
 
-- **에이전트 모드**: 도구(파일/검색/셸)를 스스로 호출하며 작업을 완수
-- **채팅 모드**: 도구 없이 순수 대화
-- **세션**: 폴더별로 대화 기록을 자동 연결·보존
-- **세션 규칙**: 프로젝트별 지침을 `.llm/rules.md`에 남겨 매 요청에 반영
-- **진행 표시**: 시작 헤더(제목 줄 + `세션`/`폴더`/`셸`/`설정`/`이어가기`/`완화`/`로그`/`도움말` 행) · 단계 `▸`
-- **읽기 전용 셸 자동 실행**: `ls`, `cat`, `git status` 등 안전한 명령은 확인 없이 실행
-- **비밀값 보호**: 셸에 API 키·토큰을 넘기지 않고, `.env`를 드러내는 명령은 항상 확인, 도구 결과의 키는 `[REDACTED]`
-- **편집 안전장치**: 읽은 파일만 편집 · 바깥 변경 감지 · diff 표시 · `/undo`
-- **Ctrl+C**: 진행 중인 턴만 멈추고 세션은 유지 · API 429/5xx 자동 재시도
+| 프롬프트 | 파일 | 적용 범위 |
+|---|---|---|
+| System | `~/.local/share/llm/system.md` | 현재 PC 전체 |
+| Project | `<작업폴더>/.llm/rules.md` | 해당 프로젝트(공개 가능한 규칙만) |
+| Session | `<LLM_HISTORY_DIR>/prompts/<세션>.md` | 해당 세션만 |
+
+`LLM_HISTORY_DIR`이 비어 있으면 Session 프롬프트는 `<작업폴더>/.llm/prompts/`에 저장됩니다. 전역·세션 프롬프트와 대화 기록은 GitHub에 업로드하지 않습니다. 프로젝트 규칙 파일은 코드와 함께 Git에서 관리될 수 있으므로 비밀정보를 넣지 마세요.
+
+### 로컬 세션 관리
+
+`llm session`은 대화형 메뉴를 표시합니다. 목록·대화 조회·현재 폴더에서 세션 선택·초기화·삭제를 제공합니다. 다른 작업 폴더에 연결된 세션은 여기서 수정하거나 빼앗을 수 없습니다. 초기화와 삭제에는 세션 이름 재입력 확인이 필요합니다.
+
+### 실행 화면
+
+```text
+✦ DeepSeek CLI  v0.14.0
+  Project  AX
+  Session  AX
+  Mode     AGENT
+  History  /data/llm-sessions (local only)
+
+  /plan 계획 · /chat 대화 · /prompt 지침 · /help 도움말
+
+agent ❯
+```
+
+## v0.14 변경 사항
+
+- 입력 인자가 없을 때만 REPL을 시작하고 `llm "질문"`은 단발성 실행으로 변경했습니다.
+- 외부 명령어는 `llm`, `llm "질문"`, `llm bal`, `llm help`, `llm session` 중심으로 정리했습니다. 이전 별칭은 호환성 차원에서 남겨 두되 기본 도움말에 표시하지 않습니다.
+- REPL에서 `/prompt`로 System·Project·Session 지침을 로컬에서 관리하며, `/agent`, `/chat`, `/plan`, `/undo`, `/bal`을 사용할 수 있습니다.
+- 세션 관리 메뉴를 통합하고 시작 화면에서 원격 Git 동기화 상태를 제거했습니다.
+- `LLM_HISTORY_DIR`로 로컬 기록 경로를 지정하며 `.llm/prompts/`를 Git 추적에서 제외합니다.
+- 이전 명령어 설명이 남아 있는 하위 절은 구버전의 기록입니다. 실제 CLI는 이 절과 `llm help`를 기준으로 사용하세요.
 
 ## v0.13 변경 사항
 
