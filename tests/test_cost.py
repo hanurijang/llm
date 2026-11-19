@@ -172,8 +172,8 @@ class BalanceCommand(unittest.TestCase):
         self.assertIn("2.99", lines[0])
 
     def test_repl_commands_register_balance(self) -> None:
-        self.assertIn("/balance", llm.REPL_COMMANDS)
-        self.assertIn("잔액", llm.REPL_COMMANDS["/balance"])
+        self.assertIn("/bal", llm.REPL_COMMANDS)
+        self.assertIn("잔액", llm.REPL_COMMANDS["/bal"])
 
     def test_cmd_balance_reports_failure(self) -> None:
         with mock.patch.object(llm, "load_rates", lambda *a, **k: None):
