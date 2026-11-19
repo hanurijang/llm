@@ -5242,6 +5242,100 @@ TOOL_LABELS = {
 PARALLEL_TOOLS = {"read", "find", "task", "read_file", "list_dir", "glob", "grep"}
 
 
+def print_cli_help() -> None:
+    """일상적으로 사용하는 명령만 표시한다."""
+    print(f"\n{C.bold}DeepSeek CLI · HELP{C.reset}")
+    for command, desc in (
+        ("llm", "대화형 REPL"),
+        ('llm "질문"', "한 번 실행하고 종료"),
+        ("llm bal", "현재 API 잔액"),
+        ("llm session", "로컬 세션 관리 메뉴"),
+        ("llm help", "명령어 도움말"),
+    ):
+        print(f"  {C.cyan}{pad(command, 20)}{C.reset} {desc}")
+    print("\n  REPL: /agent /chat /plan /undo /bal /prompt /help /exit")
+    print("  대화 기록은 이 PC에만 저장하며 Git에 올리지 않습니다.\n")
+
+
+def session_manager(root: Path) -> int:
+    """하나의 메뉴에서 현재 PC의 세션을 확인·조회·연결·초기화·삭제한다."""
+    if not sys.stdin.isatty():
+        list_sessions(None, load_bindings(), root)
+        return 0
+    while True:
+        folders = load_bindings()
+        current = folders.get(canonical_folder(root))
+        files = {}
+        for base in (HISTORY_BASE, HISTORY_DIR):
+            if base.is_dir():
+                for path in base.glob("history_*.json"):
+                    files.setdefault(path.stem[len("history_"):], path)
+        names = sorted(set(files) | set(folders.values()))
+        print(f"\n{C.bold}✦ SESSION MANAGER{C.reset}")
+        print(f"  Project  {root}")
+        print(f"  History  {HISTORY_BASE}  (local only)")
+        if names:
+            for index, name in enumerate(names, 1):
+                owner = folder_for_session(folders, name)
+                owner_label = owner or "연결 없음"
+                active = "●" if name == current else " "
+                print(f"  {index:>2}. {active} {name}  {C.dim}{owner_label}{C.reset}")
+        else:
+            print("  저장된 세션이 없습니다.")
+        print("  [V] 대화 보기  [U] 세션 선택  [C] 초기화  [D] 삭제  [0] 종료")
+        try:
+            action = input("  선택 ❯ ").strip().lower()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        if action in {"0", "q", "exit"}:
+            return 0
+        if action not in {"v", "u", "c", "d"}:
+            print_warn("메뉴 항목을 선택하세요.")
+            continue
+        try:
+            selected = input("  세션 번호 또는 이름 ❯ ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print()
+            return 0
+        name = names[int(selected)-1] if selected.isdigit() and 1 <= int(selected) <= len(names) else selected
+        if not name or name not in names:
+            print_warn("세션을 찾지 못했습니다.")
+            continue
+        owner = folder_for_session(folders, name)
+        path = find_history_file(name, folders)
+        if action == "v":
+            cmd_view(name, path)
+        elif action == "u":
+            if owner and owner != canonical_folder(root):
+                print_warn("다른 프로젝트에 연결된 세션은 선택할 수 없습니다.")
+                continue
+            folders, err, _ = ensure_binding(folders, root, name)
+            if err:
+                print_warn(f"세션을 선택하지 못했습니다: {err}")
+            else:
+                print_ok(f"현재 작업 폴더 세션: {name}")
+        elif action in {"c", "d"}:
+            if owner and owner != canonical_folder(root):
+                print_warn("다른 프로젝트의 세션은 여기서 변경할 수 없습니다.")
+                continue
+            label = "초기화" if action == "c" else "삭제"
+            if input(f"  {name} 세션 {label} (되돌릴 수 없음). 이름을 다시 입력 ❯ ").strip() != name:
+                print_info("취소했습니다.")
+                continue
+            if action == "c":
+                save_history(path, [])
+                print_ok("대화 기록을 초기화했습니다.")
+            else:
+                if path.exists():
+                    path.unlink()
+                prompts = prompt_file("session", root, name)
+                if prompts.exists():
+                    prompts.unlink()
+                unbind_session(folders, name)
+                print_ok("세션을 삭제했습니다.")
+
+
 def cmd_agent(
     prompt: str,
     session: str,
